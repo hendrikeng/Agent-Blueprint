@@ -59,7 +59,18 @@ function metadataSectionRange(content) {
 
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^##\s+/.test(lines[i])) {
+    const line = lines[i];
+    if (/^##\s+/.test(line)) {
+      end = i;
+      break;
+    }
+
+    if (!line.trim()) {
+      continue;
+    }
+
+    // Metadata fields must be bullets. Stop before normal body content.
+    if (!/^\s*-\s*[A-Za-z][A-Za-z0-9- ]+:\s*(.*)$/.test(line)) {
       end = i;
       break;
     }
