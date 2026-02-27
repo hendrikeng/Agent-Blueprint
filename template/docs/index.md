@@ -18,6 +18,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/DESIGN.md`
 - `docs/FRONTEND.md`
 - `docs/BACKEND.md`
+- `docs/agent-hardening/`
 - `docs/architecture/`
 - `docs/design-docs/`
 - `docs/deploy/`
@@ -42,6 +43,11 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/DESIGN.md`
 - `docs/FRONTEND.md`
 - `docs/BACKEND.md`
+- `docs/agent-hardening/README.md`
+- `docs/agent-hardening/EVALS.md`
+- `docs/agent-hardening/OBSERVABILITY.md`
+- `docs/agent-hardening/TOOL_POLICY.md`
+- `docs/agent-hardening/MEMORY_CONTEXT.md`
 - `docs/architecture/README.md`
 - `docs/architecture/layers.md`
 - `docs/architecture/dependency-rules.md`

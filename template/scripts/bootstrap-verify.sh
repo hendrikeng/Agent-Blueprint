@@ -5,5 +5,6 @@ set -euo pipefail
 npm run docs:verify
 npm run conformance:verify
 npm run architecture:verify
+npm run agent:verify
 
 echo "[bootstrap-verify] passed"

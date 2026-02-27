@@ -18,3 +18,4 @@ Source of Truth: This document.
 - Docs governance: `npm run docs:verify`
 - Scope/conformance guardrail: `npm run conformance:verify`
 - Architecture constraints: `npm run architecture:verify`
+- Agent hardening constraints: `npm run agent:verify`

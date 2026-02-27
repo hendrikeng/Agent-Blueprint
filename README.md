@@ -10,9 +10,11 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 ## Includes
 
 - Canonical docs skeleton under `template/docs/`
+- Canonical agent hardening docs under `template/docs/agent-hardening/`
 - Base top-level docs: `template/AGENTS.md`, `template/README.md`, `template/ARCHITECTURE.md`
 - Runtime standards docs: `template/docs/FRONTEND.md`, `template/docs/BACKEND.md`
 - Governance/conformance/architecture checker scripts under `template/scripts/`
+- Agent hardening checker script under `template/scripts/agent-hardening/`
 - Governance config and architecture rule schema in `template/docs/governance/`
 - Placeholder contract: `template/PLACEHOLDERS.md`
 
@@ -21,6 +23,13 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 - `docs:verify` -> `node ./scripts/docs/check-governance.mjs`
 - `conformance:verify` -> `node ./scripts/check-article-conformance.mjs`
 - `architecture:verify` -> `node ./scripts/architecture/check-dependencies.mjs`
+- `agent:verify` -> `node ./scripts/agent-hardening/check-agent-hardening.mjs`
+
+## When To Run Checks
+
+- Run all checks before merge: `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`.
+- Run `agent:verify` when changing eval policy, agent observability, tool-safety, or memory/context rules.
+- Run `architecture:verify` when changing dependency boundaries.
 
 ## Template Policy
 
@@ -37,6 +46,7 @@ Agents must replace all `{{...}}` placeholders before treating a repo as product
    - `docs:verify`
    - `conformance:verify`
    - `architecture:verify`
+   - `agent:verify`
 5. Update `docs/generated/article-conformance.json` evidence paths for the new repository.
 6. Run `./scripts/bootstrap-verify.sh` (or run each verify command manually).
 

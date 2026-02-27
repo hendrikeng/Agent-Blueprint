@@ -13,6 +13,7 @@ Source of Truth: This document.
 - Server-side authority for critical invariants.
 - No fabricated production behavior paths.
 - Keep architecture boundaries enforceable.
+- Keep agent hardening policy canonical from bootstrap.
 - Keep security and data-safety controls explicit.
 - Docs are part of done.
 - Canonical docs must remain environment-agnostic: no personal machine paths, hostnames, credentials, or private runbooks.
@@ -22,4 +23,5 @@ Source of Truth: This document.
 - `npm run docs:verify`
 - `npm run conformance:verify`
 - `npm run architecture:verify`
+- `npm run agent:verify`
 - Relevant domain tests for changed behavior

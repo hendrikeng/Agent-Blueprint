@@ -30,6 +30,7 @@ Start here, then follow linked source-of-truth docs:
 - UI standards: `docs/design-docs/ui-standards.md`
 - Frontend standards: `docs/FRONTEND.md`
 - Backend standards: `docs/BACKEND.md`
+- Agent hardening policy map: `docs/agent-hardening/README.md`
 - Git safety: `docs/design-docs/git-safety.md`
 - Plan lifecycle (non-trivial changes): `docs/PLANS.md`
 - Product specs index: `docs/product-specs/index.md`
@@ -42,6 +43,7 @@ Start here, then follow linked source-of-truth docs:
 - Server-side authority for `{{SERVER_AUTHORITY_BOUNDARY_SET}}`.
 - No fake production success-path behavior.
 - Shared contracts and shared UI primitives are canonical where applicable.
+- Agent hardening policy in `docs/agent-hardening/*` is canonical and mandatory.
 - `{{MONEY_AND_NUMERIC_RULE}}`
 
 ## Critical Domain Invariants
@@ -89,6 +91,7 @@ Docs are part of done.
 
 ## Test and Validation Expectations
 
+- Run `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, and `npm run agent:verify` before merge.
 - Add/adjust tests for behavior changes.
 - Every bug fix needs a regression test.
 - Critical flows require focused coverage.

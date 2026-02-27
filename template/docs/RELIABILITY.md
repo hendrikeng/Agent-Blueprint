@@ -27,4 +27,5 @@ Source of Truth: This document.
 
 - `npm run docs:verify`
 - `npm run architecture:verify`
+- `npm run agent:verify`
 - Focused tests for critical reliability-sensitive paths.

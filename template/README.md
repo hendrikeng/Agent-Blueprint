@@ -25,6 +25,7 @@ Start with:
 - `docs/PLANS.md`
 - `docs/FRONTEND.md`
 - `docs/BACKEND.md`
+- `docs/agent-hardening/README.md`
 - `docs/governance/README.md`
 - `docs/product-specs/index.md`
 - `docs/product-specs/current-state.md`
@@ -58,6 +59,13 @@ Start with:
 - Docs verification: `npm run docs:verify`
 - Conformance scope guardrail: `npm run conformance:verify`
 - Architecture boundary checks: `npm run architecture:verify`
+- Agent hardening checks: `npm run agent:verify`
+
+## When To Run Checks
+
+- Before merge: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`.
+- After changing architecture boundaries: `npm run architecture:verify`.
+- After changing eval/observability/tool/memory policy docs: `npm run agent:verify`.
 
 ## Change Discipline
 

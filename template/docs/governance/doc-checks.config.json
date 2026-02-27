@@ -11,6 +11,11 @@
     "docs/DESIGN.md",
     "docs/FRONTEND.md",
     "docs/BACKEND.md",
+    "docs/agent-hardening/README.md",
+    "docs/agent-hardening/EVALS.md",
+    "docs/agent-hardening/OBSERVABILITY.md",
+    "docs/agent-hardening/TOOL_POLICY.md",
+    "docs/agent-hardening/MEMORY_CONTEXT.md",
     "docs/PLANS.md",
     "docs/PRODUCT_SENSE.md",
     "docs/QUALITY_SCORE.md",
@@ -43,6 +48,7 @@
     "docs/ui/intents.md"
   ],
   "requiredDirs": [
+    "docs/agent-hardening",
     "docs/architecture",
     "docs/design-docs",
     "docs/deploy",
@@ -68,6 +74,7 @@
     "docs/DESIGN.md",
     "docs/FRONTEND.md",
     "docs/BACKEND.md",
+    "docs/agent-hardening/",
     "docs/architecture/",
     "docs/design-docs/",
     "docs/deploy/",
@@ -93,6 +100,7 @@
       "docs/exec-plans/README.md",
       "docs/governance/golden-principles.md",
       "docs/governance/rules.md",
+      "docs/agent-hardening/README.md",
       "docs/index.md",
       "docs/product-specs/current-state.md"
     ],
@@ -101,9 +109,11 @@
       "ARCHITECTURE.md",
       "docs/index.md",
       "docs/PLANS.md",
+      "docs/agent-hardening/README.md",
       "docs/product-specs/current-state.md"
     ],
     "docs/index.md": [
+      "docs/agent-hardening/",
       "docs/governance/",
       "docs/architecture/",
       "docs/design-docs/",
@@ -129,6 +139,31 @@
     ],
     "docs/PLANS.md": [
       "Lifecycle"
+    ],
+    "docs/agent-hardening/README.md": [
+      "Why This Exists",
+      "Canonical Documents",
+      "Enforcement"
+    ],
+    "docs/agent-hardening/EVALS.md": [
+      "Eval Lifecycle",
+      "Failure Taxonomy",
+      "Release Gates"
+    ],
+    "docs/agent-hardening/OBSERVABILITY.md": [
+      "Required Run Trace Fields",
+      "Error Classification",
+      "Retention and Redaction"
+    ],
+    "docs/agent-hardening/TOOL_POLICY.md": [
+      "Risk Tiers",
+      "Approval Requirements",
+      "Execution Safety Rules"
+    ],
+    "docs/agent-hardening/MEMORY_CONTEXT.md": [
+      "Context Budget Rules",
+      "Persistence Rules",
+      "Provenance and Redaction"
     ]
   },
   "metadataRules": [
@@ -179,6 +214,51 @@
       ]
     },
     {
+      "path": "docs/agent-hardening/README.md",
+      "requiredFields": [
+        "Status",
+        "Owner",
+        "Last Updated",
+        "Source of Truth"
+      ]
+    },
+    {
+      "path": "docs/agent-hardening/EVALS.md",
+      "requiredFields": [
+        "Status",
+        "Owner",
+        "Last Updated",
+        "Source of Truth"
+      ]
+    },
+    {
+      "path": "docs/agent-hardening/OBSERVABILITY.md",
+      "requiredFields": [
+        "Status",
+        "Owner",
+        "Last Updated",
+        "Source of Truth"
+      ]
+    },
+    {
+      "path": "docs/agent-hardening/TOOL_POLICY.md",
+      "requiredFields": [
+        "Status",
+        "Owner",
+        "Last Updated",
+        "Source of Truth"
+      ]
+    },
+    {
+      "path": "docs/agent-hardening/MEMORY_CONTEXT.md",
+      "requiredFields": [
+        "Status",
+        "Owner",
+        "Last Updated",
+        "Source of Truth"
+      ]
+    },
+    {
       "path": "docs/product-specs/current-state.md",
       "requiredFields": [
         "Status",
@@ -203,6 +283,11 @@
       "docs/DESIGN.md",
       "docs/FRONTEND.md",
       "docs/BACKEND.md",
+      "docs/agent-hardening/README.md",
+      "docs/agent-hardening/EVALS.md",
+      "docs/agent-hardening/OBSERVABILITY.md",
+      "docs/agent-hardening/TOOL_POLICY.md",
+      "docs/agent-hardening/MEMORY_CONTEXT.md",
       "docs/PLANS.md",
       "docs/PRODUCT_SENSE.md",
       "docs/QUALITY_SCORE.md",

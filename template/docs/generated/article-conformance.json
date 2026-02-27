@@ -58,6 +58,19 @@
         "scripts/check-article-conformance.mjs",
         "package.json"
       ]
+    },
+    {
+      "id": "agent_hardening_enforcement",
+      "status": "implemented",
+      "evidence": [
+        "docs/agent-hardening/README.md",
+        "docs/agent-hardening/EVALS.md",
+        "docs/agent-hardening/OBSERVABILITY.md",
+        "docs/agent-hardening/TOOL_POLICY.md",
+        "docs/agent-hardening/MEMORY_CONTEXT.md",
+        "scripts/agent-hardening/check-agent-hardening.mjs",
+        "package.json"
+      ]
     }
   ]
 }

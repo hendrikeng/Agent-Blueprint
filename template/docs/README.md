@@ -8,6 +8,7 @@ Source of Truth: This document.
 ## Entry Points
 
 - Canonical index: `docs/index.md`
+- Agent hardening policy: `docs/agent-hardening/README.md`
 - Governance policy: `docs/governance/README.md`
 - Architecture map: `docs/architecture/README.md`
 - Product state: `docs/product-specs/current-state.md`
@@ -18,6 +19,7 @@ Source of Truth: This document.
 - `AGENTS.md`: map and constraints.
 - `README.md`: product summary and navigation entrypoint.
 - `ARCHITECTURE.md` + `docs/architecture/*`: architecture truth and dependency rules.
+- `docs/agent-hardening/*`: mandatory agent eval/observability/tool/memory policy.
 - `docs/FRONTEND.md` and `docs/BACKEND.md`: implementation-side standards by runtime surface.
 
 ## Authoring Rules
