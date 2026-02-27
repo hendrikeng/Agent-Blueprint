@@ -1,16 +1,16 @@
 # Golden Principles
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
 ## Principles
 
 - Correctness over speed.
-- Explicit domain invariants over implied behavior.
+- Explicit invariants over implied behavior.
 - Shared contracts and primitives over divergence.
-- Security and tenant isolation by default.
+- Security and boundary isolation by default.
 - Mechanical checks over manual interpretation.
 
 ## Mechanical Enforcement Map

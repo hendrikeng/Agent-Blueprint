@@ -1,10 +1,10 @@
 # {{PRODUCT}}
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document delegates to linked canonical docs.
-Current State Date: 2026-02-27
+Current State Date: {{CURRENT_STATE_DATE}}
 
 {{SUMMARY}}
 
@@ -37,10 +37,10 @@ Start with:
 
 ## Architecture At A Glance
 
-- Frontend: Next.js App Router + React + Tailwind + shared UI primitives
-- Backend: NestJS + Prisma
-- Shared contracts/primitives are canonical across apps/packages
-- Verification gates are required in CI
+- Frontend/runtime stack: {{FRONTEND_STACK}}
+- Backend/runtime stack: {{BACKEND_STACK}}
+- Data/storage stack: {{DATA_STACK}}
+- Shared contracts/primitives strategy: {{SHARED_CONTRACT_STRATEGY}}
 
 ## Enforcement and Quality Gates
 
@@ -50,5 +50,5 @@ Start with:
 
 ## Change Discipline
 
-Changes affecting architecture, lifecycle behavior, money/tax logic,
-tenant boundaries, RBAC, or user-visible behavior must update docs in the same change.
+Changes affecting architecture boundaries, critical invariants,
+security/compliance domains, or user-visible behavior must update docs in the same change.

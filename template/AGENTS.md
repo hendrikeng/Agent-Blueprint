@@ -1,8 +1,8 @@
 # AGENTS.md
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document delegates to linked canonical docs.
 
 This file is the agent/human entrypoint map for repository behavior.
@@ -36,35 +36,30 @@ Start here, then follow linked source-of-truth docs:
 
 ## Non-Negotiables
 
-- Correctness over speed for money, lifecycle, auth, and tenant boundaries.
-- Server-side authority for RBAC, tenant scope, and workflow transitions.
+- Correctness over speed for `{{CRITICAL_DOMAIN_SET}}`.
+- Server-side authority for `{{SERVER_AUTHORITY_BOUNDARY_SET}}`.
 - No fake production success-path behavior.
-- Shared contracts and shared UI primitives are canonical.
-- No float-based money calculations.
+- Shared contracts and shared UI primitives are canonical where applicable.
+- `{{MONEY_AND_NUMERIC_RULE}}`
 
 ## Critical Domain Invariants
 
-Auth, tenant, RBAC:
-- Tenant scoping for tenant-owned entities is mandatory.
-- RBAC is server-side only (default deny, least privilege).
-- Sensitive actions must remain auditable.
+{{DOMAIN_INVARIANT_AREA_1}}:
+- {{DOMAIN_INVARIANT_1A}}
+- {{DOMAIN_INVARIANT_1B}}
 
-Lifecycle and auditability:
-- Controlled state transitions only.
-- Transition history must remain traceable.
+{{DOMAIN_INVARIANT_AREA_2}}:
+- {{DOMAIN_INVARIANT_2A}}
+- {{DOMAIN_INVARIANT_2B}}
 
-Money and tax:
-- Use minor units and explicit currency.
-- Financial/tax mutations must be auditable.
-
-Time and integrations:
-- Store timestamps in UTC; convert at presentation edges.
-- Inbound integration data/webhooks are untrusted and idempotent.
+{{DOMAIN_INVARIANT_AREA_3}}:
+- {{DOMAIN_INVARIANT_3A}}
+- {{DOMAIN_INVARIANT_3B}}
 
 ## Documentation Contract
 
-Any change affecting architecture boundaries, lifecycle behavior, money/tax handling,
-tenancy/RBAC, or user-visible behavior must update:
+Any change affecting architecture boundaries, critical invariants,
+security/compliance domains, or user-visible behavior must update:
 - `README.md`
 - relevant docs under `docs/`
 
@@ -79,9 +74,8 @@ Docs are part of done.
 ## Security and Data Safety
 
 - Treat inbound integration data as untrusted.
-- Ensure idempotency for webhook and ingestion handlers.
-- Never use floats for money calculations.
-- Enforce tenant boundaries and RBAC server-side.
+- Ensure idempotency/retry safety where external callbacks exist.
+- Enforce boundary checks server-side for sensitive operations.
 
 ## Git and File Safety
 

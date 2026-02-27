@@ -1,8 +1,8 @@
 # Architecture Overview
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document and `docs/architecture/`.
 
 ## Read Order
@@ -16,8 +16,8 @@ Source of Truth: This document and `docs/architecture/`.
 
 - Dependency flow must remain directional and enforceable.
 - Shared contracts/types are canonical interfaces.
-- Money/auth/inventory/lifecycle authority remains server-side.
-- Tenant boundaries and RBAC are enforced server-side.
+- Sensitive-domain authority remains server-side for `{{SERVER_AUTHORITY_BOUNDARY_SET}}`.
+- Architecture rules must map to actual module tags and import behavior.
 
 ## Verification
 

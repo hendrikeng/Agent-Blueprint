@@ -1,8 +1,8 @@
 # Governance Rules
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
 ## Core Rules
@@ -10,7 +10,7 @@ Source of Truth: This document.
 - Canonical docs are source-of-truth for behavior and constraints.
 - Correctness over speed for sensitive domains.
 - Shared contracts/primitives are canonical.
-- Server-side authority for money, lifecycle, auth, and tenant scope.
+- Server-side authority for critical invariants.
 - No fabricated production behavior paths.
 - Keep architecture boundaries enforceable.
 - Keep security and data-safety controls explicit.

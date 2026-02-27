@@ -1,8 +1,8 @@
 # Quality Score
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
 ## Scoring Legend
@@ -15,17 +15,17 @@ Source of Truth: This document.
 
 ## Domain Scores
 
-- Domain correctness and invariants: 4
-- Money/tax safety and auditability: 4
-- Tenant scope and RBAC enforcement: 4
+- Domain correctness and invariants: {{SCORE_DOMAIN_CORRECTNESS}}
+- Critical-domain safety and auditability: {{SCORE_CRITICAL_SAFETY}}
+- Authorization and boundary enforcement: {{SCORE_AUTHZ_BOUNDARIES}}
 
 ## Platform Scores
 
-- Architecture boundary enforcement: 4
-- Documentation governance enforcement: 4
-- Test coverage for critical flows: 3
+- Architecture boundary enforcement: {{SCORE_ARCH_BOUNDARIES}}
+- Documentation governance enforcement: {{SCORE_DOC_GOVERNANCE}}
+- Test coverage for critical flows: {{SCORE_CRITICAL_TESTS}}
 
 ## Current Gaps
 
-- Improve critical-flow regression coverage.
-- Reduce unreachable-doc warnings by tightening doc graph linking.
+- {{QUALITY_GAP_1}}
+- {{QUALITY_GAP_2}}

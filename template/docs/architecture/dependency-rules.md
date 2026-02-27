@@ -1,15 +1,15 @@
 # Dependency Rules
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document and `docs/governance/architecture-rules.json`.
 
 ## Rules
 
 - Enforce module boundaries with explicit dependency constraints.
 - Keep dependency direction aligned with architecture layers.
-- Preserve tenant, auth, and money-sensitive boundaries server-side.
+- Preserve server-authority boundaries for sensitive domain operations.
 
 ## Verification
 

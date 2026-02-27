@@ -1,16 +1,16 @@
 # Engineering Invariants
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
 ## Core Invariants
 
 - Server-side authority for sensitive state.
-- Tenant isolation and RBAC enforcement.
-- No float money math.
-- UTC persistence for timestamps.
+- Authorization/isolation boundary enforcement.
+- Deterministic numeric and timestamp handling for critical domains.
+- Shared contracts define inter-module boundaries.
 
 ## Documentation Discipline
 

@@ -1,8 +1,8 @@
 # Planning Workflow
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document delegates to `docs/exec-plans/README.md`.
 
 Use plans for non-trivial changes so intent, decisions, and rollout state stay discoverable.
@@ -10,7 +10,7 @@ Use plans for non-trivial changes so intent, decisions, and rollout state stay d
 ## When a Plan Is Required
 
 - The change spans multiple domains, apps, or deployment steps.
-- The change affects architecture boundaries, tenancy/RBAC, or money/tax behavior.
+- The change affects architecture boundaries or critical invariants.
 - The implementation is split across multiple pull requests.
 
 ## Lifecycle

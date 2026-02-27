@@ -1,20 +1,20 @@
 # Security
 
 Status: canonical
-Owner: Platform Engineering
-Last Updated: 2026-02-27
+Owner: {{DOC_OWNER}}
+Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
 ## Security Model
 
 - Default-deny server-side authorization.
-- Tenant isolation as a mandatory constraint.
+- Isolation boundaries as a mandatory constraint.
 - Least-privilege access for privileged operations.
 
 ## Identity and Scope
 
 - Use shared auth/session modules as source of truth.
-- Enforce tenant scope server-side on tenant-owned entities.
+- Enforce scope boundaries server-side for protected entities.
 - Keep sensitive actions auditable.
 
 ## Data Safety Requirements
@@ -25,6 +25,6 @@ Source of Truth: This document.
 
 ## Security Testing Expectations
 
-- Regression tests for auth and RBAC boundaries.
-- Validation tests around tenant isolation.
+- Regression tests for authorization boundaries.
+- Validation tests around isolation constraints.
 - Security-sensitive workflow tests in CI.
