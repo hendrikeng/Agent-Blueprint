@@ -1,6 +1,6 @@
 {
   "executor": {
-    "command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply changes and run relevant checks.\"",
+    "command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\"",
     "handoffExitCode": 75
   },
   "validationCommands": [],

@@ -91,6 +91,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function isoDate(value) {
+  return String(value).slice(0, 10);
+}
+
 function randomRunId() {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const random = Math.random().toString(36).slice(2, 8);
@@ -99,6 +103,15 @@ function randomRunId() {
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripDatePrefix(value) {
+  return String(value).replace(/^\d{4}-\d{2}-\d{2}-/, '');
+}
+
+function datedPlanFileName(datePrefix, stem, ext = '.md') {
+  const baseStem = stripDatePrefix(stem).trim();
+  return `${datePrefix}-${baseStem}${ext}`;
 }
 
 function buildPaths(rootDir) {
@@ -383,11 +396,13 @@ async function promoteFuturePlans(paths, state, options) {
       continue;
     }
 
-    const targetName = `${future.planId}.md`;
+    const targetDate = todayIsoDate();
+    const targetName = datedPlanFileName(targetDate, future.planId);
     let targetPath = path.join(paths.activeDir, targetName);
 
     if (await exists(targetPath)) {
-      targetPath = path.join(paths.activeDir, `${future.planId}-${Date.now()}.md`);
+      const parsed = path.parse(targetName);
+      targetPath = path.join(paths.activeDir, `${parsed.name}-${Date.now()}${parsed.ext || '.md'}`);
     }
 
     const promotedMetadata = {
@@ -726,6 +741,7 @@ function createAtomicCommit(rootDir, planId, dryRun) {
 
 async function finalizeCompletedPlan(plan, paths, state, validationEvidence, options) {
   const now = nowIso();
+  const completedDate = isoDate(now);
   const raw = await fs.readFile(plan.filePath, 'utf8');
   const updatedMetadata = setMetadataFields(raw, {
     Status: 'completed',
@@ -747,9 +763,11 @@ async function finalizeCompletedPlan(plan, paths, state, validationEvidence, opt
   let finalContent = upsertSection(updatedMetadata, 'Validation Evidence', validationLines);
   finalContent = upsertSection(finalContent, 'Closure', closureLines);
 
-  let targetPath = path.join(paths.completedDir, path.basename(plan.filePath));
-  if (targetPath === plan.filePath || (await exists(targetPath))) {
-    const parsed = path.parse(path.basename(plan.filePath));
+  const currentBase = path.parse(path.basename(plan.filePath));
+  const completedName = datedPlanFileName(completedDate, currentBase.name, currentBase.ext || '.md');
+  let targetPath = path.join(paths.completedDir, completedName);
+  if (await exists(targetPath)) {
+    const parsed = path.parse(completedName);
     targetPath = path.join(paths.completedDir, `${parsed.name}-${Date.now()}${parsed.ext || '.md'}`);
   }
 

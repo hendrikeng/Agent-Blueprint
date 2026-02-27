@@ -36,8 +36,14 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Set this once per repository (default here is Codex non-interactive).
 - If empty, `run`/`resume` fail immediately with a clear error.
 - Example (`orchestrator.config.json`):
-  - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply changes and run relevant checks.\""`
+  - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\""`
 - Do not use plain `"codex"` (interactive mode will block orchestration).
+
+## Plan File Naming
+
+- Active plan files are date-prefixed by creation date: `YYYY-MM-DD-<plan-id>.md`.
+- Completed plan files are date-prefixed by completion date: `YYYY-MM-DD-<plan-id>.md`.
+- Legacy files without a date prefix are allowed; new automation promotions/completions use date-prefixed naming.
 
 ## Policy Controls
 
