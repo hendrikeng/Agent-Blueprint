@@ -209,6 +209,22 @@ async function loadConfig(paths) {
   };
 }
 
+function configuredExecutorCommand(options, config) {
+  return String(options.executorCommand || config.executor.command || '').trim();
+}
+
+function assertExecutorConfigured(options, config) {
+  if (options.dryRun) {
+    return;
+  }
+
+  if (!configuredExecutorCommand(options, config)) {
+    throw new Error(
+      'No executor command configured. Set --executor or docs/ops/automation/orchestrator.config.json executor.command.'
+    );
+  }
+}
+
 function createInitialState(runId, requestedMode, effectiveMode) {
   return {
     version: 1,
@@ -460,10 +476,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     await fs.mkdir(runSessionDir, { recursive: true });
   }
 
-  const configuredExecutor = options.executorCommand || config.executor.command;
+  const configuredExecutor = configuredExecutorCommand(options, config);
   if (!configuredExecutor) {
     return {
-      status: 'blocked',
+      status: 'failed',
       reason: 'No executor command configured (set --executor or docs/ops/automation/orchestrator.config.json executor.command).'
     };
   }
@@ -1037,6 +1053,8 @@ async function runCommand(paths, options) {
     throw new Error('Refusing to start with a dirty git worktree. Use --allow-dirty true to override.');
   }
 
+  assertExecutorConfigured(options, config);
+
   await ensureDirectories(paths, options.dryRun);
   await saveState(paths, state, options.dryRun);
 
@@ -1095,6 +1113,7 @@ async function resumeCommand(paths, options) {
   }
 
   const state = persisted;
+  assertExecutorConfigured(options, config);
   await ensureDirectories(paths, options.dryRun);
 
   await logEvent(paths, state, 'run_resumed', {

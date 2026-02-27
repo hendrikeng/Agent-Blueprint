@@ -38,10 +38,34 @@ export const REQUIRED_METADATA_FIELDS = {
   ]
 };
 
-const METADATA_SECTION_REGEX = /^##\s+Metadata\s*$([\s\S]*?)(?=^##\s+|\s*$)/m;
-
 function normalizeKey(key) {
   return key.trim().toLowerCase();
+}
+
+function metadataSectionRange(content) {
+  const lines = content.split(/\r?\n/);
+  let start = -1;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (/^##\s+Metadata\s*$/.test(lines[i])) {
+      start = i;
+      break;
+    }
+  }
+
+  if (start === -1) {
+    return null;
+  }
+
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+
+  return { lines, start, end };
 }
 
 function compareMetadataKeys(a, b) {
@@ -89,21 +113,13 @@ export async function listMarkdownFiles(dirPath, excludeFiles = ['README.md', '.
 
 export function parseMetadata(content) {
   const metadata = new Map();
+  const range = metadataSectionRange(content);
+  if (!range) {
+    return metadata;
+  }
 
-  for (const rawLine of content.split(/\r?\n/)) {
+  for (const rawLine of range.lines.slice(range.start + 1, range.end)) {
     const line = rawLine.trimEnd();
-
-    const topLevel = line.match(/^([A-Za-z][A-Za-z0-9- ]+):\s*(.*)$/);
-    if (topLevel) {
-      const key = topLevel[1].trim();
-      if (!metadata.has(normalizeKey(key))) {
-        metadata.set(normalizeKey(key), {
-          key,
-          value: topLevel[2].trim()
-        });
-      }
-      continue;
-    }
 
     const bullet = line.match(/^\s*-\s*([A-Za-z][A-Za-z0-9- ]+):\s*(.*)$/);
     if (bullet) {
@@ -112,6 +128,18 @@ export function parseMetadata(content) {
         metadata.set(normalizeKey(key), {
           key,
           value: bullet[2].trim()
+        });
+      }
+      continue;
+    }
+
+    const topLevel = line.match(/^([A-Za-z][A-Za-z0-9- ]+):\s*(.*)$/);
+    if (topLevel) {
+      const key = topLevel[1].trim();
+      if (!metadata.has(normalizeKey(key))) {
+        metadata.set(normalizeKey(key), {
+          key,
+          value: topLevel[2].trim()
         });
       }
     }
@@ -177,10 +205,15 @@ export function ensureMetadataSection(content, metadataFields) {
     sectionLines.push(`- ${key}: ${value}`);
   }
   sectionLines.push('');
-  const section = `${sectionLines.join('\n')}`;
 
-  if (METADATA_SECTION_REGEX.test(content)) {
-    return content.replace(METADATA_SECTION_REGEX, section);
+  const range = metadataSectionRange(content);
+  if (range) {
+    const updatedLines = [
+      ...range.lines.slice(0, range.start),
+      ...sectionLines,
+      ...range.lines.slice(range.end)
+    ];
+    return `${updatedLines.join('\n').trimEnd()}\n`;
   }
 
   const headingMatch = content.match(/^#\s+.+$/m);
