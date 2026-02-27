@@ -1,0 +1,10 @@
+{
+  "executor": {
+    "command": "",
+    "handoffExitCode": 75
+  },
+  "validationCommands": [],
+  "git": {
+    "atomicCommits": true
+  }
+}

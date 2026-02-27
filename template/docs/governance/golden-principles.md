@@ -19,3 +19,4 @@ Source of Truth: This document.
 - Scope/conformance guardrail: `npm run conformance:verify`
 - Architecture constraints: `npm run architecture:verify`
 - Agent hardening constraints: `npm run agent:verify`
+- Plan metadata constraints: `npm run plans:verify`

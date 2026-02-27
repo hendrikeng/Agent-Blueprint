@@ -18,8 +18,10 @@ Use plans for non-trivial changes so intent, decisions, and rollout state stay d
 1. Create or update a plan in `docs/exec-plans/active/`.
 2. Record decisions and acceptance criteria before implementation.
 3. Implement the smallest safe slice and update tests/docs in the same change.
-4. Validate with `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, and relevant tests.
-5. Move the plan to `docs/exec-plans/completed/` once shipped.
+4. Validate plan metadata with `npm run plans:verify`.
+5. Validate with `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, and relevant tests.
+6. For autonomous runs, use `node ./scripts/automation/orchestrator.mjs run` and `resume` with one-session-per-plan execution.
+7. Move the plan to `docs/exec-plans/completed/` once shipped.
 
 ## Structure
 

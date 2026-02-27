@@ -36,6 +36,7 @@ Start here, then follow linked source-of-truth docs:
 - Product specs index: `docs/product-specs/index.md`
 - Product state snapshot: `docs/product-specs/current-state.md`
 - Execution plans: `docs/exec-plans/README.md`
+- Ops automation conveyor: `docs/ops/automation/README.md`
 
 ## Non-Negotiables
 
@@ -91,7 +92,7 @@ Docs are part of done.
 
 ## Test and Validation Expectations
 
-- Run `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, and `npm run agent:verify` before merge.
+- Run `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, and `npm run plans:verify` before merge.
 - Add/adjust tests for behavior changes.
 - Every bug fix needs a regression test.
 - Critical flows require focused coverage.

@@ -13,3 +13,4 @@ Source of Truth: This document.
 
 - Include owner, last-updated date, and source-of-truth in canonical specs.
 - Keep current-state snapshots dated and aligned with `README.md`.
+- Include automation delivery updates from completed execution plans in spec targets.

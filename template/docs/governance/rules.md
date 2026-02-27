@@ -24,4 +24,5 @@ Source of Truth: This document.
 - `npm run conformance:verify`
 - `npm run architecture:verify`
 - `npm run agent:verify`
+- `npm run plans:verify`
 - Relevant domain tests for changed behavior

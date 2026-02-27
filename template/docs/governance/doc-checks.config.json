@@ -42,6 +42,7 @@
     "docs/governance/rules.md",
     "docs/index.md",
     "docs/ops/README.md",
+    "docs/ops/automation/README.md",
     "docs/product-specs/current-state.md",
     "docs/product-specs/index.md",
     "docs/references/index.md",
@@ -60,6 +61,7 @@
     "docs/generated",
     "docs/governance",
     "docs/ops",
+    "docs/ops/automation",
     "docs/product-specs",
     "docs/references",
     "docs/ui"
@@ -84,6 +86,7 @@
     "docs/generated/",
     "docs/governance/",
     "docs/ops/",
+    "docs/ops/automation/",
     "docs/product-specs/",
     "docs/references/",
     "docs/ui/"
@@ -102,7 +105,8 @@
       "docs/governance/rules.md",
       "docs/agent-hardening/README.md",
       "docs/index.md",
-      "docs/product-specs/current-state.md"
+      "docs/product-specs/current-state.md",
+      "docs/ops/automation/README.md"
     ],
     "README.md": [
       "AGENTS.md",
@@ -110,7 +114,8 @@
       "docs/index.md",
       "docs/PLANS.md",
       "docs/agent-hardening/README.md",
-      "docs/product-specs/current-state.md"
+      "docs/product-specs/current-state.md",
+      "docs/ops/automation/README.md"
     ],
     "docs/index.md": [
       "docs/agent-hardening/",
@@ -118,7 +123,8 @@
       "docs/architecture/",
       "docs/design-docs/",
       "docs/product-specs/",
-      "docs/exec-plans/"
+      "docs/exec-plans/",
+      "docs/ops/automation/"
     ]
   },
   "requiredHeadings": {
@@ -267,6 +273,15 @@
         "Source of Truth",
         "Current State Date"
       ]
+    },
+    {
+      "path": "docs/ops/automation/README.md",
+      "requiredFields": [
+        "Status",
+        "Owner",
+        "Last Updated",
+        "Source of Truth"
+      ]
     }
   ],
   "staleness": {
@@ -313,6 +328,7 @@
       "docs/governance/rules.md",
       "docs/index.md",
       "docs/ops/README.md",
+      "docs/ops/automation/README.md",
       "docs/product-specs/current-state.md",
       "docs/product-specs/index.md",
       "docs/references/index.md",
@@ -325,8 +341,17 @@
       "README.md",
       ".gitkeep"
     ],
-    "requireMetadataSection": false,
-    "requiredMetadataFields": []
+    "requireMetadataSection": true,
+    "requiredMetadataFields": [
+      "Plan-ID",
+      "Status",
+      "Priority",
+      "Owner",
+      "Acceptance-Criteria",
+      "Dependencies",
+      "Spec-Targets",
+      "Done-Evidence"
+    ]
   },
   "completedPlans": {
     "directory": "docs/exec-plans/completed",
@@ -334,7 +359,20 @@
       "README.md",
       ".gitkeep"
     ],
-    "requiredPatterns": []
+    "requiredPatterns": [
+      {
+        "regex": "^##\\s+Closure\\b",
+        "message": "Completed plans must include a Closure section."
+      },
+      {
+        "regex": "^##\\s+Validation Evidence\\b",
+        "message": "Completed plans must include validation evidence."
+      },
+      {
+        "regex": "-\\s+Status:\\s*completed\\b",
+        "message": "Completed plans must set Status: completed."
+      }
+    ]
   },
   "currentStateDateCoupling": {
     "readmePath": "README.md",

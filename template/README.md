@@ -30,6 +30,7 @@ Start with:
 - `docs/product-specs/index.md`
 - `docs/product-specs/current-state.md`
 - `docs/exec-plans/README.md`
+- `docs/ops/automation/README.md`
 
 ## Platform Scope Snapshot
 
@@ -60,12 +61,19 @@ Start with:
 - Conformance scope guardrail: `npm run conformance:verify`
 - Architecture boundary checks: `npm run architecture:verify`
 - Agent hardening checks: `npm run agent:verify`
+- Plan metadata checks: `npm run plans:verify`
 
 ## When To Run Checks
 
-- Before merge: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`.
+- Before merge: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, `npm run plans:verify`.
 - After changing architecture boundaries: `npm run architecture:verify`.
 - After changing eval/observability/tool/memory policy docs: `npm run agent:verify`.
+
+## Automation Conveyor Commands
+
+- Start run: `npm run automation:run -- --mode guarded`
+- Resume run: `npm run automation:resume`
+- Audit runs: `npm run automation:audit -- --json true`
 
 ## Change Discipline
 

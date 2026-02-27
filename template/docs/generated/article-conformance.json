@@ -71,6 +71,18 @@
         "scripts/agent-hardening/check-agent-hardening.mjs",
         "package.json"
       ]
+    },
+    {
+      "id": "autonomous_exec_plan_orchestration",
+      "status": "implemented",
+      "evidence": [
+        "docs/ops/automation/README.md",
+        "docs/ops/automation/orchestrator.config.json",
+        "scripts/automation/orchestrator.mjs",
+        "scripts/automation/check-plan-metadata.mjs",
+        "docs/governance/doc-checks.config.json",
+        "package.json"
+      ]
     }
   ]
 }

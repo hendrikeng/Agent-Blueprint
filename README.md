@@ -15,6 +15,7 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 - Runtime standards docs: `template/docs/FRONTEND.md`, `template/docs/BACKEND.md`
 - Governance/conformance/architecture checker scripts under `template/scripts/`
 - Agent hardening checker script under `template/scripts/agent-hardening/`
+- Plan metadata validator and execution orchestrator under `template/scripts/automation/`
 - Governance config and architecture rule schema in `template/docs/governance/`
 - Placeholder contract: `template/PLACEHOLDERS.md`
 
@@ -24,10 +25,17 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 - `conformance:verify` -> `node ./scripts/check-article-conformance.mjs`
 - `architecture:verify` -> `node ./scripts/architecture/check-dependencies.mjs`
 - `agent:verify` -> `node ./scripts/agent-hardening/check-agent-hardening.mjs`
+- `plans:verify` -> `node ./scripts/automation/check-plan-metadata.mjs`
+
+## Automation Commands
+
+- `automation:run` -> `node ./scripts/automation/orchestrator.mjs run`
+- `automation:resume` -> `node ./scripts/automation/orchestrator.mjs resume`
+- `automation:audit` -> `node ./scripts/automation/orchestrator.mjs audit`
 
 ## When To Run Checks
 
-- Run all checks before merge: `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`.
+- Run all checks before merge: `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `plans:verify`.
 - Run `agent:verify` when changing eval policy, agent observability, tool-safety, or memory/context rules.
 - Run `architecture:verify` when changing dependency boundaries.
 
@@ -47,6 +55,7 @@ Agents must replace all `{{...}}` placeholders before treating a repo as product
    - `conformance:verify`
    - `architecture:verify`
    - `agent:verify`
+   - `plans:verify`
 5. Update `docs/generated/article-conformance.json` evidence paths for the new repository.
 6. Run `./scripts/bootstrap-verify.sh` (or run each verify command manually).
 

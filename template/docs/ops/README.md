@@ -8,3 +8,5 @@ Source of Truth: This document.
 - Link incident runbooks and dashboards.
 - Define escalation and recovery expectations for critical services.
 - Keep runbooks current with architecture and deployment changes.
+- Automation conveyor runbook: `docs/ops/automation/README.md`
+- Automation state and traces live under `docs/ops/automation/`.

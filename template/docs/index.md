@@ -28,6 +28,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/generated/`
 - `docs/governance/`
 - `docs/ops/`
+- `docs/ops/automation/`
 - `docs/product-specs/`
 - `docs/references/`
 - `docs/ui/`
@@ -67,6 +68,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/governance/rules.md`
 - `docs/governance/golden-principles.md`
 - `docs/ops/README.md`
+- `docs/ops/automation/README.md`
 - `docs/product-specs/index.md`
 - `docs/product-specs/current-state.md`
 - `docs/references/index.md`

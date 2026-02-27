@@ -13,6 +13,7 @@ Source of Truth: This document.
 - Architecture map: `docs/architecture/README.md`
 - Product state: `docs/product-specs/current-state.md`
 - Plan workflow: `docs/PLANS.md`
+- Ops automation: `docs/ops/automation/README.md`
 
 ## Layering Model
 

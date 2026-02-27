@@ -13,15 +13,31 @@ Source of Truth: This document.
 
 ## Plan Metadata Header
 
-Include at minimum:
-- Status
-- Owner
-- Last Updated
-- Summary
-- Acceptance criteria
+Every plan in `active/` and `completed/` must include `## Metadata` with:
+
+- `Plan-ID`
+- `Status`
+- `Priority`
+- `Owner`
+- `Acceptance-Criteria`
+- `Dependencies`
+- `Spec-Targets`
+- `Done-Evidence`
+
+Optional fields:
+
+- `Autonomy-Allowed` (`guarded` | `full` | `both`)
+- `Risk-Tier` (`low` | `medium` | `high`)
+
+## Status Conventions
+
+- Active plan statuses: `queued`, `in-progress`, `blocked`, `validation`, `completed`, `failed`.
+- Completed plan status: `completed`.
 
 ## Workflow
 
 1. Track non-trivial work in `active/`.
-2. Move completed plans to `completed/`.
-3. Keep tech debt references current.
+2. Validate plan metadata with `npm run plans:verify`.
+3. Execute one plan at a time with isolated context/session.
+4. Move completed plans to `completed/` with closure notes and validation evidence.
+5. Keep tech debt references current.
