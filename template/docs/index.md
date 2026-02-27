@@ -17,6 +17,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/PRODUCT_SENSE.md`
 - `docs/DESIGN.md`
 - `docs/FRONTEND.md`
+- `docs/BACKEND.md`
 - `docs/architecture/`
 - `docs/design-docs/`
 - `docs/deploy/`
@@ -40,6 +41,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/PRODUCT_SENSE.md`
 - `docs/DESIGN.md`
 - `docs/FRONTEND.md`
+- `docs/BACKEND.md`
 - `docs/architecture/README.md`
 - `docs/architecture/layers.md`
 - `docs/architecture/dependency-rules.md`

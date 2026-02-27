@@ -11,6 +11,7 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 
 - Canonical docs skeleton under `template/docs/`
 - Base top-level docs: `template/AGENTS.md`, `template/README.md`, `template/ARCHITECTURE.md`
+- Runtime standards docs: `template/docs/FRONTEND.md`, `template/docs/BACKEND.md`
 - Governance/conformance/architecture checker scripts under `template/scripts/`
 - Governance config and architecture rule schema in `template/docs/governance/`
 - Placeholder contract: `template/PLACEHOLDERS.md`

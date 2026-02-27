@@ -28,6 +28,8 @@ Start here, then follow linked source-of-truth docs:
 - Design docs index: `docs/design-docs/index.md`
 - Engineering invariants: `docs/design-docs/engineering-invariants.md`
 - UI standards: `docs/design-docs/ui-standards.md`
+- Frontend standards: `docs/FRONTEND.md`
+- Backend standards: `docs/BACKEND.md`
 - Git safety: `docs/design-docs/git-safety.md`
 - Plan lifecycle (non-trivial changes): `docs/PLANS.md`
 - Product specs index: `docs/product-specs/index.md`

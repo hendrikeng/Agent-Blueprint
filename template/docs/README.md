@@ -13,6 +13,13 @@ Source of Truth: This document.
 - Product state: `docs/product-specs/current-state.md`
 - Plan workflow: `docs/PLANS.md`
 
+## Layering Model
+
+- `AGENTS.md`: map and constraints.
+- `README.md`: product summary and navigation entrypoint.
+- `ARCHITECTURE.md` + `docs/architecture/*`: architecture truth and dependency rules.
+- `docs/FRONTEND.md` and `docs/BACKEND.md`: implementation-side standards by runtime surface.
+
 ## Authoring Rules
 
 - Keep docs concise, canonical, and linked from `AGENTS.md`/`README.md`/`docs/index.md`.

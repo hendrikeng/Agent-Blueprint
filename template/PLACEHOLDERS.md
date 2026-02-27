@@ -18,6 +18,7 @@ Replace all `{{...}}` tokens in this template before first merge.
 - `{{DATA_STACK}}`
 - `{{SHARED_CONTRACT_STRATEGY}}`
 - `{{FRONTEND_ENTRYPOINT_1}}`, `{{FRONTEND_ENTRYPOINT_2}}`
+- `{{BACKEND_ENTRYPOINT_1}}`, `{{BACKEND_ENTRYPOINT_2}}`
 
 ## Invariant/Security Placeholders
 

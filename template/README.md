@@ -23,6 +23,8 @@ Start with:
 - `docs/index.md`
 - `docs/README.md`
 - `docs/PLANS.md`
+- `docs/FRONTEND.md`
+- `docs/BACKEND.md`
 - `docs/governance/README.md`
 - `docs/product-specs/index.md`
 - `docs/product-specs/current-state.md`
@@ -41,6 +43,15 @@ Start with:
 - Backend/runtime stack: {{BACKEND_STACK}}
 - Data/storage stack: {{DATA_STACK}}
 - Shared contracts/primitives strategy: {{SHARED_CONTRACT_STRATEGY}}
+- Frontend standards: `docs/FRONTEND.md`
+- Backend standards: `docs/BACKEND.md`
+
+## Documentation Layering
+
+- `AGENTS.md`: concise operating map and non-negotiables.
+- `README.md`: product-level snapshot and entrypoints.
+- `ARCHITECTURE.md` + `docs/architecture/*`: architecture source of truth.
+- `docs/FRONTEND.md` and `docs/BACKEND.md`: implementation-side standards.
 
 ## Enforcement and Quality Gates
 
