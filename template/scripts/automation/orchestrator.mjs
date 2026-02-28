@@ -20,6 +20,7 @@ import {
 const DEFAULT_CONTEXT_THRESHOLD = 2000;
 const DEFAULT_HANDOFF_TOKEN_BUDGET = 1500;
 const DEFAULT_MAX_ROLLOVERS = 5;
+const DEFAULT_MAX_SESSIONS_PER_PLAN = 20;
 const DEFAULT_HANDOFF_EXIT_CODE = 75;
 const TRANSIENT_AUTOMATION_FILES = new Set([
   'docs/ops/automation/run-state.json',
@@ -42,6 +43,7 @@ Options:
   --context-threshold <n>            Trigger rollover when contextRemaining < n
   --handoff-token-budget <n>         Metadata field for handoff budget reporting
   --max-rollovers <n>                Maximum rollovers per plan (default: 5)
+  --max-sessions-per-plan <n>        Maximum executor sessions per plan in one run (default: 20)
   --validation "cmd1;;cmd2"          Validation commands separated by ';;'
   --commit true|false                Create atomic git commit per completed plan
   --skip-promotion true|false        Skip future->active promotion stage
@@ -898,7 +900,10 @@ async function processPlan(plan, paths, state, options, config) {
   await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
 
   const maxRollovers = asInteger(options.maxRollovers, DEFAULT_MAX_ROLLOVERS);
-  for (let session = 1; session <= maxRollovers + 1; session += 1) {
+  const maxSessionsPerPlan = asInteger(options.maxSessionsPerPlan, DEFAULT_MAX_SESSIONS_PER_PLAN);
+  let rollovers = 0;
+
+  for (let session = 1; session <= maxSessionsPerPlan; session += 1) {
     state.inProgress = {
       planId: plan.planId,
       session,
@@ -935,7 +940,8 @@ async function processPlan(plan, paths, state, options, config) {
         reason: sessionResult.reason ?? 'executor-requested'
       }, options.dryRun);
 
-      if (session > maxRollovers) {
+      rollovers += 1;
+      if (rollovers > maxRollovers) {
         await setPlanStatus(plan.filePath, 'failed', options.dryRun);
         return {
           outcome: 'failed',
@@ -982,10 +988,22 @@ async function processPlan(plan, paths, state, options, config) {
     const completionGate = await evaluateCompletionGate(plan.filePath);
     if (!completionGate.ready) {
       await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
-      return {
-        outcome: 'pending',
+
+      if (session >= maxSessionsPerPlan) {
+        return {
+          outcome: 'pending',
+          reason: `Maximum sessions reached without completion (${maxSessionsPerPlan}). ${completionGate.reason}`
+        };
+      }
+
+      await logEvent(paths, state, 'session_continued', {
+        planId: plan.planId,
+        session,
+        nextSession: session + 1,
         reason: completionGate.reason
-      };
+      }, options.dryRun);
+
+      continue;
     }
 
     const completedPath = await finalizeCompletedPlan(
@@ -1021,10 +1039,9 @@ async function processPlan(plan, paths, state, options, config) {
     };
   }
 
-  await setPlanStatus(plan.filePath, 'failed', options.dryRun);
   return {
-    outcome: 'failed',
-    reason: 'Exceeded session loop unexpectedly.'
+    outcome: 'pending',
+    reason: `Maximum sessions reached without completion (${maxSessionsPerPlan}).`
   };
 }
 
@@ -1323,6 +1340,10 @@ async function main() {
     contextThreshold: asInteger(rawOptions['context-threshold'] ?? rawOptions.contextThreshold, DEFAULT_CONTEXT_THRESHOLD),
     handoffTokenBudget: asInteger(rawOptions['handoff-token-budget'] ?? rawOptions.handoffTokenBudget, DEFAULT_HANDOFF_TOKEN_BUDGET),
     maxRollovers: asInteger(rawOptions['max-rollovers'] ?? rawOptions.maxRollovers, DEFAULT_MAX_ROLLOVERS),
+    maxSessionsPerPlan: asInteger(
+      rawOptions['max-sessions-per-plan'] ?? rawOptions.maxSessionsPerPlan,
+      DEFAULT_MAX_SESSIONS_PER_PLAN
+    ),
     validationCommands: rawOptions.validation ?? rawOptions['validation-commands'] ?? '',
     commit: asBoolean(rawOptions.commit, true),
     skipPromotion: asBoolean(rawOptions['skip-promotion'] ?? rawOptions.skipPromotion, false),

@@ -12,7 +12,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Promote ready future blueprints into executable plans.
 - Promotion moves the blueprint file from `docs/future/` into `docs/exec-plans/active/`.
 - Run order: continue existing active queue first, then promote ready future blueprints.
-- Execute one plan per isolated session with resumable handoffs.
+- Execute plans in repeated isolated sessions until done (bounded by session limits), with resumable handoffs.
 - Record structured run traces for auditability.
 - Move completed plans into `docs/exec-plans/completed/` with evidence.
 - Update product state docs after completion.
@@ -31,6 +31,9 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `node ./scripts/automation/orchestrator.mjs run --mode guarded`
 - `node ./scripts/automation/orchestrator.mjs resume`
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
+- Optional continuation controls:
+  - `--max-sessions-per-plan <n>` (default `20`)
+  - `--max-rollovers <n>` (default `5`)
 
 ## Executor Configuration
 
@@ -65,7 +68,7 @@ Executor commands should use these outcomes:
 - Exit code `75`: request session rollover/handoff.
 - Non-zero other than `75`: fail execution.
 - A plan is auto-moved to `docs/exec-plans/completed/` only when its top-level `Status:` line is `completed`.
-- If the top-level `Status:` is not `completed`, orchestration keeps the plan in `docs/exec-plans/active/` for later `resume`.
+- If the top-level `Status:` is not `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
 
 Optional result payload (path from `ORCH_RESULT_PATH`):
 
