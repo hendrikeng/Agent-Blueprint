@@ -10,6 +10,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 ## Goals
 
 - Promote ready future blueprints into executable plans.
+- Keep future blueprints as historical source docs by marking them `Status: promoted` with a `Promoted-Plan` link.
 - Run order: continue existing active queue first, then promote ready future blueprints.
 - Execute one plan per isolated session with resumable handoffs.
 - Record structured run traces for auditability.
@@ -44,6 +45,8 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Active plan files are date-prefixed by creation date: `YYYY-MM-DD-<plan-id>.md`.
 - Completed plan files are date-prefixed by completion date: `YYYY-MM-DD-<plan-id>.md`.
 - Legacy files without a date prefix are allowed; new automation promotions/completions use date-prefixed naming.
+- This naming convention applies to plan files in `active/` and `completed/` only.
+- Evidence artifacts may use step-prefixed files (`01-...md`) and dated folders (`...-YYYY-MM-DD`).
 
 ## Policy Controls
 
