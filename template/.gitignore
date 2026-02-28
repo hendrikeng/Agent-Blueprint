@@ -1,0 +1,7 @@
+# automation runtime artifacts (transient)
+/docs/ops/automation/run-state.json
+/docs/ops/automation/run-events.jsonl
+/docs/ops/automation/runtime/*
+!/docs/ops/automation/runtime/.gitkeep
+/docs/ops/automation/handoffs/*
+!/docs/ops/automation/handoffs/.gitkeep

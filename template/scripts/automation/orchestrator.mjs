@@ -111,6 +111,32 @@ function isoDate(value) {
   return String(value).slice(0, 10);
 }
 
+function durationSeconds(startIso, endIso = nowIso()) {
+  const startMs = Date.parse(startIso);
+  const endMs = Date.parse(endIso);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return null;
+  }
+  return Math.floor((endMs - startMs) / 1000);
+}
+
+function formatDuration(totalSeconds) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds == null) {
+    return 'unknown';
+  }
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${secs}s`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
 function randomRunId() {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const random = Math.random().toString(36).slice(2, 8);
@@ -1404,7 +1430,7 @@ function createAtomicCommit(rootDir, planId, dryRun) {
   return { ok: true, committed: true, commitHash, reason: null };
 }
 
-async function finalizeCompletedPlan(plan, paths, state, validationEvidence, options, config) {
+async function finalizeCompletedPlan(plan, paths, state, validationEvidence, options, config, completionInfo = {}) {
   const now = nowIso();
   const completedDate = isoDate(now);
   const raw = await fs.readFile(plan.filePath, 'utf8');
@@ -1426,8 +1452,19 @@ async function finalizeCompletedPlan(plan, paths, state, validationEvidence, opt
     '- Commit: recorded in run events after atomic commit.',
     `- Termination Reason: completed`
   ];
+  const planDurationSeconds = durationSeconds(completionInfo.planStartedAt, now);
+  const runDurationSeconds = durationSeconds(state.startedAt, now);
+  const snapshotLines = [
+    `- Plan-ID: ${plan.planId}`,
+    `- Sessions Executed: ${completionInfo.sessionsExecuted ?? 'unknown'}`,
+    `- Rollovers: ${completionInfo.rollovers ?? 0}`,
+    `- Host Validation Provider: ${completionInfo.hostValidationProvider ?? 'none'}`,
+    `- Plan Duration: ${formatDuration(planDurationSeconds)} (${planDurationSeconds ?? 'unknown'}s)`,
+    `- Run Duration At Completion: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`
+  ];
 
   let finalContent = upsertSection(updatedMetadata, 'Validation Evidence', validationLines);
+  finalContent = upsertSection(finalContent, 'Completion Snapshot', snapshotLines);
   if (indexResult?.indexPath) {
     finalContent = upsertSection(finalContent, 'Evidence Index', [
       `- Canonical Index: \`${indexResult.indexPath}\``,
@@ -1544,6 +1581,7 @@ async function processPlan(plan, paths, state, options, config) {
 
   const maxRollovers = asInteger(options.maxRollovers, DEFAULT_MAX_ROLLOVERS);
   const maxSessionsPerPlan = asInteger(options.maxSessionsPerPlan, DEFAULT_MAX_SESSIONS_PER_PLAN);
+  const planStartedAt = nowIso();
   let rollovers = 0;
 
   for (let session = 1; session <= maxSessionsPerPlan; session += 1) {
@@ -1746,7 +1784,13 @@ async function processPlan(plan, paths, state, options, config) {
       state,
       mergedValidationEvidence,
       options,
-      config
+      config,
+      {
+        planStartedAt,
+        sessionsExecuted: session,
+        rollovers,
+        hostValidationProvider: hostValidation.provider ?? 'none'
+      }
     );
 
     await updateProductSpecs(plan, completedPath, paths, state, options);
@@ -1933,6 +1977,7 @@ async function runCommand(paths, options) {
       }
     }
 
+    const runDurationSeconds = durationSeconds(state.startedAt);
     await logEvent(paths, state, 'run_finished', {
       processedPlans: processed,
       completedPlans: state.completedPlanIds.length,
@@ -1941,7 +1986,8 @@ async function runCommand(paths, options) {
       promotions: state.stats.promotions,
       handoffs: state.stats.handoffs,
       commits: state.stats.commits,
-      validationFailures: state.stats.validationFailures
+      validationFailures: state.stats.validationFailures,
+      durationSeconds: runDurationSeconds
     }, options.dryRun);
 
     await saveState(paths, state, options.dryRun);
@@ -1951,6 +1997,7 @@ async function runCommand(paths, options) {
     console.log(`- completed: ${state.completedPlanIds.length}`);
     console.log(`- blocked: ${state.blockedPlanIds.length}`);
     console.log(`- failed: ${state.failedPlanIds.length}`);
+    console.log(`- duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
   } finally {
     await releaseRunLock(paths, options);
   }
@@ -1983,6 +2030,7 @@ async function resumeCommand(paths, options) {
 
     const processed = await runLoop(paths, state, options, config, 'resume');
 
+    const runDurationSeconds = durationSeconds(state.startedAt);
     await logEvent(paths, state, 'run_finished', {
       processedPlans: processed,
       completedPlans: state.completedPlanIds.length,
@@ -1991,7 +2039,8 @@ async function resumeCommand(paths, options) {
       promotions: state.stats?.promotions ?? 0,
       handoffs: state.stats?.handoffs ?? 0,
       commits: state.stats?.commits ?? 0,
-      validationFailures: state.stats?.validationFailures ?? 0
+      validationFailures: state.stats?.validationFailures ?? 0,
+      durationSeconds: runDurationSeconds
     }, options.dryRun);
 
     await saveState(paths, state, options.dryRun);
@@ -2001,6 +2050,7 @@ async function resumeCommand(paths, options) {
     console.log(`- completed: ${state.completedPlanIds.length}`);
     console.log(`- blocked: ${state.blockedPlanIds.length}`);
     console.log(`- failed: ${state.failedPlanIds.length}`);
+    console.log(`- duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
   } finally {
     await releaseRunLock(paths, options);
   }
