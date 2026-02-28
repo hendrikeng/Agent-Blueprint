@@ -50,7 +50,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `node ./scripts/automation/orchestrator.mjs curate-evidence [--scope active|completed|all] [--plan-id <value>]`
 - Optional continuation controls:
   - `--max-sessions-per-plan <n>` (default `20`)
-  - `--max-rollovers <n>` (default `5`)
+  - `--max-rollovers <n>` (default `20`)
 
 ## Executor Configuration
 
@@ -58,7 +58,9 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Set this once per repository (default here is Codex non-interactive).
 - If empty, `run`/`resume` fail immediately with a clear error.
 - Example (`orchestrator.config.json`):
-  - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. Write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and contextRemaining. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\""`
+  - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. ALWAYS write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and numeric contextRemaining. Never exit 0 without writing this payload. If contextRemaining is at/below ORCH_CONTEXT_THRESHOLD, return status handoff_required. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\""`
+  - `"contextThreshold": 10000`
+  - `"requireResultPayload": true`
 - Validation lanes:
   - `validation.always`: sandbox-safe checks that should run in every completion gate.
   - `validation.always` should include a unit/integration test command (framework-appropriate).
@@ -108,12 +110,14 @@ Executor commands should use these outcomes:
 - Non-zero other than `75`: fail execution.
 - A plan is auto-moved to `docs/exec-plans/completed/` only when its top-level `Status:` line is `completed`.
 - If the top-level `Status:` is not `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
-- To prevent evidence/file spam loops, executor sessions that do not emit a structured result payload (`ORCH_RESULT_PATH`) are deferred after one pass.
+- Executor sessions must always emit a structured result payload (`ORCH_RESULT_PATH`) with a numeric `contextRemaining`.
+- Default context rollover policy is proactive: a new session is forced when `contextRemaining <= 10000` (override with `--context-threshold` or `executor.contextThreshold`).
+- If an executor exits `0` without payload (or without numeric `contextRemaining`), orchestrator forces an immediate handoff/rollover to protect coding accuracy.
 - If host-required validations cannot run in the current environment, orchestration keeps the plan `in-progress`, records a host-validation pending reason, and continues with other executable plans.
 - When a plan completes, `Done-Evidence` points to its canonical evidence index file.
 - During curation, removed evidence paths are automatically rewritten in plan docs to the retained canonical reference.
 
-Optional result payload (path from `ORCH_RESULT_PATH`):
+Required result payload (path from `ORCH_RESULT_PATH`):
 
 ```json
 {

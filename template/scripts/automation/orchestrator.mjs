@@ -19,11 +19,12 @@ import {
   inferPlanId
 } from './lib/plan-metadata.mjs';
 
-const DEFAULT_CONTEXT_THRESHOLD = 2000;
+const DEFAULT_CONTEXT_THRESHOLD = 10000;
 const DEFAULT_HANDOFF_TOKEN_BUDGET = 1500;
-const DEFAULT_MAX_ROLLOVERS = 5;
+const DEFAULT_MAX_ROLLOVERS = 20;
 const DEFAULT_MAX_SESSIONS_PER_PLAN = 20;
 const DEFAULT_HANDOFF_EXIT_CODE = 75;
+const DEFAULT_REQUIRE_RESULT_PAYLOAD = true;
 const DEFAULT_HOST_VALIDATION_MODE = 'hybrid';
 const DEFAULT_HOST_VALIDATION_TIMEOUT_SECONDS = 1800;
 const DEFAULT_HOST_VALIDATION_POLL_SECONDS = 15;
@@ -72,8 +73,9 @@ Options:
   --mode guarded|full                Autonomy mode (default: guarded)
   --max-plans <n>                    Maximum plans to process in this run
   --context-threshold <n>            Trigger rollover when contextRemaining < n
+  --require-result-payload true|false Require ORCH_RESULT_PATH payload with contextRemaining (default: true)
   --handoff-token-budget <n>         Metadata field for handoff budget reporting
-  --max-rollovers <n>                Maximum rollovers per plan (default: 5)
+  --max-rollovers <n>                Maximum rollovers per plan (default: 20)
   --max-sessions-per-plan <n>        Maximum executor sessions per plan in one run (default: 20)
   --validation "cmd1;;cmd2"          Validation commands separated by ';;'
   --commit true|false                Create atomic git commit per completed plan
@@ -415,6 +417,22 @@ function assertExecutorConfigured(options, config) {
       'No executor command configured. Set docs/ops/automation/orchestrator.config.json executor.command.'
     );
   }
+}
+
+function resolveRuntimeExecutorOptions(options, config) {
+  const configContextThreshold = asInteger(config.executor?.contextThreshold, DEFAULT_CONTEXT_THRESHOLD);
+  const contextThreshold = asInteger(options.contextThreshold, configContextThreshold);
+  const configRequireResultPayload = asBoolean(
+    config.executor?.requireResultPayload,
+    DEFAULT_REQUIRE_RESULT_PAYLOAD
+  );
+  const requireResultPayload = asBoolean(options.requireResultPayload, configRequireResultPayload);
+
+  return {
+    ...options,
+    contextThreshold,
+    requireResultPayload
+  };
 }
 
 function createInitialState(runId, requestedMode, effectiveMode) {
@@ -865,6 +883,14 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
 
   const resultPayload = await readJsonIfExists(resultPathAbs, null);
   if (!resultPayload) {
+    if (options.requireResultPayload) {
+      return {
+        status: 'handoff_required',
+        reason:
+          'Executor exited 0 without writing ORCH_RESULT_PATH payload. Rolling over immediately to preserve context safety.'
+      };
+    }
+
     return {
       status: 'completed',
       summary: 'Executor completed without result payload.',
@@ -877,15 +903,25 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     reportedStatus === 'handoff_required' || reportedStatus === 'blocked' || reportedStatus === 'failed'
       ? reportedStatus
       : 'completed';
+  const contextRemaining = Number(resultPayload.contextRemaining);
+  const hasContextRemaining = Number.isFinite(contextRemaining);
+
+  if (normalizedStatus === 'completed' && options.requireResultPayload && !hasContextRemaining) {
+    return {
+      status: 'handoff_required',
+      reason:
+        'Executor payload is missing numeric contextRemaining. Rolling over immediately to avoid low-context execution.'
+    };
+  }
 
   if (
-    typeof resultPayload.contextRemaining === 'number' &&
-    Number.isFinite(resultPayload.contextRemaining) &&
-    resultPayload.contextRemaining < options.contextThreshold
+    normalizedStatus === 'completed' &&
+    hasContextRemaining &&
+    contextRemaining <= options.contextThreshold
   ) {
     return {
       status: 'handoff_required',
-      reason: `contextRemaining (${resultPayload.contextRemaining}) below threshold (${options.contextThreshold})`,
+      reason: `contextRemaining (${contextRemaining}) at/below threshold (${options.contextThreshold})`,
       summary: resultPayload.summary ?? ''
     };
   }
@@ -894,7 +930,7 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     status: normalizedStatus,
     reason: resultPayload.reason ?? null,
     summary: resultPayload.summary ?? null,
-    contextRemaining: resultPayload.contextRemaining ?? null,
+    contextRemaining: hasContextRemaining ? contextRemaining : null,
     resultPayloadFound: true
   };
 }
@@ -2687,6 +2723,7 @@ async function runLoop(paths, state, options, config, runMode) {
 
 async function runCommand(paths, options) {
   const config = await loadConfig(paths);
+  Object.assign(options, resolveRuntimeExecutorOptions(options, config));
   const modeResolution = resolveEffectiveMode(options.mode);
   const runId = options.runId || randomRunId();
 
@@ -2713,7 +2750,11 @@ async function runCommand(paths, options) {
       effectiveMode: modeResolution.effectiveMode,
       downgraded: modeResolution.downgraded,
       downgradeReason: modeResolution.reason,
-      capabilities: state.capabilities
+      capabilities: state.capabilities,
+      sessionPolicy: {
+        contextThreshold: options.contextThreshold,
+        requireResultPayload: options.requireResultPayload
+      }
     }, options.dryRun);
 
     if (modeResolution.downgraded) {
@@ -2759,6 +2800,7 @@ async function runCommand(paths, options) {
 
 async function resumeCommand(paths, options) {
   const config = await loadConfig(paths);
+  Object.assign(options, resolveRuntimeExecutorOptions(options, config));
   const persisted = await readJsonIfExists(paths.runStatePath, null);
 
   if (!persisted || !persisted.runId) {
@@ -2779,7 +2821,11 @@ async function resumeCommand(paths, options) {
     await logEvent(paths, state, 'run_resumed', {
       requestedMode: options.mode ?? state.requestedMode,
       effectiveMode: state.effectiveMode,
-      capabilities: state.capabilities
+      capabilities: state.capabilities,
+      sessionPolicy: {
+        contextThreshold: options.contextThreshold,
+        requireResultPayload: options.requireResultPayload
+      }
     }, options.dryRun);
 
     const processed = await runLoop(paths, state, options, config, 'resume');
@@ -2947,7 +2993,8 @@ async function main() {
     ...rawOptions,
     mode: rawOptions.mode ?? 'guarded',
     maxPlans: asInteger(rawOptions['max-plans'] ?? rawOptions.maxPlans, Number.MAX_SAFE_INTEGER),
-    contextThreshold: asInteger(rawOptions['context-threshold'] ?? rawOptions.contextThreshold, DEFAULT_CONTEXT_THRESHOLD),
+    contextThreshold: asInteger(rawOptions['context-threshold'] ?? rawOptions.contextThreshold, null),
+    requireResultPayload: rawOptions['require-result-payload'] ?? rawOptions.requireResultPayload,
     handoffTokenBudget: asInteger(rawOptions['handoff-token-budget'] ?? rawOptions.handoffTokenBudget, DEFAULT_HANDOFF_TOKEN_BUDGET),
     maxRollovers: asInteger(rawOptions['max-rollovers'] ?? rawOptions.maxRollovers, DEFAULT_MAX_ROLLOVERS),
     maxSessionsPerPlan: asInteger(

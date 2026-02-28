@@ -81,6 +81,7 @@ Start with:
 - Resume run: `npm run automation:resume`
 - Audit runs: `npm run automation:audit -- --json true`
 - Executor is required and loaded from `docs/ops/automation/orchestrator.config.json` (`executor.command`).
+- Default session safety policy is proactive rollover at `contextRemaining <= 10000` with required structured `ORCH_RESULT_PATH` payloads.
 
 ## Change Discipline
 
