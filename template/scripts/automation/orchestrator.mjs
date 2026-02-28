@@ -28,6 +28,30 @@ const DEFAULT_HOST_VALIDATION_MODE = 'hybrid';
 const DEFAULT_HOST_VALIDATION_TIMEOUT_SECONDS = 1800;
 const DEFAULT_HOST_VALIDATION_POLL_SECONDS = 15;
 const DEFAULT_EVIDENCE_MAX_REFERENCES = 25;
+const DEFAULT_EVIDENCE_TRACK_MODE = 'curated';
+const DEFAULT_EVIDENCE_DEDUP_MODE = 'strict-upsert';
+const DEFAULT_EVIDENCE_PRUNE_ON_COMPLETE = true;
+const DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER = 1;
+const EVIDENCE_NOISE_TOKENS = new Set([
+  'after',
+  'additional',
+  'attempt',
+  'continuation',
+  'current',
+  'follow',
+  'following',
+  'final',
+  'further',
+  'latest',
+  'next',
+  'post',
+  'progress',
+  'refresh',
+  'rerun',
+  'retry',
+  'step',
+  'up'
+]);
 const TRANSIENT_AUTOMATION_FILES = new Set([
   'docs/ops/automation/run-state.json',
   'docs/ops/automation/run-events.jsonl'
@@ -42,6 +66,7 @@ function usage() {
   node ./scripts/automation/orchestrator.mjs run [options]
   node ./scripts/automation/orchestrator.mjs resume [options]
   node ./scripts/automation/orchestrator.mjs audit [options]
+  node ./scripts/automation/orchestrator.mjs curate-evidence [options]
 
 Options:
   --mode guarded|full                Autonomy mode (default: guarded)
@@ -55,6 +80,7 @@ Options:
   --skip-promotion true|false        Skip future->active promotion stage
   --allow-dirty true|false           Allow starting with dirty git worktree
   --run-id <id>                      Resume or audit a specific run id
+  --plan-id <id>                     Filter curation scope to paths containing this value
   --dry-run true|false               Do not write changes or run git commits
   --json true|false                  JSON output for audit
 `);
@@ -278,6 +304,12 @@ async function loadConfig(paths) {
       compaction: {
         mode: 'compact-index',
         maxReferences: DEFAULT_EVIDENCE_MAX_REFERENCES
+      },
+      lifecycle: {
+        trackMode: DEFAULT_EVIDENCE_TRACK_MODE,
+        dedupMode: DEFAULT_EVIDENCE_DEDUP_MODE,
+        pruneOnComplete: DEFAULT_EVIDENCE_PRUNE_ON_COMPLETE,
+        keepMaxPerBlocker: DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER
       }
     },
     git: {
@@ -315,6 +347,10 @@ async function loadConfig(paths) {
       compaction: {
         ...defaultConfig.evidence.compaction,
         ...(configured.evidence?.compaction ?? {})
+      },
+      lifecycle: {
+        ...defaultConfig.evidence.lifecycle,
+        ...(configured.evidence?.lifecycle ?? {})
       }
     },
     git: {
@@ -874,6 +910,20 @@ function upsertSection(content, sectionTitle, bodyLines) {
   return `${content.trimEnd()}\n\n${rendered}`;
 }
 
+function sectionBody(content, sectionTitle) {
+  const sectionRegex = new RegExp(`^##\\s+${escapeRegex(sectionTitle)}\\s*$([\\s\\S]*?)(?=^##\\s+|\\s*$)`, 'm');
+  const match = content.match(sectionRegex);
+  return match ? String(match[1] ?? '').trim() : '';
+}
+
+function sectionlessPreamble(content) {
+  const firstSectionIndex = content.search(/^##\s+/m);
+  if (firstSectionIndex === -1) {
+    return content.trimEnd();
+  }
+  return content.slice(0, firstSectionIndex).trimEnd();
+}
+
 function appendToDeliveryLog(content, entryLine) {
   const sectionTitle = 'Automated Delivery Log';
   const sectionRegex = new RegExp(`^##\\s+${escapeRegex(sectionTitle)}\\s*$([\\s\\S]*?)(?=^##\\s+|\\s*$)`, 'm');
@@ -1268,6 +1318,362 @@ async function collectEvidenceReferences(paths, planRel, content, maxReferences)
   };
 }
 
+function resolveEvidenceLifecycleConfig(config) {
+  const lifecycle = config?.evidence?.lifecycle ?? {};
+  return {
+    trackMode: String(lifecycle.trackMode ?? DEFAULT_EVIDENCE_TRACK_MODE).trim().toLowerCase(),
+    dedupMode: String(lifecycle.dedupMode ?? DEFAULT_EVIDENCE_DEDUP_MODE).trim().toLowerCase(),
+    pruneOnComplete: asBoolean(lifecycle.pruneOnComplete, DEFAULT_EVIDENCE_PRUNE_ON_COMPLETE),
+    keepMaxPerBlocker: Math.max(1, asInteger(lifecycle.keepMaxPerBlocker, DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER))
+  };
+}
+
+function evidenceStemInfo(fileName) {
+  const stem = path.parse(fileName).name.toLowerCase();
+  const hasNumericPrefix = /^\d+-/.test(stem);
+  const withoutPrefix = stem.replace(/^\d+-/, '');
+  let tokens = withoutPrefix.split('-').filter(Boolean);
+  const hasNoise = tokens.some((token) => EVIDENCE_NOISE_TOKENS.has(token));
+
+  if (hasNoise) {
+    const afterIndex = tokens.findIndex((token) => token === 'after');
+    const postIndex = tokens.findIndex((token, index) => token === 'post' && index > 1);
+    const boundaryIndex =
+      afterIndex > 1 && postIndex > 1 ? Math.min(afterIndex, postIndex) : afterIndex > 1 ? afterIndex : postIndex;
+    if (boundaryIndex > 1) {
+      tokens = tokens.slice(0, boundaryIndex);
+    }
+
+    while (tokens.length > 2) {
+      const last = tokens[tokens.length - 1];
+      if (EVIDENCE_NOISE_TOKENS.has(last) || /^\d+$/.test(last)) {
+        tokens = tokens.slice(0, -1);
+        continue;
+      }
+      break;
+    }
+  }
+
+  const key = (tokens.join('-') || withoutPrefix || stem).replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-');
+  return {
+    key,
+    noisy: hasNoise,
+    hasNumericPrefix
+  };
+}
+
+async function collectEvidenceMarkdownFiles(directoryAbs, directoryRel, rootDir) {
+  const entries = await fs.readdir(directoryAbs, { withFileTypes: true });
+  const markdownFiles = [];
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (!entry.name.toLowerCase().endsWith('.md') || entry.name.toLowerCase() === 'readme.md') {
+      continue;
+    }
+    const absPath = path.join(directoryAbs, entry.name);
+    const relPath = toPosix(path.relative(rootDir, absPath));
+    const stats = await fs.stat(absPath);
+    const info = evidenceStemInfo(entry.name);
+    markdownFiles.push({
+      fileName: entry.name,
+      absPath,
+      relPath,
+      mtimeMs: stats.mtimeMs,
+      key: info.key,
+      noisy: info.noisy,
+      hasNumericPrefix: info.hasNumericPrefix
+    });
+  }
+
+  return markdownFiles.sort((a, b) => b.mtimeMs - a.mtimeMs || a.fileName.localeCompare(b.fileName));
+}
+
+async function curateEvidenceDirectory(paths, directoryRel, options, keepMaxPerBlocker) {
+  const directoryAbs = path.join(paths.rootDir, directoryRel);
+  const files = await collectEvidenceMarkdownFiles(directoryAbs, directoryRel, paths.rootDir);
+  if (files.length === 0) {
+    return {
+      directoryRel,
+      keptCount: 0,
+      prunedCount: 0,
+      replacements: []
+    };
+  }
+
+  const byKey = new Map();
+  for (const file of files) {
+    if (!byKey.has(file.key)) {
+      byKey.set(file.key, []);
+    }
+    byKey.get(file.key).push(file);
+  }
+
+  const keep = new Set();
+  const prune = [];
+  const replacements = [];
+
+  for (const groupFiles of byKey.values()) {
+    groupFiles.sort((a, b) => b.mtimeMs - a.mtimeMs || a.fileName.localeCompare(b.fileName));
+    const shouldDeduplicate =
+      groupFiles.length > keepMaxPerBlocker &&
+      (groupFiles.some((entry) => entry.noisy) || groupFiles.every((entry) => entry.hasNumericPrefix));
+
+    if (!shouldDeduplicate) {
+      for (const entry of groupFiles) {
+        keep.add(entry.relPath);
+      }
+      continue;
+    }
+
+    const keepEntries = groupFiles.slice(0, keepMaxPerBlocker);
+    for (const entry of keepEntries) {
+      keep.add(entry.relPath);
+    }
+
+    const replacementTarget = keepEntries[0]?.relPath ?? groupFiles[0].relPath;
+    for (const entry of groupFiles.slice(keepMaxPerBlocker)) {
+      prune.push(entry);
+      replacements.push({
+        fromRel: entry.relPath,
+        fallbackToRel: replacementTarget
+      });
+    }
+  }
+
+  const readmeAbs = path.join(directoryAbs, 'README.md');
+  const readmeExists = await exists(readmeAbs);
+  const readmeRel = toPosix(path.relative(paths.rootDir, readmeAbs));
+  const keptFiles = files.filter((entry) => !prune.some((removed) => removed.relPath === entry.relPath));
+
+  const finalizedReplacements = replacements.map((entry) => ({
+    fromRel: entry.fromRel,
+    toRel: readmeExists ? readmeRel : entry.fallbackToRel
+  }));
+
+  if (!options.dryRun) {
+    for (const removed of prune) {
+      await fs.unlink(removed.absPath);
+    }
+
+    if (readmeExists) {
+      const rawReadme = await fs.readFile(readmeAbs, 'utf8');
+      const artifactLines =
+        keptFiles.length > 0
+          ? keptFiles
+              .sort((a, b) => a.fileName.localeCompare(b.fileName))
+              .map((entry) => `- [\`${entry.fileName}\`](./${entry.fileName})`)
+          : ['- none'];
+      const curationLines = [
+        `- Curated At: ${nowIso()}`,
+        `- Dedup Mode: strict-upsert`,
+        `- Files Kept: ${keptFiles.length}`,
+        `- Files Pruned: ${prune.length}`
+      ];
+      const preamble = sectionlessPreamble(rawReadme);
+      const resultSummary = sectionBody(rawReadme, 'Result Summary');
+      const rebuilt = [
+        preamble,
+        '',
+        '## Evidence Artifacts',
+        '',
+        ...artifactLines,
+        ''
+      ];
+      if (resultSummary) {
+        rebuilt.push('## Result Summary', '', resultSummary, '');
+      }
+      rebuilt.push('## Curation', '', ...curationLines, '');
+      await fs.writeFile(readmeAbs, `${rebuilt.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`, 'utf8');
+    }
+  }
+
+  return {
+    directoryRel,
+    keptCount: keptFiles.length,
+    prunedCount: prune.length,
+    replacements: finalizedReplacements
+  };
+}
+
+function replacePathEverywhere(content, fromValue, toValue) {
+  if (!fromValue || fromValue === toValue || !content.includes(fromValue)) {
+    return { content, replaced: 0 };
+  }
+  const parts = content.split(fromValue);
+  const replaced = Math.max(0, parts.length - 1);
+  return {
+    content: parts.join(toValue),
+    replaced
+  };
+}
+
+async function rewriteEvidenceReferencesInPlanDocs(paths, replacements, options) {
+  if (replacements.length === 0) {
+    return { filesUpdated: 0, replacementsApplied: 0 };
+  }
+
+  const [activeFiles, completedFiles] = await Promise.all([
+    listMarkdownFiles(paths.activeDir),
+    listMarkdownFiles(paths.completedDir)
+  ]);
+  const files = [...activeFiles, ...completedFiles];
+
+  let filesUpdated = 0;
+  let replacementsApplied = 0;
+
+  for (const filePath of files) {
+    const fileRel = toPosix(path.relative(paths.rootDir, filePath));
+    const fileDir = path.posix.dirname(fileRel);
+    const original = await fs.readFile(filePath, 'utf8');
+    let updated = original;
+
+    for (const replacement of replacements) {
+      const direct = replacePathEverywhere(updated, replacement.fromRel, replacement.toRel);
+      updated = direct.content;
+      replacementsApplied += direct.replaced;
+
+      const relativeFrom = toPosix(path.posix.relative(fileDir, replacement.fromRel));
+      const relativeTo = toPosix(path.posix.relative(fileDir, replacement.toRel));
+      const relative = replacePathEverywhere(updated, relativeFrom, relativeTo);
+      updated = relative.content;
+      replacementsApplied += relative.replaced;
+
+      const dotRelativeFrom = relativeFrom.startsWith('.') ? relativeFrom : `./${relativeFrom}`;
+      const dotRelativeTo = relativeTo.startsWith('.') ? relativeTo : `./${relativeTo}`;
+      const dotRelative = replacePathEverywhere(updated, dotRelativeFrom, dotRelativeTo);
+      updated = dotRelative.content;
+      replacementsApplied += dotRelative.replaced;
+    }
+
+    if (updated !== original) {
+      filesUpdated += 1;
+      if (!options.dryRun) {
+        await fs.writeFile(filePath, updated, 'utf8');
+      }
+    }
+  }
+
+  return {
+    filesUpdated,
+    replacementsApplied
+  };
+}
+
+function evidenceDirectoriesFromContent(content, planRel) {
+  const references = extractEvidenceReferencesFromContent(content, planRel);
+  const directories = new Set();
+  for (const ref of references) {
+    if (!ref.startsWith('docs/exec-plans/active/evidence/')) {
+      continue;
+    }
+    directories.add(toPosix(path.posix.dirname(ref)));
+  }
+  return [...directories].sort();
+}
+
+async function curateEvidenceDirectories(paths, directories, options, config) {
+  const lifecycle = resolveEvidenceLifecycleConfig(config);
+  if (lifecycle.trackMode !== 'curated' || lifecycle.dedupMode !== 'strict-upsert') {
+    return {
+      directoriesVisited: 0,
+      filesPruned: 0,
+      filesKept: 0,
+      filesUpdated: 0,
+      replacementsApplied: 0
+    };
+  }
+
+  const uniqueDirectories = [...new Set(directories)].sort();
+  const allReplacements = [];
+  let filesPruned = 0;
+  let filesKept = 0;
+
+  for (const directoryRel of uniqueDirectories) {
+    const directoryAbs = path.join(paths.rootDir, directoryRel);
+    if (!(await exists(directoryAbs))) {
+      continue;
+    }
+    const result = await curateEvidenceDirectory(paths, directoryRel, options, lifecycle.keepMaxPerBlocker);
+    filesPruned += result.prunedCount;
+    filesKept += result.keptCount;
+    allReplacements.push(...result.replacements);
+  }
+
+  const replacementBySource = new Map();
+  for (const replacement of allReplacements) {
+    replacementBySource.set(replacement.fromRel, replacement.toRel);
+  }
+  const replacements = [...replacementBySource.entries()].map(([fromRel, toRel]) => ({ fromRel, toRel }));
+  const rewriteSummary = await rewriteEvidenceReferencesInPlanDocs(paths, replacements, options);
+
+  return {
+    directoriesVisited: uniqueDirectories.length,
+    filesPruned,
+    filesKept,
+    filesUpdated: rewriteSummary.filesUpdated,
+    replacementsApplied: rewriteSummary.replacementsApplied
+  };
+}
+
+async function curateEvidenceForPlan(plan, paths, options, config) {
+  if (!(await exists(plan.filePath))) {
+    return {
+      directoriesVisited: 0,
+      filesPruned: 0,
+      filesKept: 0,
+      filesUpdated: 0,
+      replacementsApplied: 0
+    };
+  }
+
+  const content = await fs.readFile(plan.filePath, 'utf8');
+  const directories = evidenceDirectoriesFromContent(content, plan.rel);
+  return curateEvidenceDirectories(paths, directories, options, config);
+}
+
+async function collectAllActiveEvidenceDirectories(paths, planIdFilter = null) {
+  const root = path.join(paths.activeDir, 'evidence');
+  if (!(await exists(root))) {
+    return [];
+  }
+
+  const normalizedFilter = planIdFilter ? String(planIdFilter).trim().toLowerCase() : null;
+  const directories = [];
+  const stack = [root];
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    let hasMarkdownArtifact = false;
+
+    for (const entry of entries) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(entryPath);
+        continue;
+      }
+      if (entry.isFile() && entry.name.toLowerCase().endsWith('.md') && entry.name.toLowerCase() !== 'readme.md') {
+        hasMarkdownArtifact = true;
+      }
+    }
+
+    if (!hasMarkdownArtifact) {
+      continue;
+    }
+
+    const rel = toPosix(path.relative(paths.rootDir, current));
+    if (normalizedFilter && !rel.toLowerCase().includes(normalizedFilter)) {
+      continue;
+    }
+    directories.push(rel);
+  }
+
+  return directories.sort();
+}
+
 async function writeEvidenceIndex(paths, plan, content, options, config) {
   const mode = String(config.evidence?.compaction?.mode ?? 'compact-index').trim().toLowerCase();
   if (mode !== 'compact-index') {
@@ -1302,7 +1708,7 @@ async function writeEvidenceIndex(paths, plan, content, options, config) {
 
   lines.push('', '## Notes', '');
   lines.push('- This index is the canonical compact view for plan evidence.');
-  lines.push('- Superseded rerun artifacts remain in place for auditability unless pruned manually.');
+  lines.push('- Superseded rerun artifacts are curated according to evidence.lifecycle policy.');
   lines.push('');
 
   if (!options.dryRun) {
@@ -1606,6 +2012,20 @@ async function processPlan(plan, paths, state, options, config) {
       summary: sessionResult.summary ?? null
     }, options.dryRun);
     await refreshEvidenceIndex(plan, paths, state, options, config);
+    const sessionCuration = await curateEvidenceForPlan(plan, paths, options, config);
+    if (sessionCuration.filesPruned > 0 || sessionCuration.filesUpdated > 0) {
+      await logEvent(paths, state, 'evidence_curated', {
+        planId: plan.planId,
+        stage: 'session',
+        session,
+        directoriesVisited: sessionCuration.directoriesVisited,
+        filesPruned: sessionCuration.filesPruned,
+        filesKept: sessionCuration.filesKept,
+        filesUpdated: sessionCuration.filesUpdated,
+        replacementsApplied: sessionCuration.replacementsApplied
+      }, options.dryRun);
+      await refreshEvidenceIndex(plan, paths, state, options, config);
+    }
 
     if (sessionResult.status === 'handoff_required') {
       const handoffPath = await writeHandoff(
@@ -1787,6 +2207,24 @@ async function processPlan(plan, paths, state, options, config) {
       ...alwaysValidation.evidence,
       ...(Array.isArray(hostValidation.evidence) ? hostValidation.evidence : [])
     ];
+
+    const lifecycle = resolveEvidenceLifecycleConfig(config);
+    if (lifecycle.pruneOnComplete) {
+      const completionCuration = await curateEvidenceForPlan(plan, paths, options, config);
+      if (completionCuration.filesPruned > 0 || completionCuration.filesUpdated > 0) {
+        await logEvent(paths, state, 'evidence_curated', {
+          planId: plan.planId,
+          stage: 'completion',
+          session,
+          directoriesVisited: completionCuration.directoriesVisited,
+          filesPruned: completionCuration.filesPruned,
+          filesKept: completionCuration.filesKept,
+          filesUpdated: completionCuration.filesUpdated,
+          replacementsApplied: completionCuration.replacementsApplied
+        }, options.dryRun);
+        await refreshEvidenceIndex(plan, paths, state, options, config);
+      }
+    }
 
     const completedPath = await finalizeCompletedPlan(
       plan,
@@ -2136,6 +2574,34 @@ async function auditCommand(paths, options) {
   }
 }
 
+async function curateEvidenceCommand(paths, options) {
+  const config = await loadConfig(paths);
+  const directories = await collectAllActiveEvidenceDirectories(paths, options.planId ?? null);
+  const summary = await curateEvidenceDirectories(paths, directories, options, config);
+
+  if (asBoolean(options.json, false)) {
+    console.log(
+      JSON.stringify(
+        {
+          command: 'curate-evidence',
+          directories: directories.length,
+          ...summary
+        },
+        null,
+        2
+      )
+    );
+    return;
+  }
+
+  console.log('[orchestrator] evidence curation complete.');
+  console.log(`- directories: ${directories.length}`);
+  console.log(`- files pruned: ${summary.filesPruned}`);
+  console.log(`- files kept: ${summary.filesKept}`);
+  console.log(`- docs updated: ${summary.filesUpdated}`);
+  console.log(`- path replacements: ${summary.replacementsApplied}`);
+}
+
 async function main() {
   const { command, options: rawOptions } = parseArgs(process.argv.slice(2));
 
@@ -2168,6 +2634,7 @@ async function main() {
     dryRun: asBoolean(rawOptions['dry-run'] ?? rawOptions.dryRun, false),
     json: asBoolean(rawOptions.json, false),
     runId: rawOptions['run-id'] ?? rawOptions.runId,
+    planId: rawOptions['plan-id'] ?? rawOptions.planId,
     handoffExitCode: asInteger(rawOptions['handoff-exit-code'] ?? rawOptions.handoffExitCode, DEFAULT_HANDOFF_EXIT_CODE)
   };
 
@@ -2186,6 +2653,11 @@ async function main() {
 
   if (command === 'audit') {
     await auditCommand(paths, options);
+    return;
+  }
+
+  if (command === 'curate-evidence') {
+    await curateEvidenceCommand(paths, options);
     return;
   }
 

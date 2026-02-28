@@ -32,6 +32,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `node ./scripts/automation/orchestrator.mjs run --mode guarded`
 - `node ./scripts/automation/orchestrator.mjs resume`
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
+- `node ./scripts/automation/orchestrator.mjs curate-evidence [--plan-id <value>]`
 - Optional continuation controls:
   - `--max-sessions-per-plan <n>` (default `20`)
   - `--max-rollovers <n>` (default `5`)
@@ -42,7 +43,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Set this once per repository (default here is Codex non-interactive).
 - If empty, `run`/`resume` fail immediately with a clear error.
 - Example (`orchestrator.config.json`):
-  - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\""`
+  - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. Write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and contextRemaining. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\""`
 - Validation lanes:
   - `validation.always`: sandbox-safe checks run before completion.
   - `validation.hostRequired`: Docker/port/browser checks required before completion.
@@ -52,6 +53,11 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Evidence compaction:
   - `evidence.compaction.mode: "compact-index"` writes canonical per-plan index files in `docs/exec-plans/evidence-index/`.
   - `evidence.compaction.maxReferences` controls how many most-recent evidence links are retained in the canonical index.
+- Evidence lifecycle:
+  - `evidence.lifecycle.trackMode: "curated"` keeps canonical evidence and rewrites stale references to concise indices/readmes.
+  - `evidence.lifecycle.dedupMode: "strict-upsert"` deduplicates noisy rerun artifacts by blocker signature.
+  - `evidence.lifecycle.pruneOnComplete: true` re-runs curation before completion.
+  - `evidence.lifecycle.keepMaxPerBlocker` controls how many artifacts remain per dedup group (default `1`).
 - Do not use plain `"codex"` (interactive mode will block orchestration).
 
 ## Plan File Naming
@@ -82,6 +88,7 @@ Executor commands should use these outcomes:
 - To prevent evidence/file spam loops, executor sessions that do not emit a structured result payload (`ORCH_RESULT_PATH`) are deferred after one pass.
 - If host-required validations cannot run in the current environment, orchestration keeps the plan `in-progress`, records a host-validation pending reason, and continues with other executable plans.
 - When a plan completes, `Done-Evidence` points to its canonical evidence index file.
+- During curation, removed evidence paths are automatically rewritten in plan docs to the retained canonical reference.
 
 Optional result payload (path from `ORCH_RESULT_PATH`):
 
@@ -90,6 +97,8 @@ Optional result payload (path from `ORCH_RESULT_PATH`):
   "status": "completed",
   "summary": "Implemented acceptance criteria 1 and 2",
   "contextRemaining": 2100,
-  "reason": "optional detail"
+  "reason": "optional detail",
+  "blockerKey": "optional-stable-blocker-id",
+  "evidenceAction": "upsert"
 }
 ```

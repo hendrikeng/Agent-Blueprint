@@ -20,6 +20,12 @@
     "compaction": {
       "mode": "compact-index",
       "maxReferences": 25
+    },
+    "lifecycle": {
+      "trackMode": "curated",
+      "dedupMode": "strict-upsert",
+      "pruneOnComplete": true,
+      "keepMaxPerBlocker": 1
     }
   },
   "validationCommands": [],
