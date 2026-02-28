@@ -5,7 +5,8 @@ Owner: {{DOC_OWNER}}
 Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This directory.
 
-Track future-state blueprints that are intentionally not yet implemented.
+Track future-state blueprints for intentionally staged strategic/non-trivial work that is not yet executing.
+Quick/manual fixes should be tracked directly in `docs/exec-plans/active/` when future staging is unnecessary.
 
 ## Required Metadata
 

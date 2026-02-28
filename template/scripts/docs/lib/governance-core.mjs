@@ -34,6 +34,32 @@ function metadataValue(content, key) {
   return match ? match[1].trim() : null;
 }
 
+function isTemplatePlaceholder(value) {
+  return /^\{\{[A-Z0-9_]+\}\}$/.test((value ?? '').trim());
+}
+
+function extractRawDateByStrategy(content, strategy) {
+  if (!strategy || typeof strategy !== 'object') {
+    return null;
+  }
+
+  if (strategy.type === 'metadata_field') {
+    return metadataValue(content, strategy.field);
+  }
+
+  if (strategy.type === 'regex') {
+    const regex = new RegExp(strategy.pattern, 'm');
+    const match = content.match(regex);
+    if (!match) {
+      return null;
+    }
+    const capture = match[Number(strategy.group ?? 1)] ?? null;
+    return capture ? capture.trim() : null;
+  }
+
+  return null;
+}
+
 function normalizeRef(rawRef, sourceFile) {
   const trimmed = rawRef.trim();
   if (!trimmed) {
@@ -80,43 +106,16 @@ function extractRefs(content, sourceFile) {
 }
 
 function parseDateByStrategy(content, strategy) {
-  if (!strategy || typeof strategy !== 'object') {
+  const rawValue = extractRawDateByStrategy(content, strategy);
+  if (!rawValue) {
     return null;
   }
 
-  if (strategy.type === 'metadata_field') {
-    const value = metadataValue(content, strategy.field);
-    if (!value) {
-      return null;
-    }
-
-    if (strategy.format === 'iso-date') {
-      return parseIsoDate(value);
-    }
-
-    return toDate(value);
+  if (strategy?.format === 'iso-date') {
+    return parseIsoDate(rawValue);
   }
 
-  if (strategy.type === 'regex') {
-    const regex = new RegExp(strategy.pattern, 'm');
-    const match = content.match(regex);
-    if (!match) {
-      return null;
-    }
-
-    const capture = match[Number(strategy.group ?? 1)] ?? null;
-    if (!capture) {
-      return null;
-    }
-
-    if (strategy.format === 'iso-date') {
-      return parseIsoDate(capture.trim());
-    }
-
-    return toDate(capture.trim());
-  }
-
-  return null;
+  return toDate(rawValue);
 }
 
 function daysBetween(a, b) {
@@ -321,6 +320,15 @@ export async function runGovernanceAnalysis({
   }
 
   const staleness = config.staleness ?? null;
+  const templateMode =
+    isTemplatePlaceholder(metadataValue(contents.get('AGENTS.md') ?? '', 'Owner')) &&
+    isTemplatePlaceholder(metadataValue(contents.get('AGENTS.md') ?? '', 'Last Updated')) &&
+    isTemplatePlaceholder(metadataValue(contents.get('README.md') ?? '', 'Owner')) &&
+    isTemplatePlaceholder(metadataValue(contents.get('README.md') ?? '', 'Last Updated')) &&
+    isTemplatePlaceholder(metadataValue(contents.get('README.md') ?? '', 'Current State Date')) &&
+    isTemplatePlaceholder(metadataValue(contents.get('ARCHITECTURE.md') ?? '', 'Owner')) &&
+    isTemplatePlaceholder(metadataValue(contents.get('ARCHITECTURE.md') ?? '', 'Last Updated'));
+
   if (staleness) {
     const maxAgeDays = Number.isInteger(staleDaysOverride) && staleDaysOverride > 0
       ? staleDaysOverride
@@ -341,8 +349,13 @@ export async function runGovernanceAnalysis({
           continue;
         }
 
-        const parsedDate = parseDateByStrategy(content, entry.strategy ?? staleness.defaultStrategy);
+        const strategy = entry.strategy ?? staleness.defaultStrategy;
+        const rawDate = extractRawDateByStrategy(content, strategy);
+        const parsedDate = parseDateByStrategy(content, strategy);
         if (!parsedDate) {
+          if (templateMode && isTemplatePlaceholder(rawDate)) {
+            continue;
+          }
           errors.push(
             makeFinding(
               'error',
@@ -480,22 +493,28 @@ export async function runGovernanceAnalysis({
 
       const readmeDate = parseIsoDate(readmeDateRaw ?? '');
       const stateDate = parseIsoDate(stateDateRaw ?? '');
+      const skipTemplateCoupling =
+        templateMode &&
+        isTemplatePlaceholder(readmeDateRaw) &&
+        isTemplatePlaceholder(stateDateRaw);
 
-      if (!readmeDate) {
-        errors.push(makeFinding('error', 'INVALID_README_STATE_DATE', `Invalid ${field} in ${dateCoupling.readmePath}`, dateCoupling.readmePath));
-      }
-      if (!stateDate) {
-        errors.push(makeFinding('error', 'INVALID_PRODUCT_STATE_DATE', `Invalid ${field} in ${dateCoupling.currentStatePath}`, dateCoupling.currentStatePath));
-      }
-      if (readmeDate && stateDate && stateDate.getTime() < readmeDate.getTime()) {
-        errors.push(
-          makeFinding(
-            'error',
-            'PRODUCT_STATE_DATE_BEHIND_README',
-            `${dateCoupling.currentStatePath} ${field} must be >= ${dateCoupling.readmePath}`,
-            dateCoupling.currentStatePath
-          )
-        );
+      if (!skipTemplateCoupling) {
+        if (!readmeDate) {
+          errors.push(makeFinding('error', 'INVALID_README_STATE_DATE', `Invalid ${field} in ${dateCoupling.readmePath}`, dateCoupling.readmePath));
+        }
+        if (!stateDate) {
+          errors.push(makeFinding('error', 'INVALID_PRODUCT_STATE_DATE', `Invalid ${field} in ${dateCoupling.currentStatePath}`, dateCoupling.currentStatePath));
+        }
+        if (readmeDate && stateDate && stateDate.getTime() < readmeDate.getTime()) {
+          errors.push(
+            makeFinding(
+              'error',
+              'PRODUCT_STATE_DATE_BEHIND_README',
+              `${dateCoupling.currentStatePath} ${field} must be >= ${dateCoupling.readmePath}`,
+              dateCoupling.currentStatePath
+            )
+          );
+        }
       }
     }
   }

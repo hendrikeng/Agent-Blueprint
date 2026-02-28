@@ -9,6 +9,7 @@ Source of Truth: This document.
 
 - `docs/exec-plans/active/`
 - `docs/exec-plans/completed/`
+- `docs/exec-plans/evidence-index/`
 - `docs/exec-plans/tech-debt-tracker.md`
 
 ## Plan Metadata Header
@@ -36,8 +37,9 @@ Optional fields:
 
 ## Workflow
 
-1. Track non-trivial work in `active/`.
+1. Use `active/` as the execution entrypoint for both promoted future blueprints and direct quick/manual fixes.
 2. Validate plan metadata with `npm run plans:verify`.
 3. Execute one plan at a time with isolated context/session.
 4. Move completed plans to `completed/` with closure notes and validation evidence.
-5. Keep tech debt references current.
+5. Point `Done-Evidence` to canonical references under `evidence-index/`.
+6. Keep tech debt references current.

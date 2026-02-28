@@ -35,6 +35,13 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `docs/exec-plans/evidence-index/`: canonical compact evidence references by plan ID.
 - `docs/product-specs/current-state.md`: product-facing delivery timeline via `Automated Delivery Log`.
 
+## Orchestrated vs Manual Execution
+
+- Orchestration is the canonical default for non-trivial plan execution.
+- Manual execution is allowed with the same metadata/status rules and curated evidence/index behavior.
+- Lifecycle is dual-track: strategic/non-trivial work follows `future -> active -> completed`, while quick/manual fixes may run `active -> completed`.
+- This keeps completion records, evidence references, and rerun behavior consistent regardless of execution driver.
+
 ## CLI
 
 - `node ./scripts/automation/orchestrator.mjs run --mode guarded`

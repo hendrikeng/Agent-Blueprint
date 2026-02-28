@@ -15,6 +15,12 @@ Current State Date: {{CURRENT_STATE_DATE}}
 - Humans define priorities and constraints; agents execute scoped changes.
 - Documentation and verification checks are required before merge.
 
+## Execution Paths
+
+- Default path: use orchestration (`automation:run` / `automation:resume`) to drive plan promotion and execution.
+- Manual path: allowed for interactive work using the same metadata and evidence/index rules, with dual-track lifecycle (`future -> active -> completed` for strategic work, `active -> completed` for quick/manual fixes).
+- Lifecycle and policy details remain canonical in `docs/PLANS.md`, `docs/exec-plans/README.md`, and `docs/ops/automation/README.md`.
+
 ## Documentation Navigation
 
 Start with:
