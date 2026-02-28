@@ -22,6 +22,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `docs/ops/automation/orchestrator.config.json`: executor and validation command configuration.
 - `docs/ops/automation/run-state.json`: latest resumable queue and plan progress snapshot.
 - `docs/ops/automation/run-events.jsonl`: append-only JSON line event log.
+- `docs/exec-plans/evidence-index/`: canonical compact evidence indexes by plan ID.
 - `run-state.json`, `run-events.jsonl`, `runtime/`, and `handoffs/` are transient runtime artifacts; they are ignored by dirty preflight.
 - `docs/ops/automation/handoffs/`: per-plan rollover handoff notes.
 - `docs/ops/automation/runtime/`: per-run executor result payloads and the transient active-run lock file (`orchestrator.lock.json`).
@@ -42,6 +43,15 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - If empty, `run`/`resume` fail immediately with a clear error.
 - Example (`orchestrator.config.json`):
   - `"command": "codex exec --full-auto \"Continue plan {plan_id} in {plan_file}. Apply the next concrete step. Update the plan document with progress and evidence. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.\""`
+- Validation lanes:
+  - `validation.always`: sandbox-safe checks run before completion.
+  - `validation.hostRequired`: Docker/port/browser checks required before completion.
+  - `validation.host.mode`: `ci`, `local`, or `hybrid` (default).
+  - `validation.host.ci.command`: optional command that performs CI-dispatched host validation.
+  - `validation.host.local.command`: optional local host-validation command override.
+- Evidence compaction:
+  - `evidence.compaction.mode: "compact-index"` writes canonical per-plan index files in `docs/exec-plans/evidence-index/`.
+  - `evidence.compaction.maxReferences` controls how many most-recent evidence links are retained in the canonical index.
 - Do not use plain `"codex"` (interactive mode will block orchestration).
 
 ## Plan File Naming
@@ -69,6 +79,8 @@ Executor commands should use these outcomes:
 - Non-zero other than `75`: fail execution.
 - A plan is auto-moved to `docs/exec-plans/completed/` only when its top-level `Status:` line is `completed`.
 - If the top-level `Status:` is not `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
+- If host-required validations cannot run in the current environment, orchestration keeps the plan `in-progress`, records a host-validation pending reason, and continues with other executable plans.
+- When a plan completes, `Done-Evidence` points to its canonical evidence index file.
 
 Optional result payload (path from `ORCH_RESULT_PATH`):
 

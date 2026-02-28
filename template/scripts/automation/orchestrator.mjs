@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
+import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -22,6 +24,10 @@ const DEFAULT_HANDOFF_TOKEN_BUDGET = 1500;
 const DEFAULT_MAX_ROLLOVERS = 5;
 const DEFAULT_MAX_SESSIONS_PER_PLAN = 20;
 const DEFAULT_HANDOFF_EXIT_CODE = 75;
+const DEFAULT_HOST_VALIDATION_MODE = 'hybrid';
+const DEFAULT_HOST_VALIDATION_TIMEOUT_SECONDS = 1800;
+const DEFAULT_HOST_VALIDATION_POLL_SECONDS = 15;
+const DEFAULT_EVIDENCE_MAX_REFERENCES = 25;
 const TRANSIENT_AUTOMATION_FILES = new Set([
   'docs/ops/automation/run-state.json',
   'docs/ops/automation/run-events.jsonl'
@@ -133,6 +139,7 @@ function buildPaths(rootDir) {
     futureDir: path.join(docsDir, 'future'),
     activeDir: path.join(docsDir, 'exec-plans', 'active'),
     completedDir: path.join(docsDir, 'exec-plans', 'completed'),
+    evidenceIndexDir: path.join(docsDir, 'exec-plans', 'evidence-index'),
     productStatePath: path.join(docsDir, 'product-specs', 'current-state.md'),
     opsAutomationDir,
     handoffDir: path.join(opsAutomationDir, 'handoffs'),
@@ -152,6 +159,7 @@ async function ensureDirectories(paths, dryRun) {
   await fs.mkdir(paths.opsAutomationDir, { recursive: true });
   await fs.mkdir(paths.handoffDir, { recursive: true });
   await fs.mkdir(paths.runtimeDir, { recursive: true });
+  await fs.mkdir(paths.evidenceIndexDir, { recursive: true });
 }
 
 async function exists(filePath) {
@@ -225,6 +233,27 @@ async function loadConfig(paths) {
       handoffExitCode: DEFAULT_HANDOFF_EXIT_CODE
     },
     validationCommands: [],
+    validation: {
+      always: [],
+      hostRequired: [],
+      host: {
+        mode: DEFAULT_HOST_VALIDATION_MODE,
+        ci: {
+          command: '',
+          timeoutSeconds: DEFAULT_HOST_VALIDATION_TIMEOUT_SECONDS,
+          pollSeconds: DEFAULT_HOST_VALIDATION_POLL_SECONDS
+        },
+        local: {
+          command: ''
+        }
+      }
+    },
+    evidence: {
+      compaction: {
+        mode: 'compact-index',
+        maxReferences: DEFAULT_EVIDENCE_MAX_REFERENCES
+      }
+    },
     git: {
       atomicCommits: true
     }
@@ -237,6 +266,30 @@ async function loadConfig(paths) {
     executor: {
       ...defaultConfig.executor,
       ...(configured.executor ?? {})
+    },
+    validation: {
+      ...defaultConfig.validation,
+      ...(configured.validation ?? {}),
+      host: {
+        ...defaultConfig.validation.host,
+        ...(configured.validation?.host ?? {}),
+        ci: {
+          ...defaultConfig.validation.host.ci,
+          ...(configured.validation?.host?.ci ?? {})
+        },
+        local: {
+          ...defaultConfig.validation.host.local,
+          ...(configured.validation?.host?.local ?? {})
+        }
+      }
+    },
+    evidence: {
+      ...defaultConfig.evidence,
+      ...(configured.evidence ?? {}),
+      compaction: {
+        ...defaultConfig.evidence.compaction,
+        ...(configured.evidence?.compaction ?? {})
+      }
     },
     git: {
       ...defaultConfig.git,
@@ -313,6 +366,15 @@ function createInitialState(runId, requestedMode, effectiveMode) {
     completedPlanIds: [],
     blockedPlanIds: [],
     failedPlanIds: [],
+    capabilities: {
+      dockerSocket: false,
+      dockerSocketPath: null,
+      localhostBind: false,
+      browserRuntime: false,
+      checkedAt: null
+    },
+    validationState: {},
+    evidenceState: {},
     inProgress: null,
     stats: {
       promotions: 0,
@@ -321,6 +383,128 @@ function createInitialState(runId, requestedMode, effectiveMode) {
       commits: 0
     }
   };
+}
+
+function normalizePersistedState(state) {
+  const normalized = { ...(state ?? {}) };
+  normalized.queue = Array.isArray(normalized.queue) ? normalized.queue : [];
+  normalized.completedPlanIds = Array.isArray(normalized.completedPlanIds) ? normalized.completedPlanIds : [];
+  normalized.blockedPlanIds = Array.isArray(normalized.blockedPlanIds) ? normalized.blockedPlanIds : [];
+  normalized.failedPlanIds = Array.isArray(normalized.failedPlanIds) ? normalized.failedPlanIds : [];
+  normalized.validationState =
+    normalized.validationState && typeof normalized.validationState === 'object' ? normalized.validationState : {};
+  normalized.evidenceState =
+    normalized.evidenceState && typeof normalized.evidenceState === 'object' ? normalized.evidenceState : {};
+  normalized.capabilities =
+    normalized.capabilities && typeof normalized.capabilities === 'object'
+      ? normalized.capabilities
+      : {
+          dockerSocket: false,
+          dockerSocketPath: null,
+          localhostBind: false,
+          browserRuntime: false,
+          checkedAt: null
+        };
+  normalized.stats =
+    normalized.stats && typeof normalized.stats === 'object'
+      ? {
+          promotions: asInteger(normalized.stats.promotions, 0),
+          handoffs: asInteger(normalized.stats.handoffs, 0),
+          validationFailures: asInteger(normalized.stats.validationFailures, 0),
+          commits: asInteger(normalized.stats.commits, 0)
+        }
+      : {
+          promotions: 0,
+          handoffs: 0,
+          validationFailures: 0,
+          commits: 0
+        };
+  return normalized;
+}
+
+function dockerSocketCandidates() {
+  const candidates = [];
+  const dockerHost = String(process.env.DOCKER_HOST || '').trim();
+  if (dockerHost.startsWith('unix://')) {
+    candidates.push(dockerHost.replace(/^unix:\/\//, ''));
+  }
+  candidates.push(path.join(os.homedir(), '.docker', 'run', 'docker.sock'));
+  candidates.push('/var/run/docker.sock');
+  return [...new Set(candidates)];
+}
+
+async function detectLocalhostBind() {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', () => resolve(false));
+    server.listen(0, '127.0.0.1', () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
+
+async function detectCapabilities() {
+  let dockerSocketPath = null;
+  for (const candidate of dockerSocketCandidates()) {
+    try {
+      await fs.access(candidate, fsSync.constants.R_OK | fsSync.constants.W_OK);
+      dockerSocketPath = candidate;
+      break;
+    } catch {
+      // Continue candidate scan.
+    }
+  }
+
+  const localhostBind = await detectLocalhostBind();
+
+  return {
+    dockerSocket: Boolean(dockerSocketPath),
+    dockerSocketPath,
+    localhostBind,
+    browserRuntime: localhostBind,
+    checkedAt: nowIso()
+  };
+}
+
+function ensurePlanValidationState(state, planId) {
+  if (!state.validationState || typeof state.validationState !== 'object') {
+    state.validationState = {};
+  }
+  if (!state.validationState[planId] || typeof state.validationState[planId] !== 'object') {
+    state.validationState[planId] = {
+      always: 'pending',
+      host: 'pending',
+      provider: null,
+      reason: null,
+      updatedAt: null
+    };
+  }
+  return state.validationState[planId];
+}
+
+function updatePlanValidationState(state, planId, patch) {
+  const current = ensurePlanValidationState(state, planId);
+  state.validationState[planId] = {
+    ...current,
+    ...patch,
+    updatedAt: nowIso()
+  };
+}
+
+function ensureEvidenceState(state, planId) {
+  if (!state.evidenceState || typeof state.evidenceState !== 'object') {
+    state.evidenceState = {};
+  }
+  if (!state.evidenceState[planId] || typeof state.evidenceState[planId] !== 'object') {
+    state.evidenceState[planId] = {
+      indexPath: null,
+      referenceCount: 0,
+      signature: '',
+      updatedAt: null
+    };
+  }
+  return state.evidenceState[planId];
 }
 
 async function saveState(paths, state, dryRun) {
@@ -704,38 +888,6 @@ async function evaluateCompletionGate(planPath) {
   };
 }
 
-async function runValidation(paths, options, config) {
-  const explicit = typeof options.validationCommands === 'string' && options.validationCommands.trim().length > 0
-    ? options.validationCommands.split(';;').map((value) => value.trim()).filter(Boolean)
-    : null;
-
-  const commands = explicit ?? resolveDefaultValidationCommands(paths.rootDir, config.validationCommands);
-  if (commands.length === 0) {
-    return {
-      ok: true,
-      evidence: ['No validation commands configured.']
-    };
-  }
-
-  const evidence = [];
-  for (const command of commands) {
-    const result = runShell(command, paths.rootDir);
-    if (result.status !== 0) {
-      return {
-        ok: false,
-        failedCommand: command,
-        evidence
-      };
-    }
-    evidence.push(`Validation passed: ${command}`);
-  }
-
-  return {
-    ok: true,
-    evidence
-  };
-}
-
 function resolveDefaultValidationCommands(rootDir, configuredCommands) {
   if (Array.isArray(configuredCommands) && configuredCommands.length > 0) {
     return configuredCommands;
@@ -754,6 +906,434 @@ function resolveDefaultValidationCommands(rootDir, configuredCommands) {
   } catch {
     return [];
   }
+}
+
+function parseValidationCommandList(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return [];
+  }
+  return value
+    .split(';;')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function resolveAlwaysValidationCommands(rootDir, options, config) {
+  const explicit = parseValidationCommandList(options.validationCommands);
+  if (explicit.length > 0) {
+    return explicit;
+  }
+
+  if (Array.isArray(config.validation?.always) && config.validation.always.length > 0) {
+    return config.validation.always;
+  }
+
+  return resolveDefaultValidationCommands(rootDir, config.validationCommands);
+}
+
+function resolveHostRequiredValidationCommands(config) {
+  if (!Array.isArray(config.validation?.hostRequired)) {
+    return [];
+  }
+  return config.validation.hostRequired.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+}
+
+function resolveHostValidationMode(config) {
+  const mode = String(config.validation?.host?.mode ?? DEFAULT_HOST_VALIDATION_MODE).trim().toLowerCase();
+  if (mode === 'ci' || mode === 'local' || mode === 'hybrid') {
+    return mode;
+  }
+  return DEFAULT_HOST_VALIDATION_MODE;
+}
+
+async function runValidationCommands(paths, commands, options, label) {
+  if (commands.length === 0) {
+    return {
+      ok: true,
+      evidence: [`No ${label} commands configured.`]
+    };
+  }
+
+  const evidence = [];
+  for (const command of commands) {
+    if (options.dryRun) {
+      evidence.push(`Dry-run: ${label} command skipped: ${command}`);
+      continue;
+    }
+
+    const result = runShell(command, paths.rootDir);
+    if (result.status !== 0) {
+      return {
+        ok: false,
+        failedCommand: command,
+        evidence
+      };
+    }
+    evidence.push(`${label} passed: ${command}`);
+  }
+
+  return {
+    ok: true,
+    evidence
+  };
+}
+
+async function runAlwaysValidation(paths, options, config) {
+  const commands = resolveAlwaysValidationCommands(paths.rootDir, options, config);
+  return runValidationCommands(paths, commands, options, 'Validation');
+}
+
+function hostProviderResultPath(paths, state, planId, provider) {
+  const baseDir = path.join(paths.runtimeDir, state.runId, 'host-validation');
+  const fileName = `${planId}-${provider}.result.json`;
+  return {
+    abs: path.join(baseDir, fileName),
+    rel: toPosix(path.relative(paths.rootDir, path.join(baseDir, fileName)))
+  };
+}
+
+async function executeHostProviderCommand(provider, command, commands, paths, state, plan, options) {
+  const resultPaths = hostProviderResultPath(paths, state, plan.planId, provider);
+  if (!options.dryRun) {
+    await fs.mkdir(path.dirname(resultPaths.abs), { recursive: true });
+  }
+
+  if (options.dryRun) {
+    return {
+      status: 'passed',
+      evidence: [`Dry-run: host validation (${provider}) command skipped: ${command}`],
+      provider
+    };
+  }
+
+  const env = {
+    ...process.env,
+    ORCH_RUN_ID: state.runId,
+    ORCH_PLAN_ID: plan.planId,
+    ORCH_PLAN_FILE: plan.rel,
+    ORCH_HOST_PROVIDER: provider,
+    ORCH_HOST_VALIDATION_COMMANDS: JSON.stringify(commands),
+    ORCH_HOST_VALIDATION_RESULT_PATH: resultPaths.rel
+  };
+
+  const execution = runShell(command, paths.rootDir, env);
+  const payload = await readJsonIfExists(resultPaths.abs, null);
+  if (payload && typeof payload === 'object') {
+    const reported = String(payload.status ?? '').trim().toLowerCase();
+    if (reported === 'passed' || reported === 'failed' || reported === 'pending') {
+      return {
+        status: reported,
+        provider,
+        reason: payload.reason ?? null,
+        evidence: Array.isArray(payload.evidence)
+          ? payload.evidence.map((entry) => String(entry))
+          : [`Host validation (${provider}) result payload loaded from ${resultPaths.rel}`]
+      };
+    }
+  }
+
+  if (execution.signal) {
+    return {
+      status: 'unavailable',
+      provider,
+      reason: `Host validation provider '${provider}' terminated by signal ${execution.signal}`
+    };
+  }
+
+  if (execution.status === 0) {
+    return {
+      status: 'passed',
+      provider,
+      evidence: [`Host validation passed via ${provider} command: ${command}`]
+    };
+  }
+
+  return {
+    status: 'unavailable',
+    provider,
+    reason: `Host validation provider '${provider}' command exited with status ${execution.status}`
+  };
+}
+
+async function runHostValidation(paths, state, plan, options, config) {
+  const commands = resolveHostRequiredValidationCommands(config);
+  if (commands.length === 0) {
+    return {
+      status: 'passed',
+      provider: 'none',
+      reason: null,
+      evidence: ['No host-required validation commands configured.']
+    };
+  }
+
+  const mode = resolveHostValidationMode(config);
+  const ciCommand = String(config.validation?.host?.ci?.command ?? '').trim();
+  const localCommand = String(config.validation?.host?.local?.command ?? '').trim();
+  const capability = state.capabilities ?? {};
+  const localCapable = Boolean(capability.dockerSocket) && Boolean(capability.localhostBind);
+
+  const tryCi = async () => {
+    if (!ciCommand) {
+      return {
+        status: 'unavailable',
+        provider: 'ci',
+        reason: 'No CI host-validation command configured.'
+      };
+    }
+    await logEvent(paths, state, 'host_validation_started', {
+      planId: plan.planId,
+      provider: 'ci',
+      mode
+    }, options.dryRun);
+    return executeHostProviderCommand('ci', ciCommand, commands, paths, state, plan, options);
+  };
+
+  const tryLocal = async () => {
+    if (localCommand) {
+      await logEvent(paths, state, 'host_validation_started', {
+        planId: plan.planId,
+        provider: 'local',
+        mode
+      }, options.dryRun);
+      return executeHostProviderCommand('local', localCommand, commands, paths, state, plan, options);
+    }
+
+    if (!localCapable) {
+      return {
+        status: 'unavailable',
+        provider: 'local',
+        reason: [
+          'Local host validation unavailable.',
+          capability.dockerSocket ? '' : 'Docker socket not reachable.',
+          capability.localhostBind ? '' : 'localhost bind is not permitted.'
+        ].filter(Boolean).join(' ')
+      };
+    }
+
+    const result = await runValidationCommands(paths, commands, options, 'Host validation');
+    if (!result.ok) {
+      return {
+        status: 'failed',
+        provider: 'local',
+        reason: `Host validation failed: ${result.failedCommand}`,
+        evidence: result.evidence
+      };
+    }
+
+    return {
+      status: 'passed',
+      provider: 'local',
+      reason: null,
+      evidence: result.evidence
+    };
+  };
+
+  if (mode === 'ci') {
+    const ciResult = await tryCi();
+    if (ciResult.status === 'passed' || ciResult.status === 'failed') {
+      return ciResult;
+    }
+    return {
+      status: 'pending',
+      provider: 'ci',
+      reason: ciResult.reason ?? 'CI host validation unavailable.',
+      evidence: ciResult.evidence ?? []
+    };
+  }
+
+  if (mode === 'local') {
+    const localResult = await tryLocal();
+    if (localResult.status === 'passed' || localResult.status === 'failed') {
+      return localResult;
+    }
+    return {
+      status: 'pending',
+      provider: 'local',
+      reason: localResult.reason ?? 'Local host validation unavailable.',
+      evidence: localResult.evidence ?? []
+    };
+  }
+
+  const ciResult = await tryCi();
+  if (ciResult.status === 'passed' || ciResult.status === 'failed') {
+    return ciResult;
+  }
+
+  const localResult = await tryLocal();
+  if (localResult.status === 'passed' || localResult.status === 'failed') {
+    return localResult;
+  }
+
+  return {
+    status: 'pending',
+    provider: 'hybrid',
+    reason: [ciResult.reason, localResult.reason].filter(Boolean).join(' | ') || 'Host validation unavailable.',
+    evidence: [...(ciResult.evidence ?? []), ...(localResult.evidence ?? [])]
+  };
+}
+
+function normalizeEvidenceReference(reference, planRel) {
+  if (!reference) return null;
+  const clean = String(reference).trim().split('#')[0];
+  if (!clean || clean.startsWith('http://') || clean.startsWith('https://') || clean.startsWith('mailto:')) {
+    return null;
+  }
+
+  const planDir = toPosix(path.posix.dirname(planRel));
+  if (clean.startsWith('./') || clean.startsWith('../')) {
+    return toPosix(path.posix.normalize(path.posix.join(planDir, clean)));
+  }
+  if (clean.startsWith('docs/')) {
+    return toPosix(path.posix.normalize(clean));
+  }
+  return null;
+}
+
+function extractEvidenceReferencesFromContent(content, planRel) {
+  const found = new Set();
+  const linkRegex = /\[[^\]]+\]\(([^)]+)\)/g;
+  const inlineCodeRegex = /`([^`]+)`/g;
+
+  let linkMatch;
+  while ((linkMatch = linkRegex.exec(content)) != null) {
+    const normalized = normalizeEvidenceReference(linkMatch[1], planRel);
+    if (normalized && normalized.includes('/evidence/')) {
+      found.add(normalized);
+    }
+  }
+
+  let codeMatch;
+  while ((codeMatch = inlineCodeRegex.exec(content)) != null) {
+    const normalized = normalizeEvidenceReference(codeMatch[1], planRel);
+    if (normalized && normalized.includes('/evidence/')) {
+      found.add(normalized);
+    }
+  }
+
+  return [...found];
+}
+
+async function collectEvidenceReferences(paths, planRel, content, maxReferences) {
+  const candidates = extractEvidenceReferencesFromContent(content, planRel);
+  const enriched = [];
+
+  for (const relPath of candidates) {
+    const absPath = path.join(paths.rootDir, relPath);
+    try {
+      const stats = await fs.stat(absPath);
+      enriched.push({
+        relPath,
+        absPath,
+        mtimeMs: stats.mtimeMs
+      });
+    } catch {
+      // Skip missing references to keep index deterministic and valid.
+    }
+  }
+
+  enriched.sort((a, b) => b.mtimeMs - a.mtimeMs || a.relPath.localeCompare(b.relPath));
+  const selected = enriched.slice(0, maxReferences);
+  return {
+    selected,
+    totalFound: enriched.length
+  };
+}
+
+async function writeEvidenceIndex(paths, plan, content, options, config) {
+  const mode = String(config.evidence?.compaction?.mode ?? 'compact-index').trim().toLowerCase();
+  if (mode !== 'compact-index') {
+    return null;
+  }
+
+  const maxReferences = asInteger(config.evidence?.compaction?.maxReferences, DEFAULT_EVIDENCE_MAX_REFERENCES);
+  const { selected, totalFound } = await collectEvidenceReferences(paths, plan.rel, content, maxReferences);
+  const indexRel = toPosix(path.relative(paths.rootDir, path.join(paths.evidenceIndexDir, `${plan.planId}.md`)));
+  const indexAbs = path.join(paths.rootDir, indexRel);
+
+  const lines = [
+    `# Evidence Index: ${plan.planId}`,
+    '',
+    `- Plan-ID: ${plan.planId}`,
+    `- Last Updated: ${nowIso()}`,
+    `- Source Plan: \`${plan.rel}\``,
+    `- Total Evidence References Found: ${totalFound}`,
+    `- References Included: ${selected.length}`,
+    ''
+  ];
+
+  lines.push('## Canonical References', '');
+  if (selected.length === 0) {
+    lines.push('- No evidence references detected in the plan content yet.');
+  } else {
+    for (const ref of selected) {
+      const relativeLink = toPosix(path.relative(path.dirname(indexAbs), ref.absPath));
+      lines.push(`- [${ref.relPath}](${relativeLink})`);
+    }
+  }
+
+  lines.push('', '## Notes', '');
+  lines.push('- This index is the canonical compact view for plan evidence.');
+  lines.push('- Superseded rerun artifacts remain in place for auditability unless pruned manually.');
+  lines.push('');
+
+  if (!options.dryRun) {
+    await fs.mkdir(path.dirname(indexAbs), { recursive: true });
+    await fs.writeFile(indexAbs, lines.join('\n'), 'utf8');
+  }
+
+  return {
+    indexPath: indexRel,
+    referenceCount: selected.length,
+    totalFound
+  };
+}
+
+async function refreshEvidenceIndex(plan, paths, state, options, config) {
+  if (!(await exists(plan.filePath))) {
+    return null;
+  }
+
+  const content = await fs.readFile(plan.filePath, 'utf8');
+  const indexResult = await writeEvidenceIndex(paths, plan, content, options, config);
+  if (!indexResult) {
+    return null;
+  }
+
+  const previous = ensureEvidenceState(state, plan.planId);
+  const signature = `${indexResult.indexPath}|${indexResult.referenceCount}|${indexResult.totalFound}`;
+  state.evidenceState[plan.planId] = {
+    indexPath: indexResult.indexPath,
+    referenceCount: indexResult.referenceCount,
+    signature,
+    updatedAt: nowIso()
+  };
+
+  if (previous.signature !== signature) {
+    await logEvent(paths, state, 'evidence_compacted', {
+      planId: plan.planId,
+      indexPath: indexResult.indexPath,
+      referenceCount: indexResult.referenceCount,
+      totalFound: indexResult.totalFound
+    }, options.dryRun);
+  }
+
+  return indexResult;
+}
+
+async function setHostValidationSection(planPath, status, provider, reason, dryRun) {
+  if (dryRun) {
+    return;
+  }
+
+  const content = await fs.readFile(planPath, 'utf8');
+  const lines = [
+    `- Status: ${status}`,
+    `- Updated At: ${nowIso()}`,
+    `- Provider: ${provider || 'n/a'}`,
+    `- Reason: ${reason || 'none'}`
+  ];
+  const updated = upsertSection(content, 'Host Validation', lines);
+  await fs.writeFile(planPath, updated, 'utf8');
 }
 
 function gitAvailable(rootDir) {
@@ -824,13 +1404,15 @@ function createAtomicCommit(rootDir, planId, dryRun) {
   return { ok: true, committed: true, commitHash, reason: null };
 }
 
-async function finalizeCompletedPlan(plan, paths, state, validationEvidence, options) {
+async function finalizeCompletedPlan(plan, paths, state, validationEvidence, options, config) {
   const now = nowIso();
   const completedDate = isoDate(now);
   const raw = await fs.readFile(plan.filePath, 'utf8');
+  const indexResult = await writeEvidenceIndex(paths, plan, raw, options, config);
+  const doneEvidenceValue = indexResult?.indexPath ?? (validationEvidence.length > 0 ? validationEvidence.join(', ') : 'none');
   const updatedMetadata = setMetadataFields(raw, {
     Status: 'completed',
-    'Done-Evidence': validationEvidence.length > 0 ? validationEvidence.join(', ') : 'none'
+    'Done-Evidence': doneEvidenceValue
   });
 
   const validationLines = validationEvidence.length > 0
@@ -846,6 +1428,13 @@ async function finalizeCompletedPlan(plan, paths, state, validationEvidence, opt
   ];
 
   let finalContent = upsertSection(updatedMetadata, 'Validation Evidence', validationLines);
+  if (indexResult?.indexPath) {
+    finalContent = upsertSection(finalContent, 'Evidence Index', [
+      `- Canonical Index: \`${indexResult.indexPath}\``,
+      `- Included References: ${indexResult.referenceCount}`,
+      `- Total References Found: ${indexResult.totalFound}`
+    ]);
+  }
   finalContent = upsertSection(finalContent, 'Closure', closureLines);
 
   const currentBase = path.parse(path.basename(plan.filePath));
@@ -975,6 +1564,7 @@ async function processPlan(plan, paths, state, options, config) {
       reason: sessionResult.reason ?? null,
       summary: sessionResult.summary ?? null
     }, options.dryRun);
+    await refreshEvidenceIndex(plan, paths, state, options, config);
 
     if (sessionResult.status === 'handoff_required') {
       const handoffPath = await writeHandoff(
@@ -1025,6 +1615,12 @@ async function processPlan(plan, paths, state, options, config) {
     const completionGate = await evaluateCompletionGate(plan.filePath);
     if (!completionGate.ready) {
       await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
+      updatePlanValidationState(state, plan.planId, {
+        always: 'pending',
+        host: 'pending',
+        provider: null,
+        reason: completionGate.reason
+      });
 
       if (session >= maxSessionsPerPlan) {
         return {
@@ -1045,27 +1641,112 @@ async function processPlan(plan, paths, state, options, config) {
 
     await setPlanStatus(plan.filePath, 'validation', options.dryRun);
 
-    const validationResult = await runValidation(paths, options, config);
-    if (!validationResult.ok) {
+    const alwaysValidation = await runAlwaysValidation(paths, options, config);
+    if (!alwaysValidation.ok) {
       state.stats.validationFailures += 1;
+      updatePlanValidationState(state, plan.planId, {
+        always: 'failed',
+        reason: `Validation failed: ${alwaysValidation.failedCommand}`
+      });
       await setPlanStatus(plan.filePath, 'failed', options.dryRun);
       await logEvent(paths, state, 'validation_failed', {
         planId: plan.planId,
-        command: validationResult.failedCommand
+        command: alwaysValidation.failedCommand
       }, options.dryRun);
 
       return {
         outcome: 'failed',
-        reason: `Validation failed: ${validationResult.failedCommand}`
+        reason: `Validation failed: ${alwaysValidation.failedCommand}`
       };
     }
+
+    updatePlanValidationState(state, plan.planId, {
+      always: 'passed',
+      reason: null
+    });
+
+    await logEvent(paths, state, 'host_validation_requested', {
+      planId: plan.planId,
+      mode: resolveHostValidationMode(config),
+      commands: resolveHostRequiredValidationCommands(config)
+    }, options.dryRun);
+
+    const hostValidation = await runHostValidation(paths, state, plan, options, config);
+    if (hostValidation.status === 'failed') {
+      state.stats.validationFailures += 1;
+      updatePlanValidationState(state, plan.planId, {
+        host: 'failed',
+        provider: hostValidation.provider ?? null,
+        reason: hostValidation.reason ?? 'Host validation failed.'
+      });
+      await setPlanStatus(plan.filePath, 'failed', options.dryRun);
+      await logEvent(paths, state, 'host_validation_failed', {
+        planId: plan.planId,
+        provider: hostValidation.provider ?? null,
+        reason: hostValidation.reason ?? 'Host validation failed.'
+      }, options.dryRun);
+
+      return {
+        outcome: 'failed',
+        reason: hostValidation.reason ?? 'Host validation failed.'
+      };
+    }
+
+    if (hostValidation.status === 'pending') {
+      updatePlanValidationState(state, plan.planId, {
+        host: 'pending',
+        provider: hostValidation.provider ?? null,
+        reason: hostValidation.reason ?? 'Host validation pending.'
+      });
+      await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
+      await setHostValidationSection(
+        plan.filePath,
+        'pending',
+        hostValidation.provider ?? 'unknown',
+        hostValidation.reason ?? 'Host validation pending.',
+        options.dryRun
+      );
+      await logEvent(paths, state, 'host_validation_blocked', {
+        planId: plan.planId,
+        provider: hostValidation.provider ?? null,
+        reason: hostValidation.reason ?? 'Host validation pending.'
+      }, options.dryRun);
+
+      return {
+        outcome: 'pending',
+        reason: hostValidation.reason ?? 'Host validation pending.'
+      };
+    }
+
+    updatePlanValidationState(state, plan.planId, {
+      host: 'passed',
+      provider: hostValidation.provider ?? null,
+      reason: null
+    });
+    await setHostValidationSection(
+      plan.filePath,
+      'passed',
+      hostValidation.provider ?? 'unknown',
+      'Host-required validations passed.',
+      options.dryRun
+    );
+    await logEvent(paths, state, 'host_validation_passed', {
+      planId: plan.planId,
+      provider: hostValidation.provider ?? null
+    }, options.dryRun);
+
+    const mergedValidationEvidence = [
+      ...alwaysValidation.evidence,
+      ...(Array.isArray(hostValidation.evidence) ? hostValidation.evidence : [])
+    ];
 
     const completedPath = await finalizeCompletedPlan(
       plan,
       paths,
       state,
-      validationResult.evidence,
-      options
+      mergedValidationEvidence,
+      options,
+      config
     );
 
     await updateProductSpecs(plan, completedPath, paths, state, options);
@@ -1089,7 +1770,7 @@ async function processPlan(plan, paths, state, options, config) {
       reason: 'completed',
       completedPath: toPosix(path.relative(paths.rootDir, completedPath)),
       commitHash: commitResult.commitHash,
-      validationEvidence: validationResult.evidence
+      validationEvidence: mergedValidationEvidence
     };
   }
 
@@ -1212,6 +1893,7 @@ async function runCommand(paths, options) {
   const runId = options.runId || randomRunId();
 
   const state = createInitialState(runId, modeResolution.requestedMode, modeResolution.effectiveMode);
+  state.capabilities = await detectCapabilities();
 
   if (
     !asBoolean(options.allowDirty, false) &&
@@ -1232,7 +1914,8 @@ async function runCommand(paths, options) {
       requestedMode: modeResolution.requestedMode,
       effectiveMode: modeResolution.effectiveMode,
       downgraded: modeResolution.downgraded,
-      downgradeReason: modeResolution.reason
+      downgradeReason: modeResolution.reason,
+      capabilities: state.capabilities
     }, options.dryRun);
 
     if (modeResolution.downgraded) {
@@ -1285,7 +1968,8 @@ async function resumeCommand(paths, options) {
     throw new Error(`Requested run-id '${options.runId}' does not match persisted run '${persisted.runId}'.`);
   }
 
-  const state = persisted;
+  const state = normalizePersistedState(persisted);
+  state.capabilities = await detectCapabilities();
   assertExecutorConfigured(options, config);
   await ensureDirectories(paths, options.dryRun);
   await acquireRunLock(paths, state, options);
@@ -1293,7 +1977,8 @@ async function resumeCommand(paths, options) {
   try {
     await logEvent(paths, state, 'run_resumed', {
       requestedMode: options.mode ?? state.requestedMode,
-      effectiveMode: state.effectiveMode
+      effectiveMode: state.effectiveMode,
+      capabilities: state.capabilities
     }, options.dryRun);
 
     const processed = await runLoop(paths, state, options, config, 'resume');
