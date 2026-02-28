@@ -24,7 +24,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `docs/ops/automation/run-events.jsonl`: append-only JSON line event log.
 - `run-state.json`, `run-events.jsonl`, `runtime/`, and `handoffs/` are transient runtime artifacts; they are ignored by dirty preflight.
 - `docs/ops/automation/handoffs/`: per-plan rollover handoff notes.
-- `docs/ops/automation/runtime/`: per-run executor result payloads.
+- `docs/ops/automation/runtime/`: per-run executor result payloads and the transient active-run lock file (`orchestrator.lock.json`).
 
 ## CLI
 

@@ -137,6 +137,7 @@ function buildPaths(rootDir) {
     opsAutomationDir,
     handoffDir: path.join(opsAutomationDir, 'handoffs'),
     runtimeDir: path.join(opsAutomationDir, 'runtime'),
+    runLockPath: path.join(opsAutomationDir, 'runtime', 'orchestrator.lock.json'),
     runStatePath: path.join(opsAutomationDir, 'run-state.json'),
     runEventsPath: path.join(opsAutomationDir, 'run-events.jsonl'),
     orchestratorConfigPath: path.join(opsAutomationDir, 'orchestrator.config.json')
@@ -204,6 +205,19 @@ function runShellCapture(command, cwd, env = process.env) {
   });
 }
 
+function pidIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadConfig(paths) {
   const defaultConfig = {
     executor: {
@@ -229,6 +243,46 @@ async function loadConfig(paths) {
       ...(configured.git ?? {})
     }
   };
+}
+
+async function acquireRunLock(paths, state, options) {
+  if (options.dryRun) {
+    return;
+  }
+
+  const existing = await readJsonIfExists(paths.runLockPath, null);
+  const existingPid = Number.isInteger(existing?.pid) ? existing.pid : null;
+  if (existingPid && existingPid !== process.pid && pidIsAlive(existingPid)) {
+    throw new Error(
+      `Another orchestrator run appears active (pid ${existingPid}, runId ${existing?.runId ?? 'unknown'}).`
+    );
+  }
+
+  const payload = {
+    pid: process.pid,
+    runId: state.runId,
+    mode: state.effectiveMode,
+    acquiredAt: nowIso(),
+    cwd: paths.rootDir
+  };
+  await writeJson(paths.runLockPath, payload, options.dryRun);
+}
+
+async function releaseRunLock(paths, options) {
+  if (options.dryRun) {
+    return;
+  }
+
+  const existing = await readJsonIfExists(paths.runLockPath, null);
+  if (!existing || existing.pid !== process.pid) {
+    return;
+  }
+
+  try {
+    await fs.unlink(paths.runLockPath);
+  } catch {
+    // Best-effort cleanup.
+  }
 }
 
 function configuredExecutorCommand(options, config) {
@@ -968,23 +1022,6 @@ async function processPlan(plan, paths, state, options, config) {
       };
     }
 
-    await setPlanStatus(plan.filePath, 'validation', options.dryRun);
-
-    const validationResult = await runValidation(paths, options, config);
-    if (!validationResult.ok) {
-      state.stats.validationFailures += 1;
-      await setPlanStatus(plan.filePath, 'failed', options.dryRun);
-      await logEvent(paths, state, 'validation_failed', {
-        planId: plan.planId,
-        command: validationResult.failedCommand
-      }, options.dryRun);
-
-      return {
-        outcome: 'failed',
-        reason: `Validation failed: ${validationResult.failedCommand}`
-      };
-    }
-
     const completionGate = await evaluateCompletionGate(plan.filePath);
     if (!completionGate.ready) {
       await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
@@ -1004,6 +1041,23 @@ async function processPlan(plan, paths, state, options, config) {
       }, options.dryRun);
 
       continue;
+    }
+
+    await setPlanStatus(plan.filePath, 'validation', options.dryRun);
+
+    const validationResult = await runValidation(paths, options, config);
+    if (!validationResult.ok) {
+      state.stats.validationFailures += 1;
+      await setPlanStatus(plan.filePath, 'failed', options.dryRun);
+      await logEvent(paths, state, 'validation_failed', {
+        planId: plan.planId,
+        command: validationResult.failedCommand
+      }, options.dryRun);
+
+      return {
+        outcome: 'failed',
+        reason: `Validation failed: ${validationResult.failedCommand}`
+      };
     }
 
     const completedPath = await finalizeCompletedPlan(
@@ -1064,6 +1118,7 @@ async function runLoop(paths, state, options, config, runMode) {
   let processed = 0;
   const maxPlans = asInteger(options.maxPlans, Number.MAX_SAFE_INTEGER);
   const deferredPlanIds = new Set();
+  const dependencyWaitCache = new Map();
 
   while (processed < maxPlans) {
     const catalog = await collectPlanCatalog(paths);
@@ -1084,9 +1139,16 @@ async function runLoop(paths, state, options, config, runMode) {
     await saveState(paths, state, options.dryRun);
 
     for (const blocked of blockedByDependency) {
+      const missingDependencies = blocked.dependencies.filter((dependency) => !completedIds.has(dependency));
+      const cacheValue = missingDependencies.slice().sort().join(',');
+      if (dependencyWaitCache.get(blocked.planId) === cacheValue) {
+        continue;
+      }
+
+      dependencyWaitCache.set(blocked.planId, cacheValue);
       await logEvent(paths, state, 'plan_waiting_dependency', {
         planId: blocked.planId,
-        missingDependencies: blocked.dependencies.filter((dependency) => !completedIds.has(dependency))
+        missingDependencies
       }, options.dryRun);
     }
 
@@ -1162,48 +1224,53 @@ async function runCommand(paths, options) {
   assertExecutorConfigured(options, config);
 
   await ensureDirectories(paths, options.dryRun);
+  await acquireRunLock(paths, state, options);
   await saveState(paths, state, options.dryRun);
 
-  await logEvent(paths, state, 'run_started', {
-    requestedMode: modeResolution.requestedMode,
-    effectiveMode: modeResolution.effectiveMode,
-    downgraded: modeResolution.downgraded,
-    downgradeReason: modeResolution.reason
-  }, options.dryRun);
+  try {
+    await logEvent(paths, state, 'run_started', {
+      requestedMode: modeResolution.requestedMode,
+      effectiveMode: modeResolution.effectiveMode,
+      downgraded: modeResolution.downgraded,
+      downgradeReason: modeResolution.reason
+    }, options.dryRun);
 
-  if (modeResolution.downgraded) {
-    console.log(`[orchestrator] full mode downgraded to guarded: ${modeResolution.reason}`);
-  }
-
-  let processed = await runLoop(paths, state, options, config, 'run');
-
-  if (!asBoolean(options.skipPromotion, false)) {
-    const promoted = await promoteFuturePlans(paths, state, options);
-    if (promoted > 0) {
-      console.log(`[orchestrator] promoted ${promoted} future plan(s) into docs/exec-plans/active.`);
-      const processedAfterPromotion = await runLoop(paths, state, options, config, 'run');
-      processed += processedAfterPromotion;
+    if (modeResolution.downgraded) {
+      console.log(`[orchestrator] full mode downgraded to guarded: ${modeResolution.reason}`);
     }
+
+    let processed = await runLoop(paths, state, options, config, 'run');
+
+    if (!asBoolean(options.skipPromotion, false)) {
+      const promoted = await promoteFuturePlans(paths, state, options);
+      if (promoted > 0) {
+        console.log(`[orchestrator] promoted ${promoted} future plan(s) into docs/exec-plans/active.`);
+        const processedAfterPromotion = await runLoop(paths, state, options, config, 'run');
+        processed += processedAfterPromotion;
+      }
+    }
+
+    await logEvent(paths, state, 'run_finished', {
+      processedPlans: processed,
+      completedPlans: state.completedPlanIds.length,
+      blockedPlans: state.blockedPlanIds.length,
+      failedPlans: state.failedPlanIds.length,
+      promotions: state.stats.promotions,
+      handoffs: state.stats.handoffs,
+      commits: state.stats.commits,
+      validationFailures: state.stats.validationFailures
+    }, options.dryRun);
+
+    await saveState(paths, state, options.dryRun);
+
+    console.log(`[orchestrator] run complete (${processed} processed).`);
+    console.log(`- runId: ${state.runId}`);
+    console.log(`- completed: ${state.completedPlanIds.length}`);
+    console.log(`- blocked: ${state.blockedPlanIds.length}`);
+    console.log(`- failed: ${state.failedPlanIds.length}`);
+  } finally {
+    await releaseRunLock(paths, options);
   }
-
-  await logEvent(paths, state, 'run_finished', {
-    processedPlans: processed,
-    completedPlans: state.completedPlanIds.length,
-    blockedPlans: state.blockedPlanIds.length,
-    failedPlans: state.failedPlanIds.length,
-    promotions: state.stats.promotions,
-    handoffs: state.stats.handoffs,
-    commits: state.stats.commits,
-    validationFailures: state.stats.validationFailures
-  }, options.dryRun);
-
-  await saveState(paths, state, options.dryRun);
-
-  console.log(`[orchestrator] run complete (${processed} processed).`);
-  console.log(`- runId: ${state.runId}`);
-  console.log(`- completed: ${state.completedPlanIds.length}`);
-  console.log(`- blocked: ${state.blockedPlanIds.length}`);
-  console.log(`- failed: ${state.failedPlanIds.length}`);
 }
 
 async function resumeCommand(paths, options) {
@@ -1221,32 +1288,37 @@ async function resumeCommand(paths, options) {
   const state = persisted;
   assertExecutorConfigured(options, config);
   await ensureDirectories(paths, options.dryRun);
+  await acquireRunLock(paths, state, options);
 
-  await logEvent(paths, state, 'run_resumed', {
-    requestedMode: options.mode ?? state.requestedMode,
-    effectiveMode: state.effectiveMode
-  }, options.dryRun);
+  try {
+    await logEvent(paths, state, 'run_resumed', {
+      requestedMode: options.mode ?? state.requestedMode,
+      effectiveMode: state.effectiveMode
+    }, options.dryRun);
 
-  const processed = await runLoop(paths, state, options, config, 'resume');
+    const processed = await runLoop(paths, state, options, config, 'resume');
 
-  await logEvent(paths, state, 'run_finished', {
-    processedPlans: processed,
-    completedPlans: state.completedPlanIds.length,
-    blockedPlans: state.blockedPlanIds.length,
-    failedPlans: state.failedPlanIds.length,
-    promotions: state.stats?.promotions ?? 0,
-    handoffs: state.stats?.handoffs ?? 0,
-    commits: state.stats?.commits ?? 0,
-    validationFailures: state.stats?.validationFailures ?? 0
-  }, options.dryRun);
+    await logEvent(paths, state, 'run_finished', {
+      processedPlans: processed,
+      completedPlans: state.completedPlanIds.length,
+      blockedPlans: state.blockedPlanIds.length,
+      failedPlans: state.failedPlanIds.length,
+      promotions: state.stats?.promotions ?? 0,
+      handoffs: state.stats?.handoffs ?? 0,
+      commits: state.stats?.commits ?? 0,
+      validationFailures: state.stats?.validationFailures ?? 0
+    }, options.dryRun);
 
-  await saveState(paths, state, options.dryRun);
+    await saveState(paths, state, options.dryRun);
 
-  console.log(`[orchestrator] resume complete (${processed} processed).`);
-  console.log(`- runId: ${state.runId}`);
-  console.log(`- completed: ${state.completedPlanIds.length}`);
-  console.log(`- blocked: ${state.blockedPlanIds.length}`);
-  console.log(`- failed: ${state.failedPlanIds.length}`);
+    console.log(`[orchestrator] resume complete (${processed} processed).`);
+    console.log(`- runId: ${state.runId}`);
+    console.log(`- completed: ${state.completedPlanIds.length}`);
+    console.log(`- blocked: ${state.blockedPlanIds.length}`);
+    console.log(`- failed: ${state.failedPlanIds.length}`);
+  } finally {
+    await releaseRunLock(paths, options);
+  }
 }
 
 function parseEventLines(raw) {
