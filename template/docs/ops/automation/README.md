@@ -22,6 +22,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - `docs/ops/automation/orchestrator.config.json`: executor and validation command configuration.
 - `docs/ops/automation/run-state.json`: latest resumable queue and plan progress snapshot.
 - `docs/ops/automation/run-events.jsonl`: append-only JSON line event log.
+- `run-state.json`, `run-events.jsonl`, `runtime/`, and `handoffs/` are transient runtime artifacts; they are ignored by dirty preflight.
 - `docs/ops/automation/handoffs/`: per-plan rollover handoff notes.
 - `docs/ops/automation/runtime/`: per-run executor result payloads.
 

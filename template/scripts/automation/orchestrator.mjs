@@ -21,6 +21,14 @@ const DEFAULT_CONTEXT_THRESHOLD = 2000;
 const DEFAULT_HANDOFF_TOKEN_BUDGET = 1500;
 const DEFAULT_MAX_ROLLOVERS = 5;
 const DEFAULT_HANDOFF_EXIT_CODE = 75;
+const TRANSIENT_AUTOMATION_FILES = new Set([
+  'docs/ops/automation/run-state.json',
+  'docs/ops/automation/run-events.jsonl'
+]);
+const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
+  'docs/ops/automation/runtime/',
+  'docs/ops/automation/handoffs/'
+];
 
 function usage() {
   console.log(`Usage:
@@ -697,12 +705,38 @@ function gitAvailable(rootDir) {
   return result.status === 0;
 }
 
-function gitDirty(rootDir) {
+function parseGitPorcelainPaths(stdout) {
+  const lines = String(stdout ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  return lines.map((line) => {
+    const payload = line.slice(3).trim();
+    const renameMatch = payload.match(/^(.*)\s->\s(.*)$/);
+    const pathValue = renameMatch ? renameMatch[2] : payload;
+    return toPosix(pathValue.replace(/^"|"$/g, ''));
+  });
+}
+
+function isTransientAutomationPath(pathValue) {
+  if (TRANSIENT_AUTOMATION_FILES.has(pathValue)) {
+    return true;
+  }
+  return TRANSIENT_AUTOMATION_DIR_PREFIXES.some((prefix) => pathValue.startsWith(prefix));
+}
+
+function gitDirty(rootDir, options = {}) {
+  const ignoreTransientAutomationArtifacts = asBoolean(options.ignoreTransientAutomationArtifacts, false);
   const result = runShellCapture('git status --porcelain', rootDir);
   if (result.status !== 0) {
     return false;
   }
-  return String(result.stdout ?? '').trim().length > 0;
+  const dirtyPaths = parseGitPorcelainPaths(result.stdout);
+  if (!ignoreTransientAutomationArtifacts) {
+    return dirtyPaths.length > 0;
+  }
+  return dirtyPaths.some((pathValue) => !isTransientAutomationPath(pathValue));
 }
 
 function createAtomicCommit(rootDir, planId, dryRun) {
@@ -1100,7 +1134,11 @@ async function runCommand(paths, options) {
 
   const state = createInitialState(runId, modeResolution.requestedMode, modeResolution.effectiveMode);
 
-  if (!asBoolean(options.allowDirty, false) && gitAvailable(paths.rootDir) && gitDirty(paths.rootDir)) {
+  if (
+    !asBoolean(options.allowDirty, false) &&
+    gitAvailable(paths.rootDir) &&
+    gitDirty(paths.rootDir, { ignoreTransientAutomationArtifacts: true })
+  ) {
     throw new Error('Refusing to start with a dirty git worktree. Use --allow-dirty true to override.');
   }
 
