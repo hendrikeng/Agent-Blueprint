@@ -812,6 +812,37 @@ async function updateProductSpecs(plan, completedPath, paths, state, options) {
   }
 }
 
+async function updatePromotedFutureLink(plan, completedPath, paths, options) {
+  const relativeCompleted = toPosix(path.relative(paths.rootDir, completedPath));
+  const futurePlans = await loadPlanRecords(paths.rootDir, paths.futureDir, 'future');
+
+  for (const futurePlan of futurePlans) {
+    if (futurePlan.planId !== plan.planId) {
+      continue;
+    }
+
+    const status = normalizeStatus(metadataValue(futurePlan.metadata, 'Status'));
+    if (status !== 'promoted') {
+      continue;
+    }
+
+    const currentLink = metadataValue(futurePlan.metadata, 'Promoted-Plan');
+    if (currentLink === relativeCompleted) {
+      continue;
+    }
+
+    if (options.dryRun) {
+      continue;
+    }
+
+    const updated = setMetadataFields(futurePlan.content, {
+      Status: 'promoted',
+      'Promoted-Plan': relativeCompleted
+    });
+    await fs.writeFile(futurePlan.filePath, updated, 'utf8');
+  }
+}
+
 async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, options) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const fileName = `${stamp}-session-${sessionNumber}.md`;
@@ -967,6 +998,7 @@ async function processPlan(plan, paths, state, options, config) {
       options
     );
 
+    await updatePromotedFutureLink(plan, completedPath, paths, options);
     await updateProductSpecs(plan, completedPath, paths, state, options);
 
     let commitResult = { ok: true, committed: false, commitHash: null };

@@ -46,7 +46,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Completed plan files are date-prefixed by completion date: `YYYY-MM-DD-<plan-id>.md`.
 - Legacy files without a date prefix are allowed; new automation promotions/completions use date-prefixed naming.
 - This naming convention applies to plan files in `active/` and `completed/` only.
-- Evidence artifacts may use step-prefixed files (`01-...md`) and dated folders (`...-YYYY-MM-DD`).
+- Evidence artifacts may use step-prefixed files (`01-...md`) and date-prefixed folders (`YYYY-MM-DD-...`).
 
 ## Policy Controls
 
