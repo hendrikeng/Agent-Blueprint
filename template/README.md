@@ -15,9 +15,17 @@ Current State Date: {{CURRENT_STATE_DATE}}
 - Humans define priorities and constraints; agents execute scoped changes.
 - Documentation and verification checks are required before merge.
 
+## Adoption Lanes
+
+Use the least ceremony required for the risk profile:
+
+1. `Lite`: manual plan loop (`active -> completed`) with `verify:fast` and `verify:full`.
+2. `Guarded`: sequential orchestration with risk routing and approval gates.
+3. `Conveyor`: parallel/worktree orchestration with optional branch/PR automation.
+
 ## Execution Paths
 
-- Default path: use orchestration (`automation:run` / `automation:resume`) to drive plan promotion and execution.
+- Default path for non-trivial changes: use orchestration (`automation:run` / `automation:resume`) to drive plan promotion and execution.
 - Manual path: allowed for interactive work using the same metadata and evidence/index rules, with dual-track lifecycle (`future -> active -> completed` for strategic work, `active -> completed` for quick/manual fixes).
 - Lifecycle and policy details remain canonical in `docs/PLANS.md`, `docs/exec-plans/README.md`, and `docs/ops/automation/README.md`.
 
@@ -81,6 +89,8 @@ Start with:
 - Resume parallel execution: `npm run automation:resume:parallel -- --mode guarded --parallel-plans 4`
 - Resume run: `npm run automation:resume`
 - Audit runs: `npm run automation:audit -- --json true`
+- Outcomes summary (optional): `npm run outcomes:report`
+- GitHub interop export scaffold (optional): `npm run interop:github:export`
 - Lean output defaults to interactive pretty lifecycle lines; use `--output ticker` for ultra-compact logs, `--output minimal` for expanded high-signal lines, or `--output verbose` for full streamed command output.
 - `pretty` output keeps one live in-place heartbeat line (phase/plan/role/activity/elapsed/idle) so you can tell running vs stuck without log spam.
 - `guarded` is gate-based (non-interactive): medium/high plans require `ORCH_APPROVED_MEDIUM=1` / `ORCH_APPROVED_HIGH=1`.
@@ -93,7 +103,7 @@ Start with:
   - `high`: `planner -> explorer -> worker -> reviewer`
 - Each role stage runs in a fresh executor process; configure role commands with `{role_model}` to enforce model switching per stage.
 - Security approval gates are enforced for high-risk plans and sensitive medium-risk plans via `Security-Approval`.
-- Details: `docs/ops/automation/README.md` and `docs/ops/automation/ROLE_ORCHESTRATION.md`.
+- Details: `docs/ops/automation/README.md`, `docs/ops/automation/ROLE_ORCHESTRATION.md`, `docs/ops/automation/OUTCOMES.md`, and `docs/ops/automation/INTEROP_GITHUB.md`.
 
 ## Change Discipline
 

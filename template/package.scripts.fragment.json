@@ -12,6 +12,8 @@
     "verify:full": "node ./scripts/automation/verify-full.mjs",
     "perf:baseline": "node ./scripts/automation/collect-performance-baseline.mjs --stage baseline",
     "perf:after": "node ./scripts/automation/collect-performance-baseline.mjs --stage after",
+    "outcomes:report": "node ./scripts/automation/summarize-run-outcomes.mjs",
+    "interop:github:export": "node ./scripts/automation/export-github-agent-profiles.mjs",
     "automation:run": "node ./scripts/automation/orchestrator.mjs run",
     "automation:run:parallel": "node ./scripts/automation/orchestrator.mjs run-parallel",
     "automation:resume:parallel": "node ./scripts/automation/orchestrator.mjs run-parallel",

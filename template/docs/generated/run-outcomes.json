@@ -1,0 +1,39 @@
+{
+  "generatedAt": "{{LAST_UPDATED_ISO_DATE}}T00:00:00.000Z",
+  "source": {
+    "eventsPath": "docs/ops/automation/run-events.jsonl",
+    "outputPath": "docs/generated/run-outcomes.json",
+    "eventsFileExists": false,
+    "totalLines": 0,
+    "parsedEvents": 0,
+    "malformedLines": 0
+  },
+  "summary": {
+    "runs": 0,
+    "plans": 0,
+    "completion": {
+      "completedPlans": 0,
+      "failedPlans": 0,
+      "blockedPlans": 0,
+      "pendingPlans": 0
+    },
+    "leadTimeSeconds": {
+      "sampleSize": 0,
+      "mean": null,
+      "median": null
+    },
+    "validation": {
+      "passed": 0,
+      "failed": 0,
+      "blockedOrPending": 0
+    },
+    "evidence": {
+      "curatedEvents": 0,
+      "compactedEvents": 0
+    },
+    "rework": {
+      "handoffOrRolloverEvents": 0
+    }
+  },
+  "eventTypeCounts": []
+}

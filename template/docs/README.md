@@ -16,6 +16,8 @@ Source of Truth: This document.
 - Plan workflow: `docs/PLANS.md`
 - Ops automation: `docs/ops/automation/README.md`
 - Role orchestration: `docs/ops/automation/ROLE_ORCHESTRATION.md`
+- Outcomes scorecard: `docs/ops/automation/OUTCOMES.md`
+- GitHub interop mapping: `docs/ops/automation/INTEROP_GITHUB.md`
 - Runtime context snapshot: `docs/generated/agent-runtime-context.md`
 
 ## Layering Model

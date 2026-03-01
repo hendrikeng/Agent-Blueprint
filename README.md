@@ -5,13 +5,13 @@ Owner: Platform Engineering
 Last Updated: 2026-03-01
 Source of Truth: This directory.
 
-Reusable blueprint for initializing agent-first repositories with docs-as-governance, safe orchestration, and evidence-based delivery.
+Reusable blueprint for initializing agent-first repositories with docs-as-governance, blast-radius control, and evidence-based delivery.
 
 ## What This Does
 
 - Provides a production-oriented blueprint for agent-driven software delivery.
 - Ships a docs-as-system-of-record structure with enforceable governance and architecture rules.
-- Adds orchestration, role-specialized execution (`planner`, `explorer`, `worker`, `reviewer`), safety gates, and verification automation.
+- Adds optional orchestration, role-specialized execution (`planner`, `explorer`, `worker`, `reviewer`), safety gates, and verification automation.
 
 ## What We Are Trying To Achieve
 
@@ -26,7 +26,15 @@ Reusable blueprint for initializing agent-first repositories with docs-as-govern
 - Session continuity by design: proactive context rollover + structured handoffs between isolated runs.
 - Reduced content rot: canonical docs stay aligned with behavior through required checks and policy manifests.
 - Better handoff and team alignment via canonical docs, plan metadata, and evidence indexes.
-- Clearer showcase value: structured, state-of-the-art workflow instead of prompt improvisation.
+- Clearer operational posture: practical structure for correctness and rollback instead of prompt improvisation.
+
+## Adoption Lanes
+
+Use the least process that still protects correctness.
+
+1. `Lite`: manual plan loop (`active -> completed`) + `verify:fast` / `verify:full`.
+2. `Guarded`: orchestrator sequential execution with risk/approval gates.
+3. `Conveyor`: parallel/worktree execution with branch/PR automation.
 
 ## Session Safety and Context Continuity
 
@@ -45,7 +53,7 @@ Reusable blueprint for initializing agent-first repositories with docs-as-govern
   - Each role runs in an isolated session with explicit handoff metadata.
 - Two execution paths:
   - Fast manual path for short tasks and direct coding loops at inference speed.
-  - Futures path for larger work: define in `docs/future`, promote to active plans, execute with orchestration, and complete with closure/evidence.
+  - Futures path for larger work: define in `docs/future`, promote to active plans, optionally execute with orchestration, and complete with closure/evidence.
 - Evidence-first delivery:
   - Non-trivial work leaves clear metadata, validation traces, and done-evidence references.
   - Team members can inspect progress, decisions, and status directly in-repo.
@@ -67,9 +75,12 @@ Reusable blueprint for initializing agent-first repositories with docs-as-govern
 - `context:compile`, `verify:fast`, `verify:full`
 - `automation:run`, `automation:run:parallel`, `automation:resume`, `automation:resume:parallel`, `automation:audit`
 - `perf:baseline`, `perf:after`
+- `outcomes:report`, `interop:github:export`
 
 Canonical command contracts and policies:
 - `template/docs/ops/automation/README.md`
+- `template/docs/ops/automation/OUTCOMES.md`
+- `template/docs/ops/automation/INTEROP_GITHUB.md`
 - `template/docs/governance/rules.md`
 - `template/docs/governance/policy-manifest.json`
 - `template/docs/PLANS.md`

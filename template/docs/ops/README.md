@@ -10,4 +10,6 @@ Source of Truth: This document.
 - Keep runbooks current with architecture and deployment changes.
 - Automation conveyor runbook: `docs/ops/automation/README.md`
 - Role orchestration contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`
+- Automation outcomes scorecard: `docs/ops/automation/OUTCOMES.md`
+- GitHub interop mapping: `docs/ops/automation/INTEROP_GITHUB.md`
 - Automation state and traces live under `docs/ops/automation/`.

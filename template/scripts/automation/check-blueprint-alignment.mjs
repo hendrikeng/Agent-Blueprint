@@ -4,6 +4,7 @@ import path from 'node:path';
 
 const rootDir = process.cwd();
 const findings = [];
+const advisories = [];
 
 const requiredPaths = {
   orchestrator: path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
@@ -19,6 +20,10 @@ const requiredPaths = {
 
 function addFinding(code, message, filePath = null) {
   findings.push({ code, message, filePath });
+}
+
+function addAdvisory(code, message, filePath = null) {
+  advisories.push({ code, message, filePath });
 }
 
 function rel(filePath) {
@@ -41,6 +46,14 @@ async function readJsonStrict(filePath) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid JSON in ${rel(filePath)}: ${message}`);
+  }
+}
+
+async function readUtf8IfExists(filePath) {
+  try {
+    return await fs.readFile(filePath, 'utf8');
+  } catch {
+    return null;
   }
 }
 
@@ -240,6 +253,78 @@ function ensureConfigPolicy(config, configPath) {
   }
 }
 
+async function ensurePragmaticScaffold() {
+  const readmePath = path.join(rootDir, 'README.md');
+  const outcomesDocPath = path.join(rootDir, 'docs', 'ops', 'automation', 'OUTCOMES.md');
+  const interopDocPath = path.join(rootDir, 'docs', 'ops', 'automation', 'INTEROP_GITHUB.md');
+  const packageJsonPath = path.join(rootDir, 'package.json');
+  const scriptsFragmentPath = path.join(rootDir, 'package.scripts.fragment.json');
+
+  const readmeRaw = await readUtf8IfExists(readmePath);
+  if (!readmeRaw) {
+    addAdvisory('MISSING_README_FOR_ADOPTION_LANES', 'README.md not found for adoption-lane guidance checks.', 'README.md');
+  } else {
+    if (!readmeRaw.includes('## Adoption Lanes')) {
+      addAdvisory(
+        'MISSING_ADOPTION_LANES_SECTION',
+        "README.md should include an 'Adoption Lanes' section to keep orchestration optional by risk.",
+        'README.md'
+      );
+    }
+    for (const lane of ['Lite', 'Guarded', 'Conveyor']) {
+      if (!readmeRaw.includes(`\`${lane}\``)) {
+        addAdvisory(
+          'MISSING_ADOPTION_LANE_ENTRY',
+          `README.md should include adoption lane '${lane}'.`,
+          'README.md'
+        );
+      }
+    }
+  }
+
+  if (!(await fileExists(outcomesDocPath))) {
+    addAdvisory(
+      'MISSING_OUTCOMES_DOC',
+      'Expected optional outcomes scorecard doc at docs/ops/automation/OUTCOMES.md.',
+      rel(outcomesDocPath)
+    );
+  }
+  if (!(await fileExists(interopDocPath))) {
+    addAdvisory(
+      'MISSING_INTEROP_DOC',
+      'Expected optional GitHub interop mapping doc at docs/ops/automation/INTEROP_GITHUB.md.',
+      rel(interopDocPath)
+    );
+  }
+
+  const scriptsSourcePath = (await fileExists(packageJsonPath)) ? packageJsonPath : scriptsFragmentPath;
+  const scriptsSourceRel = rel(scriptsSourcePath);
+  const scriptsRaw = await readUtf8IfExists(scriptsSourcePath);
+  if (!scriptsRaw) {
+    addAdvisory(
+      'MISSING_SCRIPT_SOURCE',
+      'Could not check optional outcomes/interop scripts because package.json or package.scripts.fragment.json is missing.',
+      scriptsSourceRel
+    );
+    return;
+  }
+
+  if (!scriptsRaw.includes('"outcomes:report"')) {
+    addAdvisory(
+      'MISSING_OUTCOMES_SCRIPT',
+      "Add 'outcomes:report' script for optional run outcome summarization.",
+      scriptsSourceRel
+    );
+  }
+  if (!scriptsRaw.includes('"interop:github:export"')) {
+    addAdvisory(
+      'MISSING_GITHUB_INTEROP_SCRIPT',
+      "Add 'interop:github:export' script for optional GitHub-native profile export.",
+      scriptsSourceRel
+    );
+  }
+}
+
 async function main() {
   for (const filePath of Object.values(requiredPaths)) {
     if (!(await fileExists(filePath))) {
@@ -265,6 +350,7 @@ async function main() {
   ensureScriptSignatures(orchestratorRaw, wrapperRaw);
   ensureManifestPolicy(requiredPaths.config);
   ensureConfigPolicy(config, requiredPaths.config);
+  await ensurePragmaticScaffold();
 
   if (findings.length > 0) {
     console.error(`[blueprint-verify] failed with ${findings.length} issue(s):`);
@@ -277,8 +363,15 @@ async function main() {
 
   const provider = String(config?.executor?.provider ?? 'codex').trim().toLowerCase();
   const roleCount = gatherPipelineRoles(config).length;
+  if (advisories.length > 0) {
+    console.log(`[blueprint-verify] advisories (${advisories.length}):`);
+    for (const advisory of advisories) {
+      const pathSuffix = advisory.filePath ? ` (${advisory.filePath})` : '';
+      console.log(`- [${advisory.code}] ${advisory.message}${pathSuffix}`);
+    }
+  }
   console.log(
-    `[blueprint-verify] passed (provider=${provider}, pipelineRoles=${roleCount}, output=${config.logging.output}).`
+    `[blueprint-verify] passed (provider=${provider}, pipelineRoles=${roleCount}, output=${config.logging.output}, advisories=${advisories.length}).`
   );
 }
 

@@ -5,7 +5,7 @@ Owner: {{DOC_OWNER}}
 Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
-This directory defines the autonomous planning-to-execution conveyor for overnight runs.
+This directory defines the optional planning-to-execution conveyor for bounded automation runs.
 
 ## Goals
 
@@ -16,6 +16,15 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Record structured run traces for auditability.
 - Move completed plans into `docs/exec-plans/completed/` with evidence.
 - Update product state docs after completion.
+- Keep blast radius explicit through risk routing, approvals, and isolated stage sessions.
+
+## Adoption Lanes
+
+Pick the smallest lane that still protects correctness and rollback:
+
+1. `Lite`: manual execution with plan metadata discipline and canonical evidence/index references.
+2. `Guarded`: sequential orchestration with risk routing + approval gates.
+3. `Conveyor`: parallel/worktree orchestration and optional branch/PR automation.
 
 ## Runtime Files
 
@@ -41,6 +50,14 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Manual execution is allowed with the same metadata/status rules and curated evidence/index behavior.
 - Lifecycle is dual-track: strategic/non-trivial work follows `future -> active -> completed`, while quick/manual fixes may run `active -> completed`.
 - This keeps completion records, evidence references, and rerun behavior consistent regardless of execution driver.
+
+## When Not To Use Orchestration
+
+Use the manual path when any of these are true:
+
+- The change is low-risk, isolated, and fits a single focused session.
+- The task is exploratory and requirements are still shifting rapidly.
+- The overhead of queue promotion and staged execution outweighs risk reduction.
 
 ## CLI
 
@@ -153,6 +170,17 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - `npm run perf:baseline`
   - `npm run perf:after`
   - Generates `docs/generated/perf-comparison.json` with before/after deltas.
+- Outcomes capture (optional):
+  - `npm run outcomes:report`
+  - Generates `docs/generated/run-outcomes.json` from `run-events.jsonl`.
+- GitHub interop export scaffold (optional):
+  - `npm run interop:github:export`
+  - Generates `docs/generated/github-agent-export.json` and can emit scaffold files under `.github/agents/`.
+
+## Related Documents
+
+- Outcome scorecard and interpretation: `docs/ops/automation/OUTCOMES.md`
+- GitHub-native mapping and export contract: `docs/ops/automation/INTEROP_GITHUB.md`
 
 ## Plan File Naming
 

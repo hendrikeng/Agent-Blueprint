@@ -1,0 +1,41 @@
+{
+  "generatedAt": "{{LAST_UPDATED_ISO_DATE}}T00:00:00.000Z",
+  "mode": {
+    "dryRun": true,
+    "writeProfilesRequested": false,
+    "wroteProfiles": false
+  },
+  "inputs": {
+    "agents": "AGENTS.md",
+    "policyManifest": "docs/governance/policy-manifest.json",
+    "orchestratorConfig": "docs/ops/automation/orchestrator.config.json"
+  },
+  "mapping": {
+    "safetyPolicy": "policy-manifest.mandatorySafetyRules -> base-policy.json",
+    "roleProfiles": "roleOrchestration.roleProfiles -> role-profiles.json",
+    "riskRouting": "roleOrchestration.pipelines -> risk-pipelines.json",
+    "validationLanes": "validation -> risk-pipelines.json",
+    "canonicalEntrypoints": {
+      "fromPolicyManifest": [],
+      "discoveredFromAgentsMd": []
+    }
+  },
+  "files": [
+    {
+      "path": ".github/agents/base-policy.json",
+      "status": "preview-only"
+    },
+    {
+      "path": ".github/agents/role-profiles.json",
+      "status": "preview-only"
+    },
+    {
+      "path": ".github/agents/risk-pipelines.json",
+      "status": "preview-only"
+    }
+  ],
+  "notes": [
+    "This export is a scaffold and may require platform-specific schema adjustments.",
+    "Blueprint governance remains canonical; exported files should be treated as derived artifacts."
+  ]
+}

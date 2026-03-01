@@ -19,3 +19,5 @@ Source of Truth: This document.
 - Fast profile: `npm run verify:fast`
 - Full profile: `npm run verify:full`
 - Performance evidence: `npm run perf:baseline` and `npm run perf:after`
+- Run outcomes summary (optional): `npm run outcomes:report`
+- GitHub interop export scaffold (optional): `npm run interop:github:export`
