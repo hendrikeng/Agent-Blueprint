@@ -139,6 +139,11 @@ async function exists(absPath) {
   }
 }
 
+function isWithinRoot(rootDir, absPath) {
+  const relative = path.relative(rootDir, absPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 async function walkMarkdownFiles(baseDir) {
   const results = [];
 
@@ -385,7 +390,18 @@ export async function runGovernanceAnalysis({
   for (const [sourceFile, refs] of refsGraph.entries()) {
     for (const ref of refs) {
       const normalized = formatRefForExistence(ref);
-      const abs = path.join(rootDir, normalized);
+      const abs = path.resolve(rootDir, normalized);
+      if (!isWithinRoot(rootDir, abs)) {
+        errors.push(
+          makeFinding(
+            'error',
+            'OUT_OF_REPO_DOC_REF',
+            `Reference escapes repository root in ${sourceFile}: ${ref}`,
+            sourceFile
+          )
+        );
+        continue;
+      }
       if (!(await exists(abs))) {
         errors.push(
           makeFinding(

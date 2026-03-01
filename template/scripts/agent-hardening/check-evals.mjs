@@ -43,6 +43,11 @@ async function exists(filePath) {
   }
 }
 
+function isWithinRoot(absPath) {
+  const relative = path.relative(rootDir, absPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 async function isTemplateMode() {
   const agentsPath = path.join(rootDir, 'AGENTS.md');
   if (!(await exists(agentsPath))) {
@@ -248,7 +253,7 @@ async function main() {
         fail(`Eval evidence path contains unresolved placeholder: ${evidenceRel}`);
       }
       const evidenceAbs = path.resolve(rootDir, evidenceRel);
-      if (!evidenceAbs.startsWith(rootDir)) {
+      if (!isWithinRoot(evidenceAbs)) {
         fail(`Eval evidence path escapes repository root: ${evidenceRel}`);
       }
       if (!(await exists(evidenceAbs))) {

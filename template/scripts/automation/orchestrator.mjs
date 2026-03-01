@@ -221,13 +221,30 @@ function assertSafeRelativePlanPath(relPath) {
   if (!normalized) {
     throw new Error('Plan file path is empty.');
   }
-  if (path.posix.isAbsolute(normalized) || normalized.includes('..')) {
+  if (path.posix.isAbsolute(normalized) || path.isAbsolute(normalized) || normalized.includes('..')) {
     throw new Error(`Unsafe plan file path '${normalized}'.`);
   }
   if (!SAFE_PLAN_RELATIVE_PATH_REGEX.test(normalized)) {
     throw new Error(`Plan file path contains unsafe characters: '${normalized}'.`);
   }
   return normalized;
+}
+
+function isWithinRoot(rootDir, absPath) {
+  const relative = path.relative(rootDir, absPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function resolveSafeRepoPath(rootDir, relPath, label = 'Repository path') {
+  const normalized = assertSafeRelativePlanPath(relPath);
+  const abs = path.resolve(rootDir, normalized);
+  if (!isWithinRoot(rootDir, abs)) {
+    throw new Error(`${label} escapes repository root: '${normalized}'.`);
+  }
+  return {
+    rel: toPosix(path.relative(rootDir, abs)),
+    abs
+  };
 }
 
 function assertValidPlanId(planId, relPath) {
@@ -1207,7 +1224,9 @@ async function readPlanRecord(rootDir, filePath, phase) {
     return parsedDependency;
   });
   const tags = parseListField(metadataValue(metadata, 'Tags'));
-  const specTargets = parseListField(metadataValue(metadata, 'Spec-Targets'));
+  const specTargets = parseListField(metadataValue(metadata, 'Spec-Targets')).map((target) => (
+    resolveSafeRepoPath(rootDir, target, `Spec-Targets entry in ${rel}`).rel
+  ));
   const doneEvidence = parseListField(metadataValue(metadata, 'Done-Evidence'));
 
   return {
@@ -1867,9 +1886,10 @@ async function runAlwaysValidation(paths, options, config) {
   return runValidationCommands(paths, commands, options, 'Validation');
 }
 
-function hostProviderResultPath(paths, state, planId, provider) {
+function hostProviderResultPath(paths, state, planId, provider, attemptId) {
   const baseDir = path.join(paths.runtimeDir, state.runId, 'host-validation');
-  const fileName = `${planId}-${provider}.result.json`;
+  const attemptToken = String(attemptId ?? 'attempt').replace(/[^A-Za-z0-9_-]/g, '-');
+  const fileName = `${planId}-${provider}-${attemptToken}.result.json`;
   return {
     abs: path.join(baseDir, fileName),
     rel: toPosix(path.relative(paths.rootDir, path.join(baseDir, fileName)))
@@ -1877,7 +1897,8 @@ function hostProviderResultPath(paths, state, planId, provider) {
 }
 
 async function executeHostProviderCommand(provider, command, commands, paths, state, plan, options) {
-  const resultPaths = hostProviderResultPath(paths, state, plan.planId, provider);
+  const attemptId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const resultPaths = hostProviderResultPath(paths, state, plan.planId, provider, attemptId);
   if (!options.dryRun) {
     await fs.mkdir(path.dirname(resultPaths.abs), { recursive: true });
   }
@@ -1901,20 +1922,6 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
   };
 
   const execution = runShell(command, paths.rootDir, env, options.hostValidationTimeoutMs);
-  const payload = await readJsonIfExists(resultPaths.abs, null);
-  if (payload && typeof payload === 'object') {
-    const reported = String(payload.status ?? '').trim().toLowerCase();
-    if (reported === 'passed' || reported === 'failed' || reported === 'pending') {
-      return {
-        status: reported,
-        provider,
-        reason: payload.reason ?? null,
-        evidence: Array.isArray(payload.evidence)
-          ? payload.evidence.map((entry) => String(entry))
-          : [`Host validation (${provider}) result payload loaded from ${resultPaths.rel}`]
-      };
-    }
-  }
 
   if (didTimeout(execution)) {
     return {
@@ -1930,6 +1937,29 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
       provider,
       reason: `Host validation provider '${provider}' terminated by signal ${execution.signal}`
     };
+  }
+
+  const payload = await readJsonIfExists(resultPaths.abs, null);
+  if (payload && typeof payload === 'object') {
+    const reported = String(payload.status ?? '').trim().toLowerCase();
+    if (reported === 'passed' || reported === 'failed' || reported === 'pending') {
+      if (execution.status !== 0 && reported === 'passed') {
+        return {
+          status: 'unavailable',
+          provider,
+          reason:
+            `Host validation provider '${provider}' reported 'passed' but command exited with status ${execution.status}`
+        };
+      }
+      return {
+        status: reported,
+        provider,
+        reason: payload.reason ?? null,
+        evidence: Array.isArray(payload.evidence)
+          ? payload.evidence.map((entry) => String(entry))
+          : [`Host validation (${provider}) result payload loaded from ${resultPaths.rel}`]
+      };
+    }
   }
 
   if (execution.status === 0) {
@@ -2929,11 +2959,25 @@ async function updateProductSpecs(plan, completedPath, paths, state, options) {
   const relativeCompleted = toPosix(path.relative(paths.rootDir, completedPath));
 
   for (const target of targets) {
-    const targetPath = path.join(paths.rootDir, target);
-    if (!(await exists(targetPath))) {
+    let targetPath;
+    let targetRel;
+    try {
+      const resolved = resolveSafeRepoPath(paths.rootDir, target, `Spec target for plan '${plan.planId}'`);
+      targetPath = resolved.abs;
+      targetRel = resolved.rel;
+    } catch (error) {
       await logEvent(paths, state, 'spec_update_skipped', {
         planId: plan.planId,
         target,
+        reason: error instanceof Error ? error.message : String(error)
+      }, options.dryRun);
+      continue;
+    }
+
+    if (!(await exists(targetPath))) {
+      await logEvent(paths, state, 'spec_update_skipped', {
+        planId: plan.planId,
+        target: targetRel,
         reason: 'Spec target does not exist'
       }, options.dryRun);
       continue;
@@ -2947,7 +2991,7 @@ async function updateProductSpecs(plan, completedPath, paths, state, options) {
     const entry = `${dateStamp}: completed \`${plan.planId}\` via \`${relativeCompleted}\``;
     content = appendToDeliveryLog(content, entry);
 
-    if (toPosix(path.relative(paths.rootDir, targetPath)) === 'docs/product-specs/current-state.md') {
+    if (targetRel === 'docs/product-specs/current-state.md') {
       content = updateSimpleMetadataField(content, 'Last Updated', dateStamp);
       content = updateSimpleMetadataField(content, 'Current State Date', dateStamp);
     }

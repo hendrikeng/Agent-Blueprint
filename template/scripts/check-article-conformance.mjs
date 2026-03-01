@@ -10,6 +10,11 @@ const fail = (message) => {
   process.exit(1);
 };
 
+function isWithinRoot(absPath) {
+  const relative = path.relative(rootDir, absPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 if (!fs.existsSync(conformancePath)) {
   fail(`Missing conformance file: ${conformancePath}`);
 }
@@ -97,7 +102,7 @@ for (const capability of coreCapabilities) {
     }
 
     const absolutePath = path.resolve(rootDir, evidencePath);
-    if (!absolutePath.startsWith(rootDir)) {
+    if (!isWithinRoot(absolutePath)) {
       fail(`Capability '${id}' has out-of-repo evidence path: ${evidencePath}`);
     }
 
