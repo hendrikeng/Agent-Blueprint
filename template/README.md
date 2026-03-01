@@ -81,6 +81,7 @@ Start with:
 - Start run: `npm run automation:run -- --mode guarded`
 - Resume run: `npm run automation:resume`
 - Audit runs: `npm run automation:audit -- --json true`
+- Lean output defaults to ultra-compact ticker lifecycle lines; use `--output minimal` for expanded high-signal progress lines or `--output verbose` for full streamed command output.
 - Executor is required and loaded from `docs/ops/automation/orchestrator.config.json` (`executor.command`).
 - Provider selection is adapter-based (`executor.provider` or `ORCH_EXECUTOR_PROVIDER`) so Codex/Claude/Gemini/Grok can share the same orchestration contract.
 - Default session safety policy is proactive rollover at `contextRemaining <= 10000` with required structured `ORCH_RESULT_PATH` payloads.
@@ -88,6 +89,7 @@ Start with:
   - `low`: `worker`
   - `medium`: `planner -> worker -> reviewer`
   - `high`: `planner -> explorer -> worker -> reviewer`
+- Each role stage runs in a fresh executor process; configure role commands with `{role_model}` to enforce model switching per stage.
 - Security approval gates are enforced for high-risk plans and sensitive medium-risk plans via `Security-Approval`.
 - Details: `docs/ops/automation/README.md` and `docs/ops/automation/ROLE_ORCHESTRATION.md`.
 

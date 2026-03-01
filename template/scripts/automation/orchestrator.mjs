@@ -33,6 +33,8 @@ const DEFAULT_COMMAND_TIMEOUT_SECONDS = 1800;
 const DEFAULT_HOST_VALIDATION_MODE = 'hybrid';
 const DEFAULT_HOST_VALIDATION_TIMEOUT_SECONDS = 1800;
 const DEFAULT_HOST_VALIDATION_POLL_SECONDS = 15;
+const DEFAULT_OUTPUT_MODE = 'ticker';
+const DEFAULT_FAILURE_TAIL_LINES = 60;
 const DEFAULT_EVIDENCE_MAX_REFERENCES = 25;
 const DEFAULT_EVIDENCE_TRACK_MODE = 'curated';
 const DEFAULT_EVIDENCE_DEDUP_MODE = 'strict-upsert';
@@ -117,6 +119,8 @@ Options:
   --scope active|completed|all       Curation scope for curate-evidence (default: all)
   --dry-run true|false               Do not write changes or run git commits
   --json true|false                  JSON output for audit
+  --output minimal|ticker|verbose    Console output mode (default: ticker)
+  --failure-tail-lines <n>           Lines of command output to print on failures (default: 60)
 `);
 }
 
@@ -157,6 +161,106 @@ function asInteger(value, fallback) {
   if (value == null) return fallback;
   const parsed = Number.parseInt(String(value), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeOutputMode(value, fallback = DEFAULT_OUTPUT_MODE) {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  if (normalized === 'ticker') {
+    return 'ticker';
+  }
+  if (normalized === 'verbose') {
+    return 'verbose';
+  }
+  return 'minimal';
+}
+
+function shouldCaptureCommandOutput(options) {
+  return normalizeOutputMode(options?.outputMode, DEFAULT_OUTPUT_MODE) !== 'verbose';
+}
+
+function isTickerOutput(options) {
+  return normalizeOutputMode(options?.outputMode, DEFAULT_OUTPUT_MODE) === 'ticker';
+}
+
+function progressLog(options, message) {
+  if (isTickerOutput(options)) {
+    console.log(`[ticker] ${nowIso()} ${message}`);
+    return;
+  }
+  console.log(`[orchestrator] ${message}`);
+}
+
+function tailLines(value, maxLines) {
+  const lines = String(value ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return '';
+  }
+  const start = Math.max(0, lines.length - Math.max(1, maxLines));
+  return lines.slice(start).join('\n');
+}
+
+function executionOutput(result) {
+  const stdout = typeof result?.stdout === 'string' ? result.stdout : '';
+  const stderr = typeof result?.stderr === 'string' ? result.stderr : '';
+  if (stdout && stderr) {
+    return `${stdout}\n${stderr}`;
+  }
+  return stdout || stderr || '';
+}
+
+function printRunSummary(options, label, state, processed, runDurationSeconds) {
+  if (isTickerOutput(options)) {
+    progressLog(
+      options,
+      `${label} complete processed=${processed} runId=${state.runId} completed=${state.completedPlanIds.length} blocked=${state.blockedPlanIds.length} failed=${state.failedPlanIds.length} duration=${formatDuration(runDurationSeconds)}`
+    );
+    return;
+  }
+
+  progressLog(options, `${label} complete (${processed} processed).`);
+  console.log(`- runId: ${state.runId}`);
+  console.log(`- completed (cumulative for runId): ${state.completedPlanIds.length}`);
+  console.log(`- blocked (cumulative for runId): ${state.blockedPlanIds.length}`);
+  console.log(`- failed (cumulative for runId): ${state.failedPlanIds.length}`);
+  console.log(`- duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
+  console.log('- note: processed count is for this invocation; completed/blocked/failed are cumulative for the runId.');
+}
+
+function normalizeRoleProfile(profile = {}, defaults = {}) {
+  const merged = {
+    ...defaults,
+    ...(profile && typeof profile === 'object' ? profile : {})
+  };
+  return {
+    model: String(merged.model ?? '').trim(),
+    reasoningEffort: String(merged.reasoningEffort ?? 'medium').trim().toLowerCase(),
+    sandboxMode: String(merged.sandboxMode ?? 'read-only').trim().toLowerCase(),
+    instructions: String(merged.instructions ?? '').trim()
+  };
+}
+
+function resolveExecutorProvider(config) {
+  return String(process.env.ORCH_EXECUTOR_PROVIDER ?? config?.executor?.provider ?? 'codex').trim().toLowerCase();
+}
+
+function resolveRoleExecutionProfile(config, role) {
+  const normalizedRole = normalizeRoleName(role, ROLE_WORKER);
+  const provider = resolveExecutorProvider(config);
+  const roleProfiles = config?.roleOrchestration?.roleProfiles ?? {};
+  const providerRoleProfiles = config?.roleOrchestration?.providers?.[provider]?.roleProfiles ?? {};
+  const baseProfile = normalizeRoleProfile(roleProfiles[normalizedRole], {
+    model: '',
+    reasoningEffort: normalizedRole === ROLE_EXPLORER ? 'medium' : 'high',
+    sandboxMode: normalizedRole === ROLE_WORKER ? 'full-access' : 'read-only',
+    instructions: ''
+  });
+  return {
+    provider,
+    ...normalizeRoleProfile(providerRoleProfiles[normalizedRole], baseProfile)
+  };
 }
 
 function toPosix(value) {
@@ -337,13 +441,16 @@ function timeoutMsFromSeconds(seconds) {
   return Math.floor(seconds * 1000);
 }
 
-function runShell(command, cwd, env = process.env, timeoutMs = undefined) {
+function runShell(command, cwd, env = process.env, timeoutMs = undefined, stdioMode = 'inherit') {
+  const capture = stdioMode === 'pipe';
   return spawnSync(command, {
     shell: true,
     cwd,
     env,
     timeout: timeoutMs,
-    stdio: 'inherit'
+    encoding: capture ? 'utf8' : undefined,
+    maxBuffer: capture ? 1024 * 1024 * 25 : undefined,
+    stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit'
   });
 }
 
@@ -475,6 +582,10 @@ async function loadConfig(paths) {
       },
       providers: {}
     },
+    logging: {
+      output: DEFAULT_OUTPUT_MODE,
+      failureTailLines: DEFAULT_FAILURE_TAIL_LINES
+    },
     git: {
       atomicCommits: true
     }
@@ -547,6 +658,10 @@ async function loadConfig(paths) {
         ...(defaultConfig.roleOrchestration.providers ?? {}),
         ...(configured.roleOrchestration?.providers ?? {})
       }
+    },
+    logging: {
+      ...defaultConfig.logging,
+      ...(configured.logging ?? {})
     },
     git: {
       ...defaultConfig.git,
@@ -683,6 +798,14 @@ function resolveRuntimeExecutorOptions(options, config) {
     config.validation?.requireHostRequiredCommands,
     true
   );
+  const outputMode = normalizeOutputMode(
+    options.outputMode ?? options.output ?? config.logging?.output,
+    DEFAULT_OUTPUT_MODE
+  );
+  const failureTailLines = asInteger(
+    options.failureTailLines ?? config.logging?.failureTailLines,
+    DEFAULT_FAILURE_TAIL_LINES
+  );
 
   return {
     ...options,
@@ -692,7 +815,9 @@ function resolveRuntimeExecutorOptions(options, config) {
     validationTimeoutMs: timeoutMsFromSeconds(validationTimeoutSeconds),
     hostValidationTimeoutMs: timeoutMsFromSeconds(hostValidationTimeoutSeconds),
     requireAlwaysValidationCommands,
-    requireHostValidationCommands
+    requireHostValidationCommands,
+    outputMode,
+    failureTailLines
   };
 }
 
@@ -1392,10 +1517,20 @@ function replaceExecutorTokens(command, plan, sessionContext) {
     .replaceAll('{result_path}', resultPath);
 }
 
+async function writeSessionExecutorLog(logPathAbs, metadataLines, outputText, dryRun) {
+  if (dryRun) {
+    return;
+  }
+  const parts = [...metadataLines, '', '## Output', '', String(outputText ?? '').trim()];
+  const rendered = `${parts.join('\n').trimEnd()}\n`;
+  await fs.writeFile(logPathAbs, rendered, 'utf8');
+}
+
 async function executePlanSession(plan, paths, state, options, config, sessionNumber, sessionContext = {}) {
   assertValidPlanId(plan.planId, plan.rel);
   assertSafeRelativePlanPath(plan.rel);
   const role = normalizeRoleName(sessionContext.role, ROLE_WORKER);
+  const roleProfile = resolveRoleExecutionProfile(config, role);
   const effectiveRiskTier = parseRiskTier(sessionContext.effectiveRiskTier, 'low');
   const declaredRiskTier = parseRiskTier(sessionContext.declaredRiskTier, 'low');
   const stageIndex = asInteger(sessionContext.stageIndex, 1);
@@ -1403,6 +1538,8 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
   const runSessionDir = path.join(paths.runtimeDir, state.runId);
   const resultPathAbs = path.join(runSessionDir, `${plan.planId}-${role}-session-${sessionNumber}.result.json`);
   const resultPathRel = toPosix(path.relative(paths.rootDir, resultPathAbs));
+  const sessionLogPathAbs = path.join(runSessionDir, `${plan.planId}-${role}-session-${sessionNumber}.executor.log`);
+  const sessionLogPathRel = toPosix(path.relative(paths.rootDir, sessionLogPathAbs));
 
   if (!options.dryRun) {
     await fs.mkdir(runSessionDir, { recursive: true });
@@ -1431,16 +1568,23 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       stageTotal
     }
   );
+  const captureOutput = shouldCaptureCommandOutput(options);
+  const sessionLogPath = captureOutput ? sessionLogPathRel : null;
 
   await logEvent(paths, state, 'session_started', {
     planId: plan.planId,
     session: sessionNumber,
     role,
+    provider: roleProfile.provider,
+    model: roleProfile.model || null,
+    reasoningEffort: roleProfile.reasoningEffort,
+    sandboxMode: roleProfile.sandboxMode,
     effectiveRiskTier,
     declaredRiskTier,
     stageIndex,
     stageTotal,
-    executorCommandConfigured: true
+    executorCommandConfigured: true,
+    commandLogPath: sessionLogPath
   }, options.dryRun);
 
   if (options.dryRun) {
@@ -1448,7 +1592,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       status: 'completed',
       summary: 'Dry-run: executor skipped.',
       resultPayloadFound: true,
-      role
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath
     };
   }
 
@@ -1469,22 +1616,62 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     ORCH_HANDOFF_TOKEN_BUDGET: String(options.handoffTokenBudget)
   };
 
-  const execution = runShell(renderedCommand, paths.rootDir, env, options.executorTimeoutMs);
+  const execution = runShell(
+    renderedCommand,
+    paths.rootDir,
+    env,
+    options.executorTimeoutMs,
+    captureOutput ? 'pipe' : 'inherit'
+  );
+  const commandOutput = captureOutput ? executionOutput(execution) : '';
+  if (captureOutput) {
+    await writeSessionExecutorLog(
+      sessionLogPathAbs,
+      [
+        '# Executor Session Log',
+        '',
+        `- Run-ID: ${state.runId}`,
+        `- Plan-ID: ${plan.planId}`,
+        `- Plan-File: ${plan.rel}`,
+        `- Session: ${sessionNumber}`,
+        `- Stage: ${stageIndex}/${stageTotal}`,
+        `- Role: ${role}`,
+        `- Provider: ${roleProfile.provider}`,
+        `- Model: ${roleProfile.model || 'n/a'}`,
+        `- Reasoning-Effort: ${roleProfile.reasoningEffort}`,
+        `- Sandbox-Mode: ${roleProfile.sandboxMode}`,
+        `- Effective-Risk-Tier: ${effectiveRiskTier}`,
+        `- Declared-Risk-Tier: ${declaredRiskTier}`
+      ],
+      commandOutput,
+      options.dryRun
+    );
+  }
   const handoffExitCode = asInteger(options.handoffExitCode, asInteger(config.executor.handoffExitCode, DEFAULT_HANDOFF_EXIT_CODE));
 
   if (didTimeout(execution)) {
+    const reason = `Executor command timed out after ${Math.floor((options.executorTimeoutMs ?? 0) / 1000)}s`;
     return {
       status: 'failed',
-      reason: `Executor command timed out after ${Math.floor((options.executorTimeoutMs ?? 0) / 1000)}s`,
-      role
+      reason,
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath,
+      failureTail: tailLines(commandOutput, options.failureTailLines)
     };
   }
 
   if (execution.signal) {
+    const reason = `Executor terminated by signal ${execution.signal}`;
     return {
       status: 'failed',
-      reason: `Executor terminated by signal ${execution.signal}`,
-      role
+      reason,
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath,
+      failureTail: tailLines(commandOutput, options.failureTailLines)
     };
   }
 
@@ -1492,15 +1679,24 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     return {
       status: 'handoff_required',
       reason: `Executor exited with handoff code ${handoffExitCode}`,
-      role
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath,
+      failureTail: tailLines(commandOutput, options.failureTailLines)
     };
   }
 
   if (execution.status !== 0) {
+    const reason = `Executor exited with status ${execution.status}`;
     return {
       status: 'failed',
-      reason: `Executor exited with status ${execution.status}`,
-      role
+      reason,
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath,
+      failureTail: tailLines(commandOutput, options.failureTailLines)
     };
   }
 
@@ -1511,7 +1707,11 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
         status: 'handoff_required',
         reason:
           'Executor exited 0 without writing ORCH_RESULT_PATH payload. Rolling over immediately to preserve context safety.',
-        role
+        role,
+        provider: roleProfile.provider,
+        model: roleProfile.model || null,
+        sessionLogPath,
+        failureTail: tailLines(commandOutput, options.failureTailLines)
       };
     }
 
@@ -1519,13 +1719,16 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       status: 'completed',
       summary: 'Executor completed without result payload.',
       resultPayloadFound: false,
-      role
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath
     };
   }
 
   const reportedStatus = String(resultPayload.status ?? 'completed').trim().toLowerCase();
   const normalizedStatus =
-    reportedStatus === 'handoff_required' || reportedStatus === 'blocked' || reportedStatus === 'failed'
+    reportedStatus === 'handoff_required' || reportedStatus === 'blocked' || reportedStatus === 'failed' || reportedStatus === 'pending'
       ? reportedStatus
       : 'completed';
   const rawContextRemaining = resultPayload.contextRemaining;
@@ -1538,7 +1741,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       status: 'handoff_required',
       reason:
         'Executor payload is missing numeric contextRemaining. Rolling over immediately to avoid low-context execution.',
-      role
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath
     };
   }
 
@@ -1551,7 +1757,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       status: 'handoff_required',
       reason: `contextRemaining (${contextRemaining}) at/below threshold (${options.contextThreshold})`,
       summary: resultPayload.summary ?? '',
-      role
+      role,
+      provider: roleProfile.provider,
+      model: roleProfile.model || null,
+      sessionLogPath
     };
   }
 
@@ -1561,7 +1770,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     summary: resultPayload.summary ?? null,
     contextRemaining,
     resultPayloadFound: true,
-    role
+    role,
+    provider: roleProfile.provider,
+    model: roleProfile.model || null,
+    sessionLogPath
   };
 }
 
@@ -1832,7 +2044,7 @@ function resolveHostValidationMode(config) {
   return DEFAULT_HOST_VALIDATION_MODE;
 }
 
-async function runValidationCommands(paths, commands, options, label) {
+async function runValidationCommands(paths, commands, options, label, state = null, plan = null) {
   if (commands.length === 0) {
     return {
       ok: false,
@@ -1843,19 +2055,53 @@ async function runValidationCommands(paths, commands, options, label) {
   }
 
   const evidence = [];
-  for (const command of commands) {
+  for (let index = 0; index < commands.length; index += 1) {
+    const command = commands[index];
     if (options.dryRun) {
       evidence.push(`Dry-run: ${label} command skipped: ${command}`);
       continue;
     }
 
-    const result = runShell(command, paths.rootDir, process.env, options.validationTimeoutMs);
+    const captureOutput = shouldCaptureCommandOutput(options);
+    const result = runShell(
+      command,
+      paths.rootDir,
+      process.env,
+      options.validationTimeoutMs,
+      captureOutput ? 'pipe' : 'inherit'
+    );
+    const output = captureOutput ? executionOutput(result) : '';
+    let logPathRel = null;
+    if (captureOutput && state?.runId) {
+      const runSessionDir = path.join(paths.runtimeDir, state.runId);
+      const planToken = (plan?.planId ?? 'run').replace(/[^A-Za-z0-9._-]/g, '-');
+      const labelToken = label.toLowerCase().replace(/[^A-Za-z0-9._-]/g, '-');
+      const logPathAbs = path.join(runSessionDir, `${planToken}-${labelToken}-${index + 1}.log`);
+      logPathRel = toPosix(path.relative(paths.rootDir, logPathAbs));
+      await fs.mkdir(runSessionDir, { recursive: true });
+      await writeSessionExecutorLog(
+        logPathAbs,
+        [
+          `# ${label} Command Log`,
+          '',
+          `- Run-ID: ${state.runId}`,
+          `- Plan-ID: ${plan?.planId ?? 'n/a'}`,
+          `- Command-Index: ${index + 1}/${commands.length}`,
+          `- Command: ${command}`
+        ],
+        output,
+        options.dryRun
+      );
+    }
+
     if (didTimeout(result)) {
       return {
         ok: false,
         failedCommand: command,
         reason: `${label} command timed out after ${Math.floor((options.validationTimeoutMs ?? 0) / 1000)}s`,
-        evidence
+        evidence,
+        outputLogPath: logPathRel,
+        failureTail: tailLines(output, options.failureTailLines)
       };
     }
     if (result.status !== 0) {
@@ -1863,8 +2109,13 @@ async function runValidationCommands(paths, commands, options, label) {
         ok: false,
         failedCommand: command,
         reason: `${label} failed: ${command}`,
-        evidence
+        evidence,
+        outputLogPath: logPathRel,
+        failureTail: tailLines(output, options.failureTailLines)
       };
+    }
+    if (logPathRel) {
+      evidence.push(`${label} output log: ${logPathRel}`);
     }
     evidence.push(`${label} passed: ${command}`);
   }
@@ -1875,7 +2126,7 @@ async function runValidationCommands(paths, commands, options, label) {
   };
 }
 
-async function runAlwaysValidation(paths, options, config) {
+async function runAlwaysValidation(paths, options, config, state = null, plan = null) {
   const commands = resolveAlwaysValidationCommands(paths.rootDir, options, config);
   if (commands.length === 0 && !options.requireAlwaysValidationCommands) {
     return {
@@ -1883,7 +2134,7 @@ async function runAlwaysValidation(paths, options, config) {
       evidence: ['Validation lane skipped: no validation.always commands configured.']
     };
   }
-  return runValidationCommands(paths, commands, options, 'Validation');
+  return runValidationCommands(paths, commands, options, 'Validation', state, plan);
 }
 
 function hostProviderResultPath(paths, state, planId, provider, attemptId) {
@@ -1899,6 +2150,8 @@ function hostProviderResultPath(paths, state, planId, provider, attemptId) {
 async function executeHostProviderCommand(provider, command, commands, paths, state, plan, options) {
   const attemptId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const resultPaths = hostProviderResultPath(paths, state, plan.planId, provider, attemptId);
+  const logPathAbs = resultPaths.abs.replace(/\.result\.json$/, '.log');
+  const logPathRel = toPosix(path.relative(paths.rootDir, logPathAbs));
   if (!options.dryRun) {
     await fs.mkdir(path.dirname(resultPaths.abs), { recursive: true });
   }
@@ -1921,21 +2174,49 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
     ORCH_HOST_VALIDATION_RESULT_PATH: resultPaths.rel
   };
 
-  const execution = runShell(command, paths.rootDir, env, options.hostValidationTimeoutMs);
+  const captureOutput = shouldCaptureCommandOutput(options);
+  const outputLogPath = captureOutput ? logPathRel : null;
+  const executionResult = runShell(
+    command,
+    paths.rootDir,
+    env,
+    options.hostValidationTimeoutMs,
+    captureOutput ? 'pipe' : 'inherit'
+  );
+  const output = captureOutput ? executionOutput(executionResult) : '';
+  if (captureOutput) {
+    await writeSessionExecutorLog(
+      logPathAbs,
+      [
+        '# Host Validation Command Log',
+        '',
+        `- Run-ID: ${state.runId}`,
+        `- Plan-ID: ${plan.planId}`,
+        `- Provider: ${provider}`,
+        `- Command: ${command}`
+      ],
+      output,
+      options.dryRun
+    );
+  }
 
-  if (didTimeout(execution)) {
+  if (didTimeout(executionResult)) {
     return {
       status: 'unavailable',
       provider,
-      reason: `Host validation provider '${provider}' timed out after ${Math.floor((options.hostValidationTimeoutMs ?? 0) / 1000)}s`
+      reason: `Host validation provider '${provider}' timed out after ${Math.floor((options.hostValidationTimeoutMs ?? 0) / 1000)}s`,
+      outputLogPath,
+      failureTail: tailLines(output, options.failureTailLines)
     };
   }
 
-  if (execution.signal) {
+  if (executionResult.signal) {
     return {
       status: 'unavailable',
       provider,
-      reason: `Host validation provider '${provider}' terminated by signal ${execution.signal}`
+      reason: `Host validation provider '${provider}' terminated by signal ${executionResult.signal}`,
+      outputLogPath,
+      failureTail: tailLines(output, options.failureTailLines)
     };
   }
 
@@ -1943,12 +2224,14 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
   if (payload && typeof payload === 'object') {
     const reported = String(payload.status ?? '').trim().toLowerCase();
     if (reported === 'passed' || reported === 'failed' || reported === 'pending') {
-      if (execution.status !== 0 && reported === 'passed') {
+      if (executionResult.status !== 0 && reported === 'passed') {
         return {
           status: 'unavailable',
           provider,
           reason:
-            `Host validation provider '${provider}' reported 'passed' but command exited with status ${execution.status}`
+            `Host validation provider '${provider}' reported 'passed' but command exited with status ${executionResult.status}`,
+          outputLogPath,
+          failureTail: tailLines(output, options.failureTailLines)
         };
       }
       return {
@@ -1957,23 +2240,29 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
         reason: payload.reason ?? null,
         evidence: Array.isArray(payload.evidence)
           ? payload.evidence.map((entry) => String(entry))
-          : [`Host validation (${provider}) result payload loaded from ${resultPaths.rel}`]
+          : [`Host validation (${provider}) result payload loaded from ${resultPaths.rel}`],
+        outputLogPath
       };
     }
   }
 
-  if (execution.status === 0) {
+  if (executionResult.status === 0) {
     return {
       status: 'passed',
       provider,
-      evidence: [`Host validation passed via ${provider} command: ${command}`]
+      evidence: [
+        `Host validation passed via ${provider} command: ${command}`,
+        outputLogPath ? `Host validation output log: ${outputLogPath}` : null
+      ].filter(Boolean)
     };
   }
 
   return {
     status: 'unavailable',
     provider,
-    reason: `Host validation provider '${provider}' command exited with status ${execution.status}`
+    reason: `Host validation provider '${provider}' command exited with status ${executionResult.status}`,
+    outputLogPath,
+    failureTail: tailLines(output, options.failureTailLines)
   };
 }
 
@@ -2048,14 +2337,18 @@ async function runHostValidation(paths, state, plan, options, config) {
         ...options,
         validationTimeoutMs: options.hostValidationTimeoutMs ?? options.validationTimeoutMs
       },
-      'Host validation'
+      'Host validation',
+      state,
+      plan
     );
     if (!result.ok) {
       return {
         status: 'failed',
         provider: 'local',
         reason: `Host validation failed: ${result.failedCommand}`,
-        evidence: result.evidence
+        evidence: result.evidence,
+        outputLogPath: result.outputLogPath ?? null,
+        failureTail: result.failureTail ?? ''
       };
     }
 
@@ -2076,7 +2369,9 @@ async function runHostValidation(paths, state, plan, options, config) {
       status: 'pending',
       provider: 'ci',
       reason: ciResult.reason ?? 'CI host validation unavailable.',
-      evidence: ciResult.evidence ?? []
+      evidence: ciResult.evidence ?? [],
+      outputLogPath: ciResult.outputLogPath ?? null,
+      failureTail: ciResult.failureTail ?? ''
     };
   }
 
@@ -2089,7 +2384,9 @@ async function runHostValidation(paths, state, plan, options, config) {
       status: 'pending',
       provider: 'local',
       reason: localResult.reason ?? 'Local host validation unavailable.',
-      evidence: localResult.evidence ?? []
+      evidence: localResult.evidence ?? [],
+      outputLogPath: localResult.outputLogPath ?? null,
+      failureTail: localResult.failureTail ?? ''
     };
   }
 
@@ -2107,7 +2404,9 @@ async function runHostValidation(paths, state, plan, options, config) {
     status: 'pending',
     provider: 'hybrid',
     reason: [ciResult.reason, localResult.reason].filter(Boolean).join(' | ') || 'Host validation unavailable.',
-    evidence: [...(ciResult.evidence ?? []), ...(localResult.evidence ?? [])]
+    evidence: [...(ciResult.evidence ?? []), ...(localResult.evidence ?? [])],
+    outputLogPath: ciResult.outputLogPath ?? localResult.outputLogPath ?? null,
+    failureTail: ciResult.failureTail || localResult.failureTail || ''
   };
 }
 
@@ -3093,6 +3392,7 @@ async function processPlan(plan, paths, state, options, config) {
     const roleIndex = Math.min(roleState.currentIndex, Math.max(0, stageTotal - 1));
     const stageIndex = roleIndex + 1;
     const currentRole = normalizeRoleName(roleState.stages[roleIndex], ROLE_WORKER);
+    const currentRoleProfile = resolveRoleExecutionProfile(config, currentRole);
 
     state.inProgress = {
       planId: plan.planId,
@@ -3108,6 +3408,10 @@ async function processPlan(plan, paths, state, options, config) {
     };
 
     await saveState(paths, state, options.dryRun);
+    progressLog(
+      options,
+      `session ${session} start ${plan.planId} role=${currentRole} stage=${stageIndex}/${stageTotal} provider=${currentRoleProfile.provider} model=${currentRoleProfile.model || 'n/a'} risk=${lastAssessment.effectiveRiskTier}`
+    );
 
     const sessionResult = await executePlanSession(plan, paths, state, options, config, session, {
       role: currentRole,
@@ -3128,8 +3432,25 @@ async function processPlan(plan, paths, state, options, config) {
       riskScore: lastAssessment.score,
       status: sessionResult.status,
       reason: sessionResult.reason ?? null,
-      summary: sessionResult.summary ?? null
+      summary: sessionResult.summary ?? null,
+      provider: sessionResult.provider ?? currentRoleProfile.provider,
+      model: sessionResult.model ?? currentRoleProfile.model ?? null,
+      commandLogPath: sessionResult.sessionLogPath ?? null
     }, options.dryRun);
+    const contextSuffix =
+      typeof sessionResult.contextRemaining === 'number' && Number.isFinite(sessionResult.contextRemaining)
+        ? ` contextRemaining=${sessionResult.contextRemaining}`
+        : '';
+    progressLog(
+      options,
+      `session ${session} end ${plan.planId} role=${currentRole} status=${sessionResult.status}${contextSuffix}`
+    );
+    if (sessionResult.sessionLogPath && (sessionResult.status === 'failed' || sessionResult.status === 'handoff_required')) {
+      progressLog(options, `session log: ${sessionResult.sessionLogPath}`);
+    }
+    if (sessionResult.failureTail && !isTickerOutput(options)) {
+      progressLog(options, `session failure tail:\n${sessionResult.failureTail}`);
+    }
     await refreshEvidenceIndex(plan, paths, state, options, config);
     const sessionCuration = await curateEvidenceForPlan(plan, paths, options, config);
     if (sessionCuration.filesPruned > 0 || sessionCuration.filesUpdated > 0) {
@@ -3167,6 +3488,7 @@ async function processPlan(plan, paths, state, options, config) {
         handoffPath: toPosix(path.relative(paths.rootDir, handoffPath)),
         reason: sessionResult.reason ?? 'executor-requested'
       }, options.dryRun);
+      progressLog(options, `handoff created for ${plan.planId}: ${toPosix(path.relative(paths.rootDir, handoffPath))}`);
 
       rollovers += 1;
       if (rollovers > maxRollovers) {
@@ -3181,9 +3503,19 @@ async function processPlan(plan, paths, state, options, config) {
     }
 
     if (sessionResult.status === 'blocked') {
-      await setPlanStatus(plan.filePath, 'blocked', options.dryRun);
+      await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
+      await logEvent(paths, state, 'session_blocked_deferred', {
+        planId: plan.planId,
+        session,
+        role: currentRole,
+        stageIndex,
+        stageTotal,
+        effectiveRiskTier: lastAssessment.effectiveRiskTier,
+        reason: sessionResult.reason ?? 'executor blocked'
+      }, options.dryRun);
+      progressLog(options, `session blocked for ${plan.planId}: ${sessionResult.reason ?? 'executor blocked'}`);
       return {
-        outcome: 'blocked',
+        outcome: 'pending',
         reason: sessionResult.reason ?? 'executor blocked',
         riskTier: lastAssessment.effectiveRiskTier
       };
@@ -3191,6 +3523,7 @@ async function processPlan(plan, paths, state, options, config) {
 
     if (sessionResult.status === 'failed') {
       await setPlanStatus(plan.filePath, 'failed', options.dryRun);
+      progressLog(options, `session failed for ${plan.planId}: ${sessionResult.reason ?? 'executor failed'}`);
       return {
         outcome: 'failed',
         reason: sessionResult.reason ?? 'executor failed',
@@ -3267,6 +3600,7 @@ async function processPlan(plan, paths, state, options, config) {
         stageTotal,
         effectiveRiskTier: lastAssessment.effectiveRiskTier
       }, options.dryRun);
+      progressLog(options, `role transition ${plan.planId}: ${currentRole} -> ${nextRole}`);
       continue;
     }
 
@@ -3308,6 +3642,10 @@ async function processPlan(plan, paths, state, options, config) {
         nextSession: session + 1,
         reason: completionGate.reason
       }, options.dryRun);
+      progressLog(
+        options,
+        `session continuation ${plan.planId}: nextRole=${roleState.stages[roleState.currentIndex]} reason=${completionGate.reason}`
+      );
 
       continue;
     }
@@ -3339,6 +3677,7 @@ async function processPlan(plan, paths, state, options, config) {
         sensitive: lastAssessment.sensitive,
         reason
       }, options.dryRun);
+      progressLog(options, `security approval pending for ${plan.planId}: ${reason}`);
       return {
         outcome: 'blocked',
         reason,
@@ -3347,8 +3686,8 @@ async function processPlan(plan, paths, state, options, config) {
     }
 
     await setPlanStatus(plan.filePath, 'validation', options.dryRun);
-
-    const alwaysValidation = await runAlwaysValidation(paths, options, config);
+    progressLog(options, `validation start ${plan.planId} lane=always`);
+    const alwaysValidation = await runAlwaysValidation(paths, options, config, state, plan);
     if (!alwaysValidation.ok) {
       state.stats.validationFailures += 1;
       updatePlanValidationState(state, plan.planId, {
@@ -3359,8 +3698,16 @@ async function processPlan(plan, paths, state, options, config) {
       await logEvent(paths, state, 'validation_failed', {
         planId: plan.planId,
         command: alwaysValidation.failedCommand,
-        reason: alwaysValidation.reason ?? null
+        reason: alwaysValidation.reason ?? null,
+        outputLogPath: alwaysValidation.outputLogPath ?? null
       }, options.dryRun);
+      progressLog(options, `validation failed ${plan.planId}: ${alwaysValidation.reason ?? alwaysValidation.failedCommand}`);
+      if (alwaysValidation.outputLogPath) {
+        progressLog(options, `validation log: ${alwaysValidation.outputLogPath}`);
+      }
+      if (alwaysValidation.failureTail && !isTickerOutput(options)) {
+        progressLog(options, `validation failure tail:\n${alwaysValidation.failureTail}`);
+      }
 
       return {
         outcome: 'failed',
@@ -3373,12 +3720,14 @@ async function processPlan(plan, paths, state, options, config) {
       always: 'passed',
       reason: null
     });
+    progressLog(options, `validation passed ${plan.planId} lane=always`);
 
     await logEvent(paths, state, 'host_validation_requested', {
       planId: plan.planId,
       mode: resolveHostValidationMode(config),
       commands: resolveHostRequiredValidationCommands(config)
     }, options.dryRun);
+    progressLog(options, `validation start ${plan.planId} lane=host mode=${resolveHostValidationMode(config)}`);
 
     const hostValidation = await runHostValidation(paths, state, plan, options, config);
     if (hostValidation.status === 'failed') {
@@ -3392,8 +3741,16 @@ async function processPlan(plan, paths, state, options, config) {
       await logEvent(paths, state, 'host_validation_failed', {
         planId: plan.planId,
         provider: hostValidation.provider ?? null,
-        reason: hostValidation.reason ?? 'Host validation failed.'
+        reason: hostValidation.reason ?? 'Host validation failed.',
+        outputLogPath: hostValidation.outputLogPath ?? null
       }, options.dryRun);
+      progressLog(options, `host validation failed ${plan.planId}: ${hostValidation.reason ?? 'Host validation failed.'}`);
+      if (hostValidation.outputLogPath) {
+        progressLog(options, `host validation log: ${hostValidation.outputLogPath}`);
+      }
+      if (hostValidation.failureTail && !isTickerOutput(options)) {
+        progressLog(options, `host validation failure tail:\n${hostValidation.failureTail}`);
+      }
 
       return {
         outcome: 'failed',
@@ -3419,8 +3776,16 @@ async function processPlan(plan, paths, state, options, config) {
       await logEvent(paths, state, 'host_validation_blocked', {
         planId: plan.planId,
         provider: hostValidation.provider ?? null,
-        reason: hostValidation.reason ?? 'Host validation pending.'
+        reason: hostValidation.reason ?? 'Host validation pending.',
+        outputLogPath: hostValidation.outputLogPath ?? null
       }, options.dryRun);
+      progressLog(options, `host validation pending ${plan.planId}: ${hostValidation.reason ?? 'Host validation pending.'}`);
+      if (hostValidation.outputLogPath) {
+        progressLog(options, `host validation log: ${hostValidation.outputLogPath}`);
+      }
+      if (hostValidation.failureTail && !isTickerOutput(options)) {
+        progressLog(options, `host validation tail:\n${hostValidation.failureTail}`);
+      }
 
       return {
         outcome: 'pending',
@@ -3445,6 +3810,7 @@ async function processPlan(plan, paths, state, options, config) {
       planId: plan.planId,
       provider: hostValidation.provider ?? null
     }, options.dryRun);
+    progressLog(options, `host validation passed ${plan.planId} provider=${hostValidation.provider ?? 'n/a'}`);
 
     const mergedValidationEvidence = [
       ...alwaysValidation.evidence,
@@ -3590,8 +3956,9 @@ async function runLoop(paths, state, options, config, runMode) {
 
     if (executable.length === 0) {
       if (state.blockedPlanIds.length > 0) {
-        console.log(
-          `[orchestrator] no executable plans; ${state.blockedPlanIds.length} plan(s) are blocked in this run. Run audit for details.`
+        progressLog(
+          options,
+          `no executable plans; ${state.blockedPlanIds.length} plan(s) are blocked in this run. Run audit for details.`
         );
       }
       break;
@@ -3609,6 +3976,10 @@ async function runLoop(paths, state, options, config, runMode) {
       riskScore: nextPlanRisk.score,
       sensitive: nextPlanRisk.sensitive
     }, options.dryRun);
+    progressLog(
+      options,
+      `plan start ${nextPlan.planId} declared=${nextPlanRisk.declaredRiskTier} effective=${nextPlanRisk.effectiveRiskTier} score=${nextPlanRisk.score}`
+    );
 
     const outcome = await processPlan(nextPlan, paths, state, options, config);
     state.inProgress = null;
@@ -3624,11 +3995,12 @@ async function runLoop(paths, state, options, config, runMode) {
         commitHash: outcome.commitHash ?? null,
         riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
       }, options.dryRun);
+      progressLog(options, `plan completed ${nextPlan.planId}`);
     } else if (outcome.outcome === 'blocked') {
       if (!state.blockedPlanIds.includes(nextPlan.planId)) {
         state.blockedPlanIds.push(nextPlan.planId);
       }
-      console.log(`[orchestrator] blocked ${nextPlan.planId}: ${outcome.reason}`);
+      progressLog(options, `blocked ${nextPlan.planId}: ${outcome.reason}`);
       await logEvent(paths, state, 'plan_blocked', {
         planId: nextPlan.planId,
         reason: outcome.reason,
@@ -3641,6 +4013,7 @@ async function runLoop(paths, state, options, config, runMode) {
         reason: outcome.reason,
         riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
       }, options.dryRun);
+      progressLog(options, `plan pending ${nextPlan.planId}: ${outcome.reason}`);
     } else {
       delete state.roleState[nextPlan.planId];
       if (!state.failedPlanIds.includes(nextPlan.planId)) {
@@ -3651,6 +4024,7 @@ async function runLoop(paths, state, options, config, runMode) {
         reason: outcome.reason,
         riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
       }, options.dryRun);
+      progressLog(options, `plan failed ${nextPlan.planId}: ${outcome.reason}`);
     }
 
     await saveState(paths, state, options.dryRun);
@@ -3707,15 +4081,19 @@ async function runCommand(paths, options) {
     }, options.dryRun);
 
     if (modeResolution.downgraded) {
-      console.log(`[orchestrator] full mode downgraded to guarded: ${modeResolution.reason}`);
+      progressLog(options, `full mode downgraded to guarded: ${modeResolution.reason}`);
     }
+    progressLog(
+      options,
+      `run started runId=${state.runId} mode=${state.effectiveMode} output=${options.outputMode} failureTailLines=${options.failureTailLines}`
+    );
 
     let processed = await runLoop(paths, state, options, config, 'run');
 
     if (!asBoolean(options.skipPromotion, false)) {
       const promoted = await promoteFuturePlans(paths, state, options);
       if (promoted > 0) {
-        console.log(`[orchestrator] promoted ${promoted} future plan(s) into docs/exec-plans/active.`);
+        progressLog(options, `promoted ${promoted} future plan(s) into docs/exec-plans/active.`);
         const processedAfterPromotion = await runLoop(paths, state, options, config, 'run');
         processed += processedAfterPromotion;
       }
@@ -3736,13 +4114,7 @@ async function runCommand(paths, options) {
 
     await saveState(paths, state, options.dryRun);
 
-    console.log(`[orchestrator] run complete (${processed} processed).`);
-    console.log(`- runId: ${state.runId}`);
-    console.log(`- completed (cumulative for runId): ${state.completedPlanIds.length}`);
-    console.log(`- blocked (cumulative for runId): ${state.blockedPlanIds.length}`);
-    console.log(`- failed (cumulative for runId): ${state.failedPlanIds.length}`);
-    console.log(`- duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
-    console.log('- note: processed count is for this invocation; completed/blocked/failed are cumulative for the runId.');
+    printRunSummary(options, 'run', state, processed, runDurationSeconds);
   } finally {
     await releaseRunLock(paths, options);
   }
@@ -3787,6 +4159,10 @@ async function resumeCommand(paths, options) {
         pipelines: roleConfig.pipelines
       }
     }, options.dryRun);
+    progressLog(
+      options,
+      `run resumed runId=${state.runId} mode=${state.effectiveMode} output=${options.outputMode} failureTailLines=${options.failureTailLines}`
+    );
 
     const processed = await runLoop(paths, state, options, config, 'resume');
 
@@ -3805,13 +4181,7 @@ async function resumeCommand(paths, options) {
 
     await saveState(paths, state, options.dryRun);
 
-    console.log(`[orchestrator] resume complete (${processed} processed).`);
-    console.log(`- runId: ${state.runId}`);
-    console.log(`- completed (cumulative for runId): ${state.completedPlanIds.length}`);
-    console.log(`- blocked (cumulative for runId): ${state.blockedPlanIds.length}`);
-    console.log(`- failed (cumulative for runId): ${state.failedPlanIds.length}`);
-    console.log(`- duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
-    console.log('- note: processed count is for this invocation; completed/blocked/failed are cumulative for the runId.');
+    printRunSummary(options, 'resume', state, processed, runDurationSeconds);
   } finally {
     await releaseRunLock(paths, options);
   }
@@ -3971,7 +4341,9 @@ async function main() {
     runId: rawOptions['run-id'] ?? rawOptions.runId,
     planId: rawOptions['plan-id'] ?? rawOptions.planId,
     scope: rawOptions.scope ?? 'all',
-    handoffExitCode: asInteger(rawOptions['handoff-exit-code'] ?? rawOptions.handoffExitCode, DEFAULT_HANDOFF_EXIT_CODE)
+    handoffExitCode: asInteger(rawOptions['handoff-exit-code'] ?? rawOptions.handoffExitCode, DEFAULT_HANDOFF_EXIT_CODE),
+    outputMode: rawOptions.output ?? rawOptions['output-mode'],
+    failureTailLines: rawOptions['failure-tail-lines'] ?? rawOptions.failureTailLines
   };
 
   const rootDir = process.cwd();

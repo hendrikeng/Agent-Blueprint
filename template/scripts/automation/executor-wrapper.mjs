@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const DEFAULT_PROMPT_TEMPLATE =
-  'Continue plan {plan_id} in {plan_file}. Current role: {role}. Declared risk tier: {declared_risk_tier}. Effective risk tier: {effective_risk_tier}. Execution profile: model={role_model}, reasoning={role_reasoning_effort}, sandbox={role_sandbox_mode}. Role instructions: {role_instructions}. Apply the next concrete step for this role. Update the plan document with progress and evidence. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. ALWAYS write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and numeric contextRemaining. Never exit 0 without writing this payload. If contextRemaining is at/below ORCH_CONTEXT_THRESHOLD, return status handoff_required. If all acceptance criteria and required validations are complete, set top-level Status: completed; otherwise keep top-level Status: in-progress and list remaining work.';
+  'Continue plan {plan_id} in {plan_file}. Current role: {role}. Declared risk tier: {declared_risk_tier}. Effective risk tier: {effective_risk_tier}. Execution profile: model={role_model}, reasoning={role_reasoning_effort}, sandbox={role_sandbox_mode}. Role instructions: {role_instructions}. Apply the next concrete step for this role. Update the plan document with progress and evidence. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. ALWAYS write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and numeric contextRemaining. Use status pending (not blocked) for incomplete implementation work that should continue in later sessions/runs; reserve blocked for external/manual gates orchestration cannot progress automatically. Never exit 0 without writing this payload. If contextRemaining is at/below ORCH_CONTEXT_THRESHOLD, return status handoff_required. Do not wait for host-required validations to run inside this executor session. If implementation acceptance criteria are complete and the plan is ready for orchestration validation lanes, set top-level Status: completed to trigger validation; otherwise keep top-level Status: in-progress and list remaining implementation work.';
 
 function parseArgs(argv) {
   const options = {};
@@ -83,6 +83,15 @@ function getOptionalOption(options, key, fallback = '') {
     return String(fallback);
   }
   return String(value).trim();
+}
+
+function asBoolean(value, fallback = false) {
+  if (value == null) return fallback;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  return fallback;
 }
 
 function normalizeRoleProfile(profile = {}, defaults = {}) {
@@ -167,6 +176,7 @@ async function main() {
   assertRoleSandboxPolicy(role, providerRoleProfile);
   const providerCommandTemplate = String(executor.providers?.[provider]?.command ?? '').trim();
   const selectedCommandTemplate = roleProviderCommandTemplate || providerCommandTemplate;
+  const enforceRoleModelSelection = asBoolean(executor.enforceRoleModelSelection, true);
   if (!selectedCommandTemplate) {
     const available = Object.keys(executor.providers ?? {}).sort();
     const availableText = available.length > 0 ? available.join(', ') : 'none configured';
@@ -179,6 +189,18 @@ async function main() {
     throw new Error(
       `Executor provider '${provider}' command must include '{prompt}' placeholder in ${configPath}`
     );
+  }
+  if (enforceRoleModelSelection) {
+    if (!providerRoleProfile.model) {
+      throw new Error(
+        `Role '${role}' is missing a configured model in ${configPath}. Set roleOrchestration.roleProfiles.${role}.model (or provider override).`
+      );
+    }
+    if (!selectedCommandTemplate.includes('{role_model}')) {
+      throw new Error(
+        `Executor provider '${provider}' role '${role}' command must include '{role_model}' in ${configPath} to enforce role-specific model switching.`
+      );
+    }
   }
 
   const values = {

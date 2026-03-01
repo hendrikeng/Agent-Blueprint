@@ -51,6 +51,9 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Optional continuation controls:
   - `--max-sessions-per-plan <n>` (default `20`)
   - `--max-rollovers <n>` (default `20`)
+- Output controls:
+  - `--output minimal|ticker|verbose` (default `ticker`)
+  - `--failure-tail-lines <n>` (default `60`)
 
 ## Executor Configuration
 
@@ -60,9 +63,11 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 - Example (`orchestrator.config.json`):
   - `"command": "node ./scripts/automation/executor-wrapper.mjs --plan-id {plan_id} --plan-file {plan_file} --run-id {run_id} --mode {mode} --session {session} --role {role} --effective-risk-tier {effective_risk_tier} --declared-risk-tier {declared_risk_tier} --stage-index {stage_index} --stage-total {stage_total} --result-path {result_path}"`
   - `"provider": "codex"` (override per run with `ORCH_EXECUTOR_PROVIDER=...`)
-  - `"providers.codex.command": "codex exec --full-auto {prompt}"` (`{prompt}` is required)
+  - `"providers.codex.command": "codex exec --full-auto -m {role_model} {prompt}"` (`{prompt}` and `{role_model}` are required)
+  - `"enforceRoleModelSelection": true` requires each role command to include `{role_model}`.
   - `"contextThreshold": 10000`
   - `"requireResultPayload": true`
+  - `"logging.output": "ticker"` (`minimal` | `ticker` | `verbose`) and `"logging.failureTailLines": 60` tune operator-facing output noise.
   - `executor.promptTemplate` is provider-agnostic and reused across Codex/Claude/Gemini/Grok adapters.
 - Role orchestration:
   - `roleOrchestration.enabled: true` enables risk-adaptive role routing.
@@ -83,6 +88,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
     - `{role_reasoning_effort}`
     - `{role_sandbox_mode}`
     - `{role_instructions}`
+  - Each role stage runs as a fresh executor process/session. For strict model switching, include `{role_model}` in every role command template.
   - Detailed role contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`.
 - Validation lanes:
   - `validation.always`: sandbox-safe checks that should run in every completion gate.
@@ -111,6 +117,11 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - Historical cleanup supports `--scope completed` to canonicalize completed-plan evidence metadata and indexes.
   - Evidence folders with markdown artifacts always have a canonical `README.md` generated/maintained by curation.
   - `docs/exec-plans/evidence-index/README.md` is generated/maintained as the index-directory guide.
+- Logging and observability:
+  - `minimal` output prints high-signal lifecycle lines only (plan/session start-end, role transitions, validation state, blockers).
+  - `ticker` output prints compact single-line lifecycle events and a single-line run summary.
+  - Raw command output is written to `docs/ops/automation/runtime/<run-id>/` session/validation logs.
+  - Failure summaries include only the last `--failure-tail-lines` lines and a pointer to the full log file.
 - Do not use provider interactive modes (they will block orchestration); use non-interactive CLI flags in provider commands.
 
 ## Plan File Naming
@@ -150,6 +161,7 @@ Executor commands should use these outcomes:
 - Non-zero other than `75`: fail execution.
 - A plan is auto-moved to `docs/exec-plans/completed/` only when its top-level `Status:` line is `completed`.
 - If the top-level `Status:` is not `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
+- Session boundaries are strict: each planner/explorer/worker/reviewer stage starts a new executor process and can use a role-specific model profile.
 - Executor sessions must always emit a structured result payload (`ORCH_RESULT_PATH`) with a numeric `contextRemaining`.
 - Default context rollover policy is proactive: a new session is forced when `contextRemaining <= 10000` (override with `--context-threshold` or `executor.contextThreshold`).
 - If an executor exits `0` without payload (or without numeric `contextRemaining`), orchestrator forces an immediate handoff/rollover to protect coding accuracy.
