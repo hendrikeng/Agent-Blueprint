@@ -2,16 +2,16 @@
 
 Status: canonical
 Owner: Platform Engineering
-Last Updated: 2026-02-28
+Last Updated: 2026-03-01
 Source of Truth: This directory.
 
-Reusable blueprint for initializing agent-first repositories with standardized docs/governance architecture.
+Reusable blueprint for initializing agent-first repositories with docs-as-governance, safe orchestration, and evidence-based delivery.
 
 ## What This Does
 
 - Provides a production-oriented blueprint for agent-driven software delivery.
 - Ships a docs-as-system-of-record structure with enforceable governance and architecture rules.
-- Adds orchestration, risk-adaptive role routing, safety gates, and verification automation.
+- Adds orchestration, role-specialized execution (`planner`, `explorer`, `worker`, `reviewer`), safety gates, and verification automation.
 
 ## What We Are Trying To Achieve
 
@@ -23,14 +23,26 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 
 - Faster delivery loops via `verify:fast` + compact runtime context.
 - Stronger reliability via `verify:full`, risk-tier routing, and approval gates.
+- Session continuity by design: proactive context rollover + structured handoffs between isolated runs.
+- Reduced content rot: canonical docs stay aligned with behavior through required checks and policy manifests.
 - Better handoff and team alignment via canonical docs, plan metadata, and evidence indexes.
 - Clearer showcase value: structured, state-of-the-art workflow instead of prompt improvisation.
+
+## Session Safety and Context Continuity
+
+- Sessions are proactively rolled over before context gets too low (`contextRemaining <= threshold`).
+- Every session must write a structured result payload (`ORCH_RESULT_PATH`) including numeric `contextRemaining`.
+- Handoffs are written to disk and reused by the next session, so continuation is explicit and auditable.
+- Runtime context is recompiled from canonical docs (`docs/generated/agent-runtime-context.md`) to reduce drift and hallucination risk.
 
 ## How It Works
 
 - Governance as working manual:
   - `AGENTS.md`, architecture docs, and governance rules define constraints and expectations.
   - The repository itself is the operating manual for humans and agents.
+- Role-specialized execution:
+  - Risk-adaptive role routing runs focused stages (`planner`, `explorer`, `worker`, `reviewer`) instead of one generic agent loop.
+  - Each role runs in an isolated session with explicit handoff metadata.
 - Two execution paths:
   - Fast manual path for short tasks and direct coding loops at inference speed.
   - Futures path for larger work: define in `docs/future`, promote to active plans, execute with orchestration, and complete with closure/evidence.
@@ -40,24 +52,9 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 
 ## Daily Workflow
 
-1. Bootstrap correctly:
-   - Start with the Agent Quickstart prompt in plan mode.
-   - Initialize docs/scripts from the blueprint only after planning decisions are approved.
-   - Treat the repository docs as the operating manual from day one.
-2. Lock intent and stack:
-   - Decide product scope, first slices, stack/runtime/tooling, and core invariants.
-   - Record those decisions before execution so implementation stays aligned.
-3. Route work by size/risk:
-   - Quick/manual change: create/update a plan in `docs/exec-plans/active/`.
-   - Strategic/multi-slice work: define futures in `docs/future/` and mark ready plans for promotion.
-4. Execute with the right engine:
-   - Manual loop: implement focused slices + run `verify:fast` continuously.
-   - Orchestrated loop: `automation:run` for sequential flow, `automation:run:parallel` for dependency-aware parallel execution.
-   - Continue unfinished runs with `automation:resume` or `automation:resume:parallel`.
-5. Close with evidence and governance:
-   - Run `verify:full` before merge/completion.
-   - Move finished plans to `docs/exec-plans/completed/` with canonical `Done-Evidence`.
-   - Keep docs/metadata current in the same change so team visibility stays intact.
+1. Start in plan mode and lock decisions: app scope, stack/runtime/tooling, invariants, and first acceptance slices.
+2. Define futures and active plans: strategic work goes through `future -> active -> completed`; quick/manual work can run `active -> completed`.
+3. Execute and close: run manual or orchestrated loops, use `verify:fast` during implementation, run `verify:full` before completion/merge, and keep docs plus `Done-Evidence` current.
 
 ## Why This Model Works
 
@@ -65,91 +62,26 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 - It supports both rapid delivery and strategic multi-plan execution.
 - It is team-grade: auditable, reviewable, and handoff-ready by default.
 
-## Includes
+## Core Commands
 
-- Canonical docs skeleton under `template/docs/`
-- Canonical agent hardening docs under `template/docs/agent-hardening/`
-- Base top-level docs: `template/AGENTS.md`, `template/README.md`, `template/ARCHITECTURE.md`
-- Runtime standards docs: `template/docs/FRONTEND.md`, `template/docs/BACKEND.md`
-- Governance/conformance/architecture checker scripts under `template/scripts/`
-- Agent hardening checker script under `template/scripts/agent-hardening/`
-- Plan metadata validator and execution orchestrator under `template/scripts/automation/`
-- Risk-adaptive role orchestration contract and provider adapters under `template/docs/ops/automation/`
-- Governance config, policy manifest/schema, and architecture rule schema in `template/docs/governance/`
-- Compiled runtime context and performance comparison artifacts under `template/docs/generated/`
-- Placeholder contract: `template/PLACEHOLDERS.md`
+- `context:compile`, `verify:fast`, `verify:full`
+- `automation:run`, `automation:run:parallel`, `automation:resume`, `automation:resume:parallel`, `automation:audit`
+- `perf:baseline`, `perf:after`
 
-## Required Script Interface
-
-Primary workflow commands (day-to-day):
-- `context:compile` -> `node ./scripts/automation/compile-runtime-context.mjs`
-- `verify:fast` -> `node ./scripts/automation/verify-fast.mjs`
-- `verify:full` -> `node ./scripts/automation/verify-full.mjs`
-- `perf:baseline` -> `node ./scripts/automation/collect-performance-baseline.mjs --stage baseline`
-- `perf:after` -> `node ./scripts/automation/collect-performance-baseline.mjs --stage after`
-
-Underlying check primitives (used by `verify:fast` / `verify:full`, also available for targeted debugging):
-- `docs:verify` -> `node ./scripts/docs/check-governance.mjs`
-- `conformance:verify` -> `node ./scripts/check-article-conformance.mjs`
-- `architecture:verify` -> `node ./scripts/architecture/check-dependencies.mjs`
-- `agent:verify` -> `node ./scripts/agent-hardening/check-agent-hardening.mjs`
-- `eval:verify` -> `node ./scripts/agent-hardening/check-evals.mjs`
-- `blueprint:verify` -> `node ./scripts/automation/check-blueprint-alignment.mjs`
-- `plans:verify` -> `node ./scripts/automation/check-plan-metadata.mjs`
-
-## Automation Commands
-
-- `automation:run` -> `node ./scripts/automation/orchestrator.mjs run`
-  - Continues active queue first, then promotes ready futures, executing sequentially.
-- `automation:run:parallel` -> `node ./scripts/automation/orchestrator.mjs run-parallel`
-  - Executes dependency-ready plans in isolated worktrees/branches in parallel.
-- `automation:resume` -> `node ./scripts/automation/orchestrator.mjs resume`
-  - Resumes the persisted sequential run-state and continues pending work.
-- `automation:resume:parallel` -> `node ./scripts/automation/orchestrator.mjs run-parallel`
-  - Convenience alias to resume parallel processing by re-invoking `run-parallel`.
-- `automation:audit` -> `node ./scripts/automation/orchestrator.mjs audit`
-  - Summarizes historical run events and outcomes for operational review.
-- Executor is required and loaded from `docs/ops/automation/orchestrator.config.json` (`executor.command`).
-- Role routing is risk-adaptive (`low: worker`, `medium: planner->worker->reviewer`, `high: planner->explorer->worker->reviewer`) with Security-Approval gates for high/sensitive plans.
-- Safe stage-reuse can skip repeated planner/explorer stages when plan shape and scope are unchanged.
-- Role stages are isolated executor sessions; role commands should include `{role_model}` to enforce model switching.
-- Orchestrator defaults to interactive pretty console output with raw session logs written under `docs/ops/automation/runtime/<run-id>/` (`--output ticker` for ultra-compact mode).
-- Pretty mode includes a single in-place heartbeat/status line for active phases (session/validation/host validation) with elapsed/idle timing.
-- `guarded` mode is non-interactive and env-gated (`ORCH_APPROVED_MEDIUM=1`, `ORCH_APPROVED_HIGH=1`); quick command matrix is in `template/docs/ops/automation/README.md`.
-
-## When To Run Checks
-
-- Use fast iteration checks while implementing: `verify:fast`.
-- Run full gate before merge: `verify:full`.
-- Capture baseline/after optimization metrics: `perf:baseline`, `perf:after`.
-- Run `agent:verify` when changing eval policy, agent observability, tool-safety, or memory/context rules.
-- Run `architecture:verify` when changing dependency boundaries.
-
-## Template Policy
-
-This blueprint is intentionally stack- and domain-agnostic.
-Agents must replace all `{{...}}` placeholders before treating a repo as production-ready.
-
-## State-of-the-Art Workflow
-
-Use a dual-track lifecycle for implemented work:
-
-1. Strategic/non-trivial work: `future -> active -> completed`.
-2. Quick/manual fixes: `active -> completed` (no prior `future` blueprint required).
-3. In both tracks, `active` plans must keep metadata/status current and evidence curated.
-4. Completed plans must keep concise closure plus canonical `Done-Evidence` index references.
-
-Orchestration is the default execution driver. Manual execution is valid only when it follows the same metadata, status, and evidence-index contract.
+Canonical command contracts and policies:
+- `template/docs/ops/automation/README.md`
+- `template/docs/governance/rules.md`
+- `template/docs/governance/policy-manifest.json`
+- `template/docs/PLANS.md`
+- `template/PLACEHOLDERS.md`
 
 ## Bootstrap Steps
 
 1. Copy `template/` contents into a new repository root.
-2. Replace placeholders listed in `PLACEHOLDERS.md`.
-3. Verify no placeholders remain:
-   - `./scripts/check-template-placeholders.sh`
-4. Add script entries to repository `package.json` from **Required Script Interface**.
-5. Update `docs/generated/article-conformance.json` evidence paths for the new repository.
-6. Run `./scripts/bootstrap-verify.sh` (or run each verify command manually).
+2. Replace placeholders from `PLACEHOLDERS.md`.
+3. Add required scripts to `package.json` (`context:compile`, `verify:fast`, `verify:full`, automation commands).
+4. Run `./scripts/check-template-placeholders.sh`.
+5. Run `./scripts/bootstrap-verify.sh`.
 
 
 ## Agent Quickstart (Plan Mode)
