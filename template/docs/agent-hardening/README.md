@@ -22,9 +22,8 @@ Source of Truth: This document and linked docs in this folder.
 
 ## Enforcement
 
-- `npm run agent:verify`
-- `npm run eval:verify`
-- `npm run docs:verify`
-- `npm run conformance:verify`
+- Targeted policy checks: `npm run agent:verify` and `npm run eval:verify`
+- Iteration profile: `npm run verify:fast`
+- Merge profile: `npm run verify:full`
 
 `agent:verify` and `eval:verify` are required and must pass before merge.

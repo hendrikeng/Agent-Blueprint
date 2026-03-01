@@ -1,0 +1,71 @@
+{
+  "generatedAtUtc": "2026-03-01T19:54:13.193Z",
+  "source": "scripts/automation/collect-performance-baseline.mjs",
+  "notes": "Validation timings were measured by executing verify-fast and verify-full.",
+  "samples": {
+    "baseline": {
+      "capturedAtUtc": "2026-03-01T19:54:11.606Z",
+      "runtimeContext": {
+        "path": "docs/generated/agent-runtime-context.md",
+        "bytes": 3209,
+        "lines": 54,
+        "tokens": 345
+      },
+      "orchestration": {
+        "runCount": 0,
+        "latestRunId": null,
+        "latestRunTimeToFirstActionSeconds": null,
+        "averageSessionsPerCompletedPlan": null
+      },
+      "validation": {
+        "verifyFastDurationMs": 769,
+        "verifyFastStatus": 0,
+        "verifyFullDurationMs": 558,
+        "verifyFullStatus": 1
+      }
+    },
+    "after": {
+      "capturedAtUtc": "2026-03-01T19:54:13.192Z",
+      "runtimeContext": {
+        "path": "docs/generated/agent-runtime-context.md",
+        "bytes": 3209,
+        "lines": 54,
+        "tokens": 345
+      },
+      "orchestration": {
+        "runCount": 0,
+        "latestRunId": null,
+        "latestRunTimeToFirstActionSeconds": null,
+        "averageSessionsPerCompletedPlan": null
+      },
+      "validation": {
+        "verifyFastDurationMs": 762,
+        "verifyFastStatus": 0,
+        "verifyFullDurationMs": 556,
+        "verifyFullStatus": 1
+      }
+    }
+  },
+  "comparison": {
+    "runtimeContextTokens": {
+      "from": 345,
+      "to": 345,
+      "delta": 0,
+      "deltaPercent": 0
+    },
+    "latestRunTimeToFirstActionSeconds": null,
+    "averageSessionsPerCompletedPlan": null,
+    "verifyFastDurationMs": {
+      "from": 769,
+      "to": 762,
+      "delta": -7,
+      "deltaPercent": -0.91
+    },
+    "verifyFullDurationMs": {
+      "from": 558,
+      "to": 556,
+      "delta": -2,
+      "deltaPercent": -0.36
+    }
+  }
+}

@@ -7,6 +7,43 @@ Source of Truth: This directory.
 
 Reusable blueprint for initializing agent-first repositories with standardized docs/governance architecture.
 
+## What This Does
+
+- Provides a production-oriented blueprint for agent-driven software delivery.
+- Ships a docs-as-system-of-record structure with enforceable governance and architecture rules.
+- Adds orchestration, risk-adaptive role routing, safety gates, and verification automation.
+
+## What We Are Trying To Achieve
+
+- Replace ad-hoc coding sessions with repeatable, auditable, high-quality execution.
+- Keep agent velocity high without sacrificing correctness, safety, or maintainability.
+- Make execution quality demonstrable through policy checks, evidence trails, and metrics.
+
+## Benefits
+
+- Faster delivery loops via `verify:fast` + compact runtime context.
+- Stronger reliability via `verify:full`, risk-tier routing, and approval gates.
+- Better handoff and team alignment via canonical docs, plan metadata, and evidence indexes.
+- Clearer showcase value: structured, state-of-the-art workflow instead of prompt improvisation.
+
+## How It Works
+
+- Governance as working manual:
+  - `AGENTS.md`, architecture docs, and governance rules define constraints and expectations.
+  - The repository itself is the operating manual for humans and agents.
+- Two execution paths:
+  - Fast manual path for short tasks and direct coding loops at inference speed.
+  - Futures path for larger work: define in `docs/future`, promote to active plans, execute with orchestration, and complete with closure/evidence.
+- Evidence-first delivery:
+  - Non-trivial work leaves clear metadata, validation traces, and done-evidence references.
+  - Team members can inspect progress, decisions, and status directly in-repo.
+
+## Why This Model Works
+
+- It keeps inference-speed execution while staying structured.
+- It supports both rapid delivery and strategic multi-plan execution.
+- It is team-grade: auditable, reviewable, and handoff-ready by default.
+
 ## Includes
 
 - Canonical docs skeleton under `template/docs/`
@@ -17,11 +54,20 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 - Agent hardening checker script under `template/scripts/agent-hardening/`
 - Plan metadata validator and execution orchestrator under `template/scripts/automation/`
 - Risk-adaptive role orchestration contract and provider adapters under `template/docs/ops/automation/`
-- Governance config and architecture rule schema in `template/docs/governance/`
+- Governance config, policy manifest/schema, and architecture rule schema in `template/docs/governance/`
+- Compiled runtime context and performance comparison artifacts under `template/docs/generated/`
 - Placeholder contract: `template/PLACEHOLDERS.md`
 
 ## Required Script Interface
 
+Primary workflow commands (day-to-day):
+- `context:compile` -> `node ./scripts/automation/compile-runtime-context.mjs`
+- `verify:fast` -> `node ./scripts/automation/verify-fast.mjs`
+- `verify:full` -> `node ./scripts/automation/verify-full.mjs`
+- `perf:baseline` -> `node ./scripts/automation/collect-performance-baseline.mjs --stage baseline`
+- `perf:after` -> `node ./scripts/automation/collect-performance-baseline.mjs --stage after`
+
+Underlying check primitives (used by `verify:fast` / `verify:full`, also available for targeted debugging):
 - `docs:verify` -> `node ./scripts/docs/check-governance.mjs`
 - `conformance:verify` -> `node ./scripts/check-article-conformance.mjs`
 - `architecture:verify` -> `node ./scripts/architecture/check-dependencies.mjs`
@@ -33,10 +79,14 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 ## Automation Commands
 
 - `automation:run` -> `node ./scripts/automation/orchestrator.mjs run`
+- `automation:run:parallel` -> `node ./scripts/automation/orchestrator.mjs run-parallel`
+- `automation:resume:parallel` -> `node ./scripts/automation/orchestrator.mjs run-parallel`
 - `automation:resume` -> `node ./scripts/automation/orchestrator.mjs resume`
 - `automation:audit` -> `node ./scripts/automation/orchestrator.mjs audit`
+- Note: parallel resume is an alias to `run-parallel`; parallel progress is derived from plan state and dependencies.
 - Executor is required and loaded from `docs/ops/automation/orchestrator.config.json` (`executor.command`).
 - Role routing is risk-adaptive (`low: worker`, `medium: planner->worker->reviewer`, `high: planner->explorer->worker->reviewer`) with Security-Approval gates for high/sensitive plans.
+- Safe stage-reuse can skip repeated planner/explorer stages when plan shape and scope are unchanged.
 - Role stages are isolated executor sessions; role commands should include `{role_model}` to enforce model switching.
 - Orchestrator defaults to interactive pretty console output with raw session logs written under `docs/ops/automation/runtime/<run-id>/` (`--output ticker` for ultra-compact mode).
 - Pretty mode includes a single in-place heartbeat/status line for active phases (session/validation/host validation) with elapsed/idle timing.
@@ -44,7 +94,9 @@ Reusable blueprint for initializing agent-first repositories with standardized d
 
 ## When To Run Checks
 
-- Run all checks before merge: `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `blueprint:verify`, `plans:verify`.
+- Use fast iteration checks while implementing: `verify:fast`.
+- Run full gate before merge: `verify:full`.
+- Capture baseline/after optimization metrics: `perf:baseline`, `perf:after`.
 - Run `agent:verify` when changing eval policy, agent observability, tool-safety, or memory/context rules.
 - Run `architecture:verify` when changing dependency boundaries.
 
@@ -70,14 +122,7 @@ Orchestration is the default execution driver. Manual execution is valid only wh
 2. Replace placeholders listed in `PLACEHOLDERS.md`.
 3. Verify no placeholders remain:
    - `./scripts/check-template-placeholders.sh`
-4. Add script entries to repository `package.json`:
-   - `docs:verify`
-   - `conformance:verify`
-   - `architecture:verify`
-   - `agent:verify`
-   - `eval:verify`
-   - `blueprint:verify`
-   - `plans:verify`
+4. Add script entries to repository `package.json` from **Required Script Interface**.
 5. Update `docs/generated/article-conformance.json` evidence paths for the new repository.
 6. Run `./scripts/bootstrap-verify.sh` (or run each verify command manually).
 

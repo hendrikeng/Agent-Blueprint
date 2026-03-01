@@ -1,5 +1,6 @@
 {
   "scripts": {
+    "context:compile": "node ./scripts/automation/compile-runtime-context.mjs",
     "docs:verify": "node ./scripts/docs/check-governance.mjs",
     "conformance:verify": "node ./scripts/check-article-conformance.mjs",
     "architecture:verify": "node ./scripts/architecture/check-dependencies.mjs",
@@ -7,7 +8,13 @@
     "eval:verify": "node ./scripts/agent-hardening/check-evals.mjs",
     "blueprint:verify": "node ./scripts/automation/check-blueprint-alignment.mjs",
     "plans:verify": "node ./scripts/automation/check-plan-metadata.mjs",
+    "verify:fast": "node ./scripts/automation/verify-fast.mjs",
+    "verify:full": "node ./scripts/automation/verify-full.mjs",
+    "perf:baseline": "node ./scripts/automation/collect-performance-baseline.mjs --stage baseline",
+    "perf:after": "node ./scripts/automation/collect-performance-baseline.mjs --stage after",
     "automation:run": "node ./scripts/automation/orchestrator.mjs run",
+    "automation:run:parallel": "node ./scripts/automation/orchestrator.mjs run-parallel",
+    "automation:resume:parallel": "node ./scripts/automation/orchestrator.mjs run-parallel",
     "automation:resume": "node ./scripts/automation/orchestrator.mjs resume",
     "automation:audit": "node ./scripts/automation/orchestrator.mjs audit"
   }

@@ -24,7 +24,7 @@ Source of Truth: This document and `docs/architecture/`.
 
 ## Verification
 
-- Run `npm run architecture:verify`.
-- Run `npm run agent:verify`.
-- Run `npm run docs:verify` when architecture docs or boundaries change.
+- During implementation loops, run `npm run verify:fast`.
+- Before merge, run `npm run verify:full`.
+- For architecture-only focused checks, run `npm run architecture:verify`.
 - Keep `docs/governance/architecture-rules.json` aligned with actual module policy.

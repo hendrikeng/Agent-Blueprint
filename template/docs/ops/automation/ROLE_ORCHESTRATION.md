@@ -38,6 +38,7 @@ Recommended baseline:
 - `medium`: `planner -> worker -> reviewer`
 - `high`: `planner -> explorer -> worker -> reviewer`
 - Effective risk tier is computed from declared risk + score-based signals (dependencies, tags, sensitive path hints, prior validation failures, autonomy mode).
+- Optional stage reuse can skip already-completed `planner`/`explorer` stages when plan shape and scope are unchanged within policy limits.
 
 ## Security Approval Gate
 

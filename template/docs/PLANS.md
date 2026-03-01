@@ -34,8 +34,9 @@ Examples:
 3. Record decisions and acceptance criteria before implementation.
 4. Implement the smallest safe slice and update tests/docs in the same change.
 5. Validate plan metadata with `npm run plans:verify`.
-6. Validate with `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, and relevant tests.
-7. Complete by moving to `docs/exec-plans/completed/` with concise summary/closure and canonical `Done-Evidence` index references.
+6. During implementation, run `npm run verify:fast`.
+7. Before merge/completion, run `npm run verify:full` plus relevant domain tests.
+8. Complete by moving to `docs/exec-plans/completed/` with concise summary/closure and canonical `Done-Evidence` index references.
 
 Orchestration is the default execution driver. Manual execution is valid only if it preserves status transitions, metadata integrity, and evidence/index curation behavior.
 

@@ -15,8 +15,6 @@ Source of Truth: This document.
 
 ## Mechanical Enforcement Map
 
-- Docs governance: `npm run docs:verify`
-- Scope/conformance guardrail: `npm run conformance:verify`
-- Architecture constraints: `npm run architecture:verify`
-- Agent hardening constraints: `npm run agent:verify`
-- Plan metadata constraints: `npm run plans:verify`
+- Fast iteration profile: `npm run verify:fast`
+- Full merge profile: `npm run verify:full`
+- Runtime context compiler: `npm run context:compile`

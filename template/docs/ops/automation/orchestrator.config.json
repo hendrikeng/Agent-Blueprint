@@ -6,6 +6,9 @@
     "providers": {
       "codex": {
         "command": "codex exec --full-auto -m {role_model} {prompt}"
+      },
+      "claude": {
+        "command": "claude -p --model {role_model} {prompt}"
       }
     },
     "enforceRoleModelSelection": true,
@@ -13,6 +16,10 @@
     "contextThreshold": 10000,
     "requireResultPayload": true,
     "timeoutSeconds": 1800
+  },
+  "context": {
+    "runtimeContextPath": "docs/generated/agent-runtime-context.md",
+    "maxTokens": 1400
   },
   "validation": {
     "always": [],
@@ -97,6 +104,17 @@
         "reviewer"
       ]
     },
+    "stageReuse": {
+      "enabled": true,
+      "roles": [
+        "planner",
+        "explorer"
+      ],
+      "sameRunOnly": true,
+      "maxAgeMinutes": 60,
+      "requiresStablePlanHash": true,
+      "requiresNoScopeChange": true
+    },
     "riskModel": {
       "thresholds": {
         "medium": 3,
@@ -156,14 +174,6 @@
       "claude": {
         "roleProfiles": {},
         "roles": {}
-      },
-      "gemini": {
-        "roleProfiles": {},
-        "roles": {}
-      },
-      "grok": {
-        "roleProfiles": {},
-        "roles": {}
       }
     }
   },
@@ -174,7 +184,29 @@
     "heartbeatSeconds": 12,
     "stallWarnSeconds": 120
   },
+  "parallel": {
+    "maxPlans": 1,
+    "worktreeRoot": "docs/ops/automation/runtime/worktrees",
+    "branchPrefix": "orch",
+    "baseRef": "HEAD",
+    "gitRemote": "origin",
+    "workerOutputMode": "minimal",
+    "keepWorktrees": false,
+    "pushBranches": false,
+    "openPullRequests": false,
+    "assumeDependencyCompletion": false,
+    "pullRequest": {
+      "createCommand": "",
+      "mergeCommand": ""
+    }
+  },
   "git": {
-    "atomicCommits": true
+    "atomicCommits": true,
+    "atomicCommitRoots": {
+      "defaults": [],
+      "shared": [],
+      "allowPlanMetadata": true,
+      "enforce": true
+    }
   }
 }

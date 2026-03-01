@@ -20,8 +20,8 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 ## Runtime Files
 
 - `docs/ops/automation/orchestrator.config.json`: executor and validation command configuration.
-- `docs/ops/automation/run-state.json`: latest resumable queue and plan progress snapshot.
-- `docs/ops/automation/run-events.jsonl`: append-only JSON line event log.
+- `run-state.json` (under `docs/ops/automation/`): latest resumable queue and plan progress snapshot.
+- `run-events.jsonl` (under `docs/ops/automation/`): append-only JSON line event log.
 - `docs/exec-plans/evidence-index/`: canonical compact evidence indexes by plan ID.
 - `run-state.json`, `run-events.jsonl`, `runtime/`, and `handoffs/` are transient runtime artifacts; they are ignored by dirty preflight.
 - `docs/ops/automation/handoffs/`: per-plan rollover handoff notes.
@@ -45,6 +45,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
 ## CLI
 
 - `node ./scripts/automation/orchestrator.mjs run --mode guarded`
+- `node ./scripts/automation/orchestrator.mjs run-parallel --mode guarded --parallel-plans 4`
 - `node ./scripts/automation/orchestrator.mjs resume`
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
 - `node ./scripts/automation/orchestrator.mjs curate-evidence [--scope active|completed|all] [--plan-id <value>]`
@@ -56,6 +57,8 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - `--failure-tail-lines <n>` (default `60`)
   - `--heartbeat-seconds <n>` (default `12`)
   - `--stall-warn-seconds <n>` (default `120`)
+- Parallel controls:
+  - `--parallel-plans <n>` enables dependency-aware parallel branch/worktree execution.
 
 ## Executor Configuration
 
@@ -66,11 +69,20 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - `"command": "node ./scripts/automation/executor-wrapper.mjs --plan-id {plan_id} --plan-file {plan_file} --run-id {run_id} --mode {mode} --session {session} --role {role} --effective-risk-tier {effective_risk_tier} --declared-risk-tier {declared_risk_tier} --stage-index {stage_index} --stage-total {stage_total} --result-path {result_path}"`
   - `"provider": "codex"` (override per run with `ORCH_EXECUTOR_PROVIDER=...`)
   - `"providers.codex.command": "codex exec --full-auto -m {role_model} {prompt}"` (`{prompt}` and `{role_model}` are required)
+  - `"providers.claude.command": "claude -p --model {role_model} {prompt}"` (`{prompt}` and `{role_model}` are required)
   - `"enforceRoleModelSelection": true` requires each role command to include `{role_model}`.
   - `"contextThreshold": 10000`
   - `"requireResultPayload": true`
+  - `"context.runtimeContextPath"` points to compiled runtime instructions (`docs/generated/agent-runtime-context.md` by default).
+  - `"context.maxTokens"` sets a hard budget for compiled runtime context size.
   - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 12`, and `"logging.stallWarnSeconds": 120` tune operator-facing output noise and liveness signaling.
-  - `executor.promptTemplate` is provider-agnostic and reused across Codex/Claude/Gemini/Grok adapters.
+  - `"parallel.maxPlans"` sets default worker concurrency for `run --parallel-plans`.
+  - `"parallel.worktreeRoot"`, `"parallel.branchPrefix"`, `"parallel.baseRef"`, `"parallel.gitRemote"` configure branch/worktree strategy.
+  - `"parallel.pushBranches": true` pushes worker branches automatically.
+  - `"parallel.openPullRequests": true` with `"parallel.pullRequest.createCommand"` can open PRs per completed worker branch.
+  - `"parallel.pullRequest.mergeCommand"` can enqueue or merge generated PRs after creation (for merge queues).
+  - `pullRequest.createCommand` token support: `{plan_id}`, `{branch}`, `{base_ref}`, `{git_remote}`, `{run_id}`, `{head_sha}`, `{worktree}`.
+  - `executor.promptTemplate` is provider-agnostic and reused across Codex and Claude Code adapters.
 - Role orchestration:
   - `roleOrchestration.enabled: true` enables risk-adaptive role routing.
   - `roleOrchestration.roleProfiles` defines per-role execution profiles (`model`, `reasoningEffort`, `sandboxMode`, `instructions`).
@@ -82,6 +94,7 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - `roleOrchestration.pipelines.low` defaults to `worker`.
   - `roleOrchestration.pipelines.medium` defaults to `planner -> worker -> reviewer`.
   - `roleOrchestration.pipelines.high` defaults to `planner -> explorer -> worker -> reviewer`.
+  - `roleOrchestration.stageReuse` allows safe skip of previously completed planner/explorer stages when plan shape and scope remain stable.
   - `roleOrchestration.riskModel` computes an effective risk tier from declared risk, dependencies, tags, scope paths, and prior validation failures.
   - `roleOrchestration.approvalGates` enforces Security Ops approval for high-risk completions and sensitive medium-risk completions.
   - `roleOrchestration.providers.<provider>.roles.<role>.command` can override provider command templates by role.
@@ -127,8 +140,19 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - Failure summaries include only the last `--failure-tail-lines` lines and a pointer to the full log file.
   - `logging.heartbeatSeconds` and `logging.stallWarnSeconds` tune heartbeat cadence and stall-warning threshold (override via CLI flags).
 - Drift guardrail:
-  - Run `npm run blueprint:verify` to fail on orchestration policy drift (role-model enforcement, role command placeholders, pretty logging default).
+  - Run `npm run blueprint:verify` to fail on orchestration policy drift (role-model enforcement, role command placeholders, pretty logging default, runtime-context and stage-reuse policy).
 - Do not use provider interactive modes (they will block orchestration); use non-interactive CLI flags in provider commands.
+
+## Verification Profiles
+
+- Fast iteration profile: `npm run verify:fast`
+  - Runs mandatory safety checks plus scope-selected verifiers.
+- Full merge profile: `npm run verify:full`
+  - Runs all required repository gates.
+- Metrics capture:
+  - `npm run perf:baseline`
+  - `npm run perf:after`
+  - Generates `docs/generated/perf-comparison.json` with before/after deltas.
 
 ## Plan File Naming
 
@@ -146,6 +170,8 @@ This directory defines the autonomous planning-to-execution conveyor for overnig
   - `ORCH_APPROVED_MEDIUM=1`
   - `ORCH_APPROVED_HIGH=1`
 - Atomic commits are blocked when `--allow-dirty true` is set to avoid committing unrelated workspace changes.
+- `git.atomicCommitRoots` can enforce plan-scoped commit boundaries. Plans may extend roots via metadata `Atomic-Roots`.
+- Plans may also define `Concurrency-Locks` metadata to serialize specific shared resources during `run-parallel`.
 - Effective risk tier is the max of declared risk and computed risk model output.
 - Security approval gate is required when:
   - effective risk is `high`, or
@@ -179,7 +205,13 @@ Pretty output example:
 
 Parallelism note:
 
-- `--max-plans 5` is a per-run processing cap, not parallel execution; one orchestrator run processes one executable plan at a time.
+- `--max-plans` is a processing cap.
+- `run` is sequential by default.
+- `run --parallel-plans <n>` (or `run-parallel`) dispatches independent plans into isolated git worktrees/branches.
+- There is no dedicated `resume-parallel` CLI subcommand; continuing parallel execution means invoking `run-parallel` again with desired concurrency.
+- npm convenience alias: `npm run automation:resume:parallel -- --mode guarded --parallel-plans 4` (maps to `run-parallel`).
+- Dependency gating remains strict: plans only start when all `Dependencies` are satisfied.
+- `parallel.assumeDependencyCompletion` defaults to `false` so dependent plans wait for integration unless explicitly enabled.
 
 ## Exit Conventions
 

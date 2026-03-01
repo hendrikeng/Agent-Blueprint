@@ -86,6 +86,21 @@
         "docs/governance/doc-checks.config.json",
         "package.json"
       ]
+    },
+    {
+      "id": "runtime_context_compaction_and_perf_proof",
+      "status": "implemented",
+      "evidence": [
+        "docs/governance/policy-manifest.json",
+        "docs/governance/policy-manifest.schema.json",
+        "docs/generated/agent-runtime-context.md",
+        "docs/generated/perf-comparison.json",
+        "scripts/automation/compile-runtime-context.mjs",
+        "scripts/automation/collect-performance-baseline.mjs",
+        "scripts/automation/verify-fast.mjs",
+        "scripts/automation/verify-full.mjs",
+        "package.json"
+      ]
     }
   ]
 }

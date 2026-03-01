@@ -9,12 +9,13 @@ Source of Truth: This document.
 
 - `docs/governance/rules.md`
 - `docs/governance/golden-principles.md`
+- `docs/governance/policy-manifest.json`
+- `docs/governance/policy-manifest.schema.json`
 - `docs/governance/doc-checks.config.json`
 - `docs/governance/architecture-rules.json`
 
 ## Verification
 
-- `npm run docs:verify`
-- `npm run architecture:verify`
-- `npm run agent:verify`
-- `npm run plans:verify`
+- Fast profile: `npm run verify:fast`
+- Full profile: `npm run verify:full`
+- Performance evidence: `npm run perf:baseline` and `npm run perf:after`

@@ -63,31 +63,29 @@ Start with:
 
 ## Enforcement and Quality Gates
 
-- Docs verification: `npm run docs:verify`
-- Conformance scope guardrail: `npm run conformance:verify`
-- Architecture boundary checks: `npm run architecture:verify`
-- Agent hardening checks: `npm run agent:verify`
-- Eval regression gate: `npm run eval:verify`
-- Blueprint alignment gate: `npm run blueprint:verify`
-- Plan metadata checks: `npm run plans:verify`
+- Runtime context build: `npm run context:compile`
+- Fast iteration profile: `npm run verify:fast`
+- Full merge profile: `npm run verify:full`
+- Canonical command map and policy: `docs/governance/rules.md`
 
 ## When To Run Checks
 
-- Before merge: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, `npm run eval:verify`, `npm run blueprint:verify`, `npm run plans:verify`.
-- After changing architecture boundaries: `npm run architecture:verify`.
-- After changing eval/observability/tool/memory policy docs or eval artifacts/config: `npm run agent:verify`, `npm run eval:verify`.
-- After changing automation orchestrator/wrapper/config policy: `npm run blueprint:verify`.
+- During implementation loops: `npm run verify:fast`.
+- Before merge: `npm run verify:full`.
+- Capture baseline and post-change metrics: `npm run perf:baseline`, `npm run perf:after`.
 
 ## Automation Conveyor Commands
 
 - Start run: `npm run automation:run -- --mode guarded`
+- Start parallel run: `npm run automation:run:parallel -- --mode guarded --parallel-plans 4`
+- Resume parallel execution: `npm run automation:resume:parallel -- --mode guarded --parallel-plans 4`
 - Resume run: `npm run automation:resume`
 - Audit runs: `npm run automation:audit -- --json true`
 - Lean output defaults to interactive pretty lifecycle lines; use `--output ticker` for ultra-compact logs, `--output minimal` for expanded high-signal lines, or `--output verbose` for full streamed command output.
 - `pretty` output keeps one live in-place heartbeat line (phase/plan/role/activity/elapsed/idle) so you can tell running vs stuck without log spam.
 - `guarded` is gate-based (non-interactive): medium/high plans require `ORCH_APPROVED_MEDIUM=1` / `ORCH_APPROVED_HIGH=1`.
 - Executor is required and loaded from `docs/ops/automation/orchestrator.config.json` (`executor.command`).
-- Provider selection is adapter-based (`executor.provider` or `ORCH_EXECUTOR_PROVIDER`) so Codex/Claude/Gemini/Grok can share the same orchestration contract.
+- Provider selection is adapter-based (`executor.provider` or `ORCH_EXECUTOR_PROVIDER`) so Codex and Claude Code can share the same orchestration contract.
 - Default session safety policy is proactive rollover at `contextRemaining <= 10000` with required structured `ORCH_RESULT_PATH` payloads.
 - Risk-adaptive role orchestration routes plans by effective risk:
   - `low`: `worker`

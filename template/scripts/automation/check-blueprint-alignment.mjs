@@ -8,7 +8,13 @@ const findings = [];
 const requiredPaths = {
   orchestrator: path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
   wrapper: path.join(rootDir, 'scripts', 'automation', 'executor-wrapper.mjs'),
-  config: path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json')
+  config: path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json'),
+  contextCompiler: path.join(rootDir, 'scripts', 'automation', 'compile-runtime-context.mjs'),
+  verifyFast: path.join(rootDir, 'scripts', 'automation', 'verify-fast.mjs'),
+  verifyFull: path.join(rootDir, 'scripts', 'automation', 'verify-full.mjs'),
+  perfCollector: path.join(rootDir, 'scripts', 'automation', 'collect-performance-baseline.mjs'),
+  policyManifest: path.join(rootDir, 'docs', 'governance', 'policy-manifest.json'),
+  policySchema: path.join(rootDir, 'docs', 'governance', 'policy-manifest.schema.json')
 };
 
 function addFinding(code, message, filePath = null) {
@@ -101,6 +107,17 @@ function gatherPipelineRoles(config) {
   return [...roles];
 }
 
+function ensureManifestPolicy(configPath) {
+  // Config-independent policy assets are validated by existence checks.
+  // This function intentionally reserves room for future manifest semantic checks.
+  if (!configPath) {
+    addFinding(
+      'MISSING_CONFIG_PATH',
+      'Could not resolve config path while validating policy-manifest requirements.'
+    );
+  }
+}
+
 function ensureConfigPolicy(config, configPath) {
   const provider = String(config?.executor?.provider ?? 'codex').trim().toLowerCase();
   const roleProfiles = config?.roleOrchestration?.roleProfiles ?? {};
@@ -112,6 +129,24 @@ function ensureConfigPolicy(config, configPath) {
     addFinding(
       'ROLE_MODEL_ENFORCEMENT_DISABLED',
       "executor.enforceRoleModelSelection must be true.",
+      rel(configPath)
+    );
+  }
+
+  const runtimeContextPath = String(config?.context?.runtimeContextPath ?? '').trim();
+  if (!runtimeContextPath) {
+    addFinding(
+      'MISSING_RUNTIME_CONTEXT_PATH',
+      "context.runtimeContextPath must be set.",
+      rel(configPath)
+    );
+  }
+
+  const maxTokens = Number.parseInt(String(config?.context?.maxTokens ?? ''), 10);
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
+    addFinding(
+      'INVALID_RUNTIME_CONTEXT_MAX_TOKENS',
+      'context.maxTokens must be a positive integer.',
       rel(configPath)
     );
   }
@@ -184,6 +219,25 @@ function ensureConfigPolicy(config, configPath) {
       );
     }
   }
+
+  const stageReuse = config?.roleOrchestration?.stageReuse ?? {};
+  if (stageReuse.enabled !== true) {
+    addFinding(
+      'STAGE_REUSE_DISABLED',
+      "roleOrchestration.stageReuse.enabled must be true.",
+      rel(configPath)
+    );
+  }
+  const roles = Array.isArray(stageReuse.roles)
+    ? stageReuse.roles.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (roles.length === 0 || !roles.includes('planner') || !roles.includes('explorer')) {
+    addFinding(
+      'INVALID_STAGE_REUSE_ROLES',
+      "roleOrchestration.stageReuse.roles must include 'planner' and 'explorer'.",
+      rel(configPath)
+    );
+  }
 }
 
 async function main() {
@@ -209,6 +263,7 @@ async function main() {
   ]);
 
   ensureScriptSignatures(orchestratorRaw, wrapperRaw);
+  ensureManifestPolicy(requiredPaths.config);
   ensureConfigPolicy(config, requiredPaths.config);
 
   if (findings.length > 0) {

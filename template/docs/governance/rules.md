@@ -17,12 +17,19 @@ Source of Truth: This document.
 - Keep security and data-safety controls explicit.
 - Docs are part of done.
 - Canonical docs must remain environment-agnostic: no personal machine paths, hostnames, credentials, or private runbooks.
+- `docs/governance/policy-manifest.json` is the machine-readable policy source for runtime context compilation.
 
-## Validation Gates
+## Verification Profiles
 
-- `npm run docs:verify`
-- `npm run conformance:verify`
-- `npm run architecture:verify`
-- `npm run agent:verify`
-- `npm run plans:verify`
-- Relevant domain tests for changed behavior
+- Fast iteration profile: `npm run verify:fast`
+  - Scope-aware checks + mandatory safety checks.
+- Full merge profile: `npm run verify:full`
+  - `node ./scripts/automation/compile-runtime-context.mjs`
+  - `node ./scripts/docs/check-governance.mjs`
+  - `node ./scripts/check-article-conformance.mjs`
+  - `node ./scripts/architecture/check-dependencies.mjs`
+  - `node ./scripts/agent-hardening/check-agent-hardening.mjs`
+  - `node ./scripts/agent-hardening/check-evals.mjs`
+  - `node ./scripts/automation/check-blueprint-alignment.mjs`
+  - `node ./scripts/automation/check-plan-metadata.mjs`
+- Relevant domain tests remain required for changed behavior.

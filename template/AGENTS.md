@@ -23,6 +23,7 @@ Start here, then follow linked source-of-truth docs:
 - Canonical docs coverage index: `docs/index.md`
 - Documentation index: `docs/README.md`
 - Governance policy (detailed): `docs/governance/rules.md`
+- Policy manifest (runtime source): `docs/governance/policy-manifest.json`
 - Golden principles: `docs/governance/golden-principles.md`
 - Quality scorecard: `docs/QUALITY_SCORE.md`
 - Design docs index: `docs/design-docs/index.md`
@@ -38,6 +39,7 @@ Start here, then follow linked source-of-truth docs:
 - Execution plans: `docs/exec-plans/README.md`
 - Ops automation conveyor: `docs/ops/automation/README.md`
 - Role orchestration contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`
+- Generated runtime context snapshot: `docs/generated/agent-runtime-context.md`
 
 ## Non-Negotiables
 
@@ -93,7 +95,10 @@ Docs are part of done.
 
 ## Test and Validation Expectations
 
-- Run `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, `npm run eval:verify`, `npm run blueprint:verify`, and `npm run plans:verify` before merge.
+- Runtime context generation is mandatory: `npm run context:compile`.
+- Iteration profile: `npm run verify:fast`.
+- Merge profile: `npm run verify:full`.
+- Canonical verification policy lives in `docs/governance/rules.md`.
 - Add/adjust tests for behavior changes.
 - Every bug fix needs a regression test.
 - Critical flows require focused coverage.

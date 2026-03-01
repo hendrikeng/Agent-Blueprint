@@ -2,12 +2,8 @@
 set -euo pipefail
 
 ./scripts/check-template-placeholders.sh
-npm run docs:verify
-npm run conformance:verify
-npm run architecture:verify
-npm run agent:verify
-npm run eval:verify
-npm run blueprint:verify
-npm run plans:verify
+npm run context:compile
+npm run verify:fast
+npm run verify:full
 
 echo "[bootstrap-verify] passed"

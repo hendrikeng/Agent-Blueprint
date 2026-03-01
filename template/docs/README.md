@@ -10,11 +10,13 @@ Source of Truth: This document.
 - Canonical index: `docs/index.md`
 - Agent hardening policy: `docs/agent-hardening/README.md`
 - Governance policy: `docs/governance/README.md`
+- Policy manifest: `docs/governance/policy-manifest.json`
 - Architecture map: `docs/architecture/README.md`
 - Product state: `docs/product-specs/current-state.md`
 - Plan workflow: `docs/PLANS.md`
 - Ops automation: `docs/ops/automation/README.md`
 - Role orchestration: `docs/ops/automation/ROLE_ORCHESTRATION.md`
+- Runtime context snapshot: `docs/generated/agent-runtime-context.md`
 
 ## Layering Model
 

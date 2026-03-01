@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "mandatorySafetyRules": [
+    {
+      "id": "correctness_over_speed",
+      "statement": "Correctness over speed for critical domains.",
+      "requiredInRuntimeContext": true
+    },
+    {
+      "id": "server_side_authority",
+      "statement": "Sensitive authority remains server-side for critical boundaries.",
+      "requiredInRuntimeContext": true
+    },
+    {
+      "id": "no_fake_success_paths",
+      "statement": "Never fabricate production success-path behavior.",
+      "requiredInRuntimeContext": true
+    },
+    {
+      "id": "shared_contracts_are_canonical",
+      "statement": "Shared contracts and primitives are canonical where applicable.",
+      "requiredInRuntimeContext": true
+    },
+    {
+      "id": "docs_are_part_of_done",
+      "statement": "Architecture, invariant, and user-visible changes must update canonical docs in the same change.",
+      "requiredInRuntimeContext": true
+    },
+    {
+      "id": "no_destructive_git_without_instruction",
+      "statement": "Never run destructive git/file commands without explicit written instruction.",
+      "requiredInRuntimeContext": true
+    }
+  ],
+  "roleContracts": {
+    "planner": {
+      "sandboxMode": "read-only",
+      "reasoningEffort": "high",
+      "intent": "Break down implementation into decision-complete execution steps."
+    },
+    "explorer": {
+      "sandboxMode": "read-only",
+      "reasoningEffort": "medium",
+      "intent": "Trace risky surfaces and dependencies before implementation."
+    },
+    "worker": {
+      "sandboxMode": "full-access",
+      "reasoningEffort": "high",
+      "intent": "Implement scoped changes and keep docs/evidence aligned."
+    },
+    "reviewer": {
+      "sandboxMode": "read-only",
+      "reasoningEffort": "high",
+      "intent": "Check correctness, security, race conditions, flaky tests, and regressions."
+    }
+  },
+  "validationPolicy": {
+    "fastIteration": [
+      "node ./scripts/automation/compile-runtime-context.mjs",
+      "node ./scripts/docs/check-governance.mjs",
+      "node ./scripts/automation/check-plan-metadata.mjs"
+    ],
+    "fullGate": [
+      "node ./scripts/automation/compile-runtime-context.mjs",
+      "node ./scripts/docs/check-governance.mjs",
+      "node ./scripts/check-article-conformance.mjs",
+      "node ./scripts/architecture/check-dependencies.mjs",
+      "node ./scripts/agent-hardening/check-agent-hardening.mjs",
+      "node ./scripts/agent-hardening/check-evals.mjs",
+      "node ./scripts/automation/check-blueprint-alignment.mjs",
+      "node ./scripts/automation/check-plan-metadata.mjs"
+    ],
+    "notes": "Fast iteration commands are minimum-safe defaults. Full gate commands remain required before merge."
+  },
+  "docContract": {
+    "canonicalEntryPoints": [
+      "AGENTS.md",
+      "README.md",
+      "ARCHITECTURE.md",
+      "docs/index.md"
+    ],
+    "requiresSameChangeUpdateFor": [
+      "architecture boundaries",
+      "critical invariants",
+      "security/compliance behavior",
+      "user-visible behavior"
+    ]
+  },
+  "gitSafetyContract": {
+    "forbiddenWithoutExplicitInstruction": [
+      "git reset --hard",
+      "git checkout -- <path>",
+      "rm -rf",
+      "git clean -fd"
+    ],
+    "notes": "Do not edit .env files or switch branches/worktrees unless explicitly requested in-thread."
+  }
+}

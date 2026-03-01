@@ -4,6 +4,7 @@ import fsSync from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import {
   ACTIVE_STATUSES,
@@ -39,6 +40,16 @@ const PRETTY_SPINNER_FRAMES = ['|', '/', '-', '\\'];
 const PRETTY_LIVE_DOT_FRAMES = ['...', '.. ', '.  ', ' ..'];
 const DEFAULT_HEARTBEAT_SECONDS = 12;
 const DEFAULT_STALL_WARN_SECONDS = 120;
+const DEFAULT_PARALLEL_PLANS = 1;
+const DEFAULT_PARALLEL_WORKTREE_ROOT = 'docs/ops/automation/runtime/worktrees';
+const DEFAULT_PARALLEL_BRANCH_PREFIX = 'orch';
+const DEFAULT_PARALLEL_BASE_REF = 'HEAD';
+const DEFAULT_PARALLEL_GIT_REMOTE = 'origin';
+const DEFAULT_PARALLEL_WORKER_OUTPUT = 'minimal';
+const DEFAULT_PARALLEL_KEEP_WORKTREES = false;
+const DEFAULT_PARALLEL_PUSH_BRANCHES = false;
+const DEFAULT_PARALLEL_OPEN_PULL_REQUESTS = false;
+const DEFAULT_PARALLEL_ASSUME_DEPENDENCY_COMPLETION = false;
 let prettySpinnerIndex = 0;
 let prettyLiveDotIndex = 0;
 let liveStatusLineLength = 0;
@@ -57,6 +68,11 @@ const DEFAULT_RISK_WEIGHT_SENSITIVE_TAG = 2;
 const DEFAULT_RISK_WEIGHT_SENSITIVE_PATH = 2;
 const DEFAULT_RISK_WEIGHT_AUTONOMY_FULL = 1;
 const DEFAULT_RISK_WEIGHT_VALIDATION_FAILURE = 2;
+const DEFAULT_STAGE_REUSE_ENABLED = true;
+const DEFAULT_STAGE_REUSE_SAME_RUN_ONLY = true;
+const DEFAULT_STAGE_REUSE_REQUIRES_STABLE_PLAN_HASH = true;
+const DEFAULT_STAGE_REUSE_REQUIRES_NO_SCOPE_CHANGE = true;
+const DEFAULT_STAGE_REUSE_MAX_AGE_MINUTES = 60;
 const ROLE_PLANNER = 'planner';
 const ROLE_EXPLORER = 'explorer';
 const ROLE_WORKER = 'worker';
@@ -105,6 +121,7 @@ const SENSITIVE_KEY_REGEX = /(token|secret|password|passphrase|api[-_]?key|autho
 function usage() {
   console.log(`Usage:
   node ./scripts/automation/orchestrator.mjs run [options]
+  node ./scripts/automation/orchestrator.mjs run-parallel [options]
   node ./scripts/automation/orchestrator.mjs resume [options]
   node ./scripts/automation/orchestrator.mjs audit [options]
   node ./scripts/automation/orchestrator.mjs curate-evidence [options]
@@ -112,6 +129,7 @@ function usage() {
 Options:
   --mode guarded|full                Autonomy mode (default: guarded)
   --max-plans <n>                    Maximum plans to process in this run
+  --parallel-plans <n>               Number of plans to execute in parallel (default: 1)
   --context-threshold <n>            Trigger rollover when contextRemaining < n
   --require-result-payload true|false Require ORCH_RESULT_PATH payload with contextRemaining (default: true)
   --handoff-token-budget <n>         Metadata field for handoff budget reporting
@@ -353,6 +371,39 @@ function printRunSummary(options, label, state, processed, runDurationSeconds) {
   console.log('- note: processed count is for this invocation; completed/blocked/failed are cumulative for the runId.');
 }
 
+function printParallelRunSummary(options, state, processed, runDurationSeconds, summary) {
+  if (isTickerOutput(options)) {
+    progressLog(
+      options,
+      `run-parallel complete processed=${processed} runId=${state.runId} branchCompleted=${summary.completed} branchBlocked=${summary.blocked} branchFailed=${summary.failed} branchPending=${summary.pending} duration=${formatDuration(runDurationSeconds)}`
+    );
+    return;
+  }
+  if (isPrettyOutput(options)) {
+    const border = colorize(options, '90', '------------------------------------------------------------');
+    const title = colorize(options, '1;36', 'RUN-PARALLEL SUMMARY');
+    console.log(border);
+    console.log(title);
+    console.log(`runId: ${state.runId}`);
+    console.log(`processed workers: ${processed}`);
+    console.log(`branch completed: ${summary.completed}`);
+    console.log(`branch blocked: ${summary.blocked}`);
+    console.log(`branch failed: ${summary.failed}`);
+    console.log(`branch pending: ${summary.pending}`);
+    console.log(`duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
+    console.log(border);
+    return;
+  }
+
+  progressLog(options, `run-parallel complete (${processed} workers processed).`);
+  console.log(`- runId: ${state.runId}`);
+  console.log(`- branch completed: ${summary.completed}`);
+  console.log(`- branch blocked: ${summary.blocked}`);
+  console.log(`- branch failed: ${summary.failed}`);
+  console.log(`- branch pending: ${summary.pending}`);
+  console.log(`- duration: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`);
+}
+
 function normalizeRoleProfile(profile = {}, defaults = {}) {
   const merged = {
     ...defaults,
@@ -397,6 +448,24 @@ function nowIso() {
 
 function isoDate(value) {
   return String(value).slice(0, 10);
+}
+
+function parseIsoMillis(value) {
+  const parsed = Date.parse(String(value ?? ''));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function computePlanShapeHash(plan) {
+  const payload = {
+    planId: plan.planId,
+    rel: plan.rel,
+    dependencies: [...(plan.dependencies ?? [])].sort(),
+    specTargets: [...(plan.specTargets ?? [])].sort(),
+    tags: [...(plan.tags ?? [])].sort(),
+    riskTier: parseRiskTier(plan.riskTier, 'low'),
+    acceptanceCriteria: String(plan.acceptanceCriteria ?? '').trim()
+  };
+  return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
 function durationSeconds(startIso, endIso = nowIso()) {
@@ -498,6 +567,7 @@ function buildPaths(rootDir) {
     opsAutomationDir,
     handoffDir: path.join(opsAutomationDir, 'handoffs'),
     runtimeDir: path.join(opsAutomationDir, 'runtime'),
+    parallelWorktreesDir: path.join(opsAutomationDir, 'runtime', 'worktrees'),
     runLockPath: path.join(opsAutomationDir, 'runtime', 'orchestrator.lock.json'),
     runStatePath: path.join(opsAutomationDir, 'run-state.json'),
     runEventsPath: path.join(opsAutomationDir, 'run-events.jsonl'),
@@ -513,6 +583,7 @@ async function ensureDirectories(paths, dryRun) {
   await fs.mkdir(paths.opsAutomationDir, { recursive: true });
   await fs.mkdir(paths.handoffDir, { recursive: true });
   await fs.mkdir(paths.runtimeDir, { recursive: true });
+  await fs.mkdir(paths.parallelWorktreesDir, { recursive: true });
   await fs.mkdir(paths.evidenceIndexDir, { recursive: true });
 }
 
@@ -871,8 +942,30 @@ async function loadConfig(paths) {
       heartbeatSeconds: DEFAULT_HEARTBEAT_SECONDS,
       stallWarnSeconds: DEFAULT_STALL_WARN_SECONDS
     },
+    parallel: {
+      maxPlans: DEFAULT_PARALLEL_PLANS,
+      worktreeRoot: DEFAULT_PARALLEL_WORKTREE_ROOT,
+      branchPrefix: DEFAULT_PARALLEL_BRANCH_PREFIX,
+      baseRef: DEFAULT_PARALLEL_BASE_REF,
+      gitRemote: DEFAULT_PARALLEL_GIT_REMOTE,
+      workerOutputMode: DEFAULT_PARALLEL_WORKER_OUTPUT,
+      keepWorktrees: DEFAULT_PARALLEL_KEEP_WORKTREES,
+      pushBranches: DEFAULT_PARALLEL_PUSH_BRANCHES,
+      openPullRequests: DEFAULT_PARALLEL_OPEN_PULL_REQUESTS,
+      assumeDependencyCompletion: DEFAULT_PARALLEL_ASSUME_DEPENDENCY_COMPLETION,
+      pullRequest: {
+        createCommand: '',
+        mergeCommand: ''
+      }
+    },
     git: {
-      atomicCommits: true
+      atomicCommits: true,
+      atomicCommitRoots: {
+        defaults: [],
+        shared: [],
+        allowPlanMetadata: true,
+        enforce: true
+      }
     }
   };
 
@@ -948,9 +1041,21 @@ async function loadConfig(paths) {
       ...defaultConfig.logging,
       ...(configured.logging ?? {})
     },
+    parallel: {
+      ...defaultConfig.parallel,
+      ...(configured.parallel ?? {}),
+      pullRequest: {
+        ...defaultConfig.parallel.pullRequest,
+        ...(configured.parallel?.pullRequest ?? {})
+      }
+    },
     git: {
       ...defaultConfig.git,
-      ...(configured.git ?? {})
+      ...(configured.git ?? {}),
+      atomicCommitRoots: {
+        ...defaultConfig.git.atomicCommitRoots,
+        ...(configured.git?.atomicCommitRoots ?? {})
+      }
     }
   };
 }
@@ -1116,6 +1221,74 @@ function resolveRuntimeExecutorOptions(options, config) {
   };
 }
 
+function normalizedRelativePrefix(value) {
+  const normalized = toPosix(String(value ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, '');
+  if (!normalized) {
+    return null;
+  }
+  assertSafeRelativePlanPath(normalized);
+  return normalized;
+}
+
+function normalizeRelativePrefixList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const set = new Set();
+  for (const value of values) {
+    const normalized = normalizedRelativePrefix(value);
+    if (normalized) {
+      set.add(normalized);
+    }
+  }
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+
+function resolveParallelExecutionOptions(options, config) {
+  const configParallel = config?.parallel ?? {};
+  const parallelPlans = Math.max(
+    1,
+    asInteger(options.parallelPlans ?? options['parallel-plans'] ?? configParallel.maxPlans, DEFAULT_PARALLEL_PLANS)
+  );
+  const worktreeRoot = normalizedRelativePrefix(configParallel.worktreeRoot ?? DEFAULT_PARALLEL_WORKTREE_ROOT);
+  const branchPrefix = String(configParallel.branchPrefix ?? DEFAULT_PARALLEL_BRANCH_PREFIX).trim() || DEFAULT_PARALLEL_BRANCH_PREFIX;
+  const baseRef = String(configParallel.baseRef ?? DEFAULT_PARALLEL_BASE_REF).trim() || DEFAULT_PARALLEL_BASE_REF;
+  const gitRemote = String(configParallel.gitRemote ?? DEFAULT_PARALLEL_GIT_REMOTE).trim() || DEFAULT_PARALLEL_GIT_REMOTE;
+  const workerOutputMode = normalizeOutputMode(configParallel.workerOutputMode ?? DEFAULT_PARALLEL_WORKER_OUTPUT, DEFAULT_PARALLEL_WORKER_OUTPUT);
+  return {
+    parallelPlans,
+    worktreeRoot: worktreeRoot ?? DEFAULT_PARALLEL_WORKTREE_ROOT,
+    branchPrefix,
+    baseRef,
+    gitRemote,
+    workerOutputMode,
+    keepWorktrees: asBoolean(configParallel.keepWorktrees, DEFAULT_PARALLEL_KEEP_WORKTREES),
+    pushBranches: asBoolean(configParallel.pushBranches, DEFAULT_PARALLEL_PUSH_BRANCHES),
+    openPullRequests: asBoolean(configParallel.openPullRequests, DEFAULT_PARALLEL_OPEN_PULL_REQUESTS),
+    assumeDependencyCompletion: asBoolean(
+      configParallel.assumeDependencyCompletion,
+      DEFAULT_PARALLEL_ASSUME_DEPENDENCY_COMPLETION
+    ),
+    pullRequest: {
+      createCommand: String(configParallel.pullRequest?.createCommand ?? '').trim(),
+      mergeCommand: String(configParallel.pullRequest?.mergeCommand ?? '').trim()
+    }
+  };
+}
+
+function shellQuote(value) {
+  return JSON.stringify(String(value));
+}
+
+function sanitizeBranchToken(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._/-]+/g, '-')
+    .replace(/\/{2,}/g, '/')
+    .replace(/^-+|-+$/g, '');
+}
+
 function normalizeRoleName(value, fallback = ROLE_WORKER) {
   const normalized = String(value ?? '').trim().toLowerCase();
   return ROLE_NAMES.has(normalized) ? normalized : fallback;
@@ -1136,6 +1309,12 @@ function resolveRoleOrchestration(config) {
   const riskModel = source.riskModel ?? {};
   const thresholds = riskModel.thresholds ?? {};
   const weights = riskModel.weights ?? {};
+  const stageReuseSource = source.stageReuse ?? {};
+  const stageReuseRoles = Array.isArray(stageReuseSource.roles)
+    ? stageReuseSource.roles
+      .map((entry) => normalizeRoleName(entry, ''))
+      .filter((entry) => ROLE_NAMES.has(entry))
+    : [ROLE_PLANNER, ROLE_EXPLORER];
   return {
     enabled: asBoolean(source.enabled, DEFAULT_ROLE_ORCHESTRATION_ENABLED),
     mode: String(source.mode ?? 'risk-adaptive').trim().toLowerCase(),
@@ -1143,6 +1322,20 @@ function resolveRoleOrchestration(config) {
       low: normalizeRolePipeline(source.pipelines?.low, [ROLE_WORKER]),
       medium: normalizeRolePipeline(source.pipelines?.medium, [ROLE_PLANNER, ROLE_WORKER, ROLE_REVIEWER]),
       high: normalizeRolePipeline(source.pipelines?.high, [ROLE_PLANNER, ROLE_EXPLORER, ROLE_WORKER, ROLE_REVIEWER])
+    },
+    stageReuse: {
+      enabled: asBoolean(stageReuseSource.enabled, DEFAULT_STAGE_REUSE_ENABLED),
+      roles: stageReuseRoles.length > 0 ? [...new Set(stageReuseRoles)] : [ROLE_PLANNER, ROLE_EXPLORER],
+      sameRunOnly: asBoolean(stageReuseSource.sameRunOnly, DEFAULT_STAGE_REUSE_SAME_RUN_ONLY),
+      maxAgeMinutes: Math.max(0, asInteger(stageReuseSource.maxAgeMinutes, DEFAULT_STAGE_REUSE_MAX_AGE_MINUTES)),
+      requiresStablePlanHash: asBoolean(
+        stageReuseSource.requiresStablePlanHash,
+        DEFAULT_STAGE_REUSE_REQUIRES_STABLE_PLAN_HASH
+      ),
+      requiresNoScopeChange: asBoolean(
+        stageReuseSource.requiresNoScopeChange,
+        DEFAULT_STAGE_REUSE_REQUIRES_NO_SCOPE_CHANGE
+      )
     },
     riskModel: {
       thresholds: {
@@ -1283,12 +1476,17 @@ function resolvePipelineStages(assessment, config) {
   return normalizeRolePipeline(stages, [ROLE_WORKER]);
 }
 
-function ensureRoleState(state, planId, assessment, stages) {
+function ensureRoleState(state, plan, assessment, stages, config) {
   if (!state.roleState || typeof state.roleState !== 'object') {
     state.roleState = {};
   }
 
+  const planId = plan.planId;
+  const roleConfig = resolveRoleOrchestration(config);
+  const stageReuse = roleConfig.stageReuse;
   const stageKey = stages.join('>');
+  const planShapeHash = computePlanShapeHash(plan);
+  const scopeSignature = [...(plan.specTargets ?? [])].sort().join('|');
   const existing = state.roleState[planId];
   if (
     existing &&
@@ -1298,11 +1496,38 @@ function ensureRoleState(state, planId, assessment, stages) {
     return existing;
   }
 
+  const existingUpdatedAtMs = parseIsoMillis(existing?.updatedAt);
+  const maxAgeMs = Math.max(0, stageReuse.maxAgeMinutes) * 60 * 1000;
+  const ageEligible =
+    existingUpdatedAtMs != null &&
+    (maxAgeMs <= 0 || Date.now() - existingUpdatedAtMs <= maxAgeMs);
+  const shapeEligible = !stageReuse.requiresStablePlanHash || existing?.planShapeHash === planShapeHash;
+  const scopeEligible = !stageReuse.requiresNoScopeChange || existing?.scopeSignature === scopeSignature;
+  const runEligible = !stageReuse.sameRunOnly || existing?.runId === state.runId;
+
+  const completedExisting = new Set(
+    Array.isArray(existing?.completedStages)
+      ? existing.completedStages.map((entry) => normalizeRoleName(entry, ''))
+      : []
+  );
+  const reusableRoles = new Set(stageReuse.roles ?? []);
+  const reusablePrefixStages = [];
+  if (stageReuse.enabled && existing && ageEligible && shapeEligible && scopeEligible && runEligible) {
+    for (const role of stages) {
+      const normalizedRole = normalizeRoleName(role, '');
+      if (!normalizedRole || !completedExisting.has(normalizedRole) || !reusableRoles.has(normalizedRole)) {
+        break;
+      }
+      reusablePrefixStages.push(normalizedRole);
+    }
+  }
+
+  const currentIndex = Math.min(reusablePrefixStages.length, Math.max(0, stages.length - 1));
   const next = {
     stages: [...stages],
     stageKey,
-    currentIndex: 0,
-    completedStages: [],
+    currentIndex,
+    completedStages: [...new Set(reusablePrefixStages)],
     declaredRiskTier: assessment.declaredRiskTier,
     computedRiskTier: assessment.computedRiskTier,
     effectiveRiskTier: assessment.effectiveRiskTier,
@@ -1311,6 +1536,10 @@ function ensureRoleState(state, planId, assessment, stages) {
     sensitiveTagHits: assessment.sensitiveTagHits ?? [],
     sensitivePathHits: assessment.sensitivePathHits ?? [],
     reasons: assessment.reasons ?? [],
+    runId: state.runId,
+    planShapeHash,
+    scopeSignature,
+    reusedPrefixStages: [...new Set(reusablePrefixStages)],
     updatedAt: nowIso()
   };
   state.roleState[planId] = next;
@@ -1377,6 +1606,10 @@ function createInitialState(runId, requestedMode, effectiveMode) {
     validationState: {},
     evidenceState: {},
     roleState: {},
+    parallelState: {
+      activeWorkers: {},
+      lastResults: {}
+    },
     inProgress: null,
     stats: {
       promotions: 0,
@@ -1399,6 +1632,18 @@ function normalizePersistedState(state) {
     normalized.evidenceState && typeof normalized.evidenceState === 'object' ? normalized.evidenceState : {};
   normalized.roleState =
     normalized.roleState && typeof normalized.roleState === 'object' ? normalized.roleState : {};
+  normalized.parallelState =
+    normalized.parallelState && typeof normalized.parallelState === 'object'
+      ? normalized.parallelState
+      : { activeWorkers: {}, lastResults: {} };
+  normalized.parallelState.activeWorkers =
+    normalized.parallelState.activeWorkers && typeof normalized.parallelState.activeWorkers === 'object'
+      ? normalized.parallelState.activeWorkers
+      : {};
+  normalized.parallelState.lastResults =
+    normalized.parallelState.lastResults && typeof normalized.parallelState.lastResults === 'object'
+      ? normalized.parallelState.lastResults
+      : {};
   normalized.capabilities =
     normalized.capabilities && typeof normalized.capabilities === 'object'
       ? normalized.capabilities
@@ -1648,6 +1893,12 @@ async function readPlanRecord(rootDir, filePath, phase) {
     resolveSafeRepoPath(rootDir, target, `Spec-Targets entry in ${rel}`).rel
   ));
   const doneEvidence = parseListField(metadataValue(metadata, 'Done-Evidence'));
+  const atomicRoots = parseListField(metadataValue(metadata, 'Atomic-Roots')).map((entry) => (
+    resolveSafeRepoPath(rootDir, entry, `Atomic-Roots entry in ${rel}`).rel
+  ));
+  const concurrencyLocks = parseListField(metadataValue(metadata, 'Concurrency-Locks')).map((entry) => (
+    String(entry).trim().toLowerCase()
+  )).filter(Boolean);
 
   return {
     planId,
@@ -1664,6 +1915,8 @@ async function readPlanRecord(rootDir, filePath, phase) {
     tags,
     specTargets,
     doneEvidence,
+    atomicRoots,
+    concurrencyLocks,
     autonomyAllowed: metadataValue(metadata, 'Autonomy-Allowed') ?? 'both',
     riskTier: parseRiskTier(metadataValue(metadata, 'Risk-Tier'), 'low'),
     securityApproval: parseSecurityApproval(metadataValue(metadata, 'Security-Approval'), SECURITY_APPROVAL_NOT_REQUIRED),
@@ -3434,18 +3687,35 @@ function gitAvailable(rootDir) {
   return result.status === 0;
 }
 
-function parseGitPorcelainPaths(stdout) {
-  const lines = String(stdout ?? '')
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter(Boolean);
+function parseGitPorcelainZPaths(stdout) {
+  const raw = String(stdout ?? '');
+  if (!raw) {
+    return [];
+  }
+  const tokens = raw.split('\0').filter(Boolean);
+  const paths = [];
 
-  return lines.map((line) => {
-    const payload = line.slice(3).trim();
-    const renameMatch = payload.match(/^(.*)\s->\s(.*)$/);
-    const pathValue = renameMatch ? renameMatch[2] : payload;
-    return toPosix(pathValue.replace(/^"|"$/g, ''));
-  });
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.length < 4) {
+      continue;
+    }
+    const status = token.slice(0, 2);
+    const primaryPath = toPosix(token.slice(3));
+    if (primaryPath) {
+      paths.push(primaryPath);
+    }
+    const isRenameOrCopy = status.includes('R') || status.includes('C');
+    if (isRenameOrCopy && index + 1 < tokens.length) {
+      const secondaryPath = toPosix(tokens[index + 1]);
+      if (secondaryPath) {
+        paths.push(secondaryPath);
+      }
+      index += 1;
+    }
+  }
+
+  return paths;
 }
 
 function isTransientAutomationPath(pathValue) {
@@ -3455,20 +3725,103 @@ function isTransientAutomationPath(pathValue) {
   return TRANSIENT_AUTOMATION_DIR_PREFIXES.some((prefix) => pathValue.startsWith(prefix));
 }
 
+function pathMatchesRootPrefix(filePath, rootPrefix) {
+  const normalizedFile = toPosix(String(filePath ?? '').trim()).replace(/^\.?\//, '');
+  const normalizedRoot = toPosix(String(rootPrefix ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, '');
+  if (!normalizedFile || !normalizedRoot) {
+    return false;
+  }
+  return normalizedFile === normalizedRoot || normalizedFile.startsWith(`${normalizedRoot}/`);
+}
+
+function resolveAtomicCommitRoots(plan, config, paths, completionContext = {}) {
+  const policy = config?.git?.atomicCommitRoots ?? {};
+  const includePlanMetadata = asBoolean(policy.allowPlanMetadata, true);
+  const defaults = normalizeRelativePrefixList(policy.defaults);
+  const shared = normalizeRelativePrefixList(policy.shared);
+  const roots = new Set([...defaults, ...shared]);
+
+  if (includePlanMetadata) {
+    for (const root of normalizeRelativePrefixList(plan.atomicRoots ?? [])) {
+      roots.add(root);
+    }
+  }
+
+  if (plan.rel) {
+    const planRel = assertSafeRelativePlanPath(plan.rel);
+    roots.add(planRel);
+  }
+
+  const planSpecTargets =
+    Array.isArray(plan.specTargets) && plan.specTargets.length > 0
+      ? plan.specTargets
+      : ['docs/product-specs/current-state.md'];
+  for (const target of normalizeRelativePrefixList(planSpecTargets)) {
+    roots.add(target);
+  }
+
+  const completedRelCandidate = completionContext.completedRel
+    ? assertSafeRelativePlanPath(completionContext.completedRel)
+    : null;
+  if (completedRelCandidate) {
+    roots.add(completedRelCandidate);
+  }
+
+  const evidenceIndexRel = assertSafeRelativePlanPath(
+    toPosix(path.relative(paths.rootDir, path.join(paths.evidenceIndexDir, `${plan.planId}.md`)))
+  );
+  roots.add(evidenceIndexRel);
+  roots.add(assertSafeRelativePlanPath(toPosix(path.relative(paths.rootDir, path.join(paths.evidenceIndexDir, 'README.md')))));
+
+  return [...roots]
+    .map((entry) => normalizedRelativePrefix(entry))
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function dirtyRepoPaths(rootDir, options = {}) {
+  const includeTransient = asBoolean(options.includeTransient, false);
+  const result = runShellCapture('git status --porcelain=v1 -z', rootDir);
+  if (result.status !== 0) {
+    return [];
+  }
+  const paths = parseGitPorcelainZPaths(result.stdout);
+  if (includeTransient) {
+    return paths;
+  }
+  return paths.filter((entry) => !isTransientAutomationPath(entry));
+}
+
+function stagedRepoPaths(rootDir, options = {}) {
+  const includeTransient = asBoolean(options.includeTransient, false);
+  const result = runShellCapture('git diff --cached --name-only -z', rootDir);
+  if (result.status !== 0) {
+    return [];
+  }
+  const paths = String(result.stdout ?? '')
+    .split('\0')
+    .map((entry) => toPosix(String(entry ?? '').trim()))
+    .filter(Boolean);
+  if (includeTransient) {
+    return paths;
+  }
+  return paths.filter((entry) => !isTransientAutomationPath(entry));
+}
+
 function gitDirty(rootDir, options = {}) {
   const ignoreTransientAutomationArtifacts = asBoolean(options.ignoreTransientAutomationArtifacts, false);
-  const result = runShellCapture('git status --porcelain', rootDir);
+  const result = runShellCapture('git status --porcelain=v1 -z', rootDir);
   if (result.status !== 0) {
     return false;
   }
-  const dirtyPaths = parseGitPorcelainPaths(result.stdout);
+  const dirtyPaths = parseGitPorcelainZPaths(result.stdout);
   if (!ignoreTransientAutomationArtifacts) {
     return dirtyPaths.length > 0;
   }
   return dirtyPaths.some((pathValue) => !isTransientAutomationPath(pathValue));
 }
 
-function createAtomicCommit(rootDir, planId, dryRun, allowDirty) {
+function createAtomicCommit(rootDir, planId, dryRun, allowDirty, commitPolicy = {}) {
   if (dryRun) {
     return { ok: true, committed: false, commitHash: null, reason: 'dry-run' };
   }
@@ -3486,11 +3839,51 @@ function createAtomicCommit(rootDir, planId, dryRun, allowDirty) {
     return { ok: true, committed: false, commitHash: null, reason: 'git-unavailable' };
   }
 
-  if (!gitDirty(rootDir)) {
+  if (!gitDirty(rootDir, { ignoreTransientAutomationArtifacts: true })) {
     return { ok: true, committed: false, commitHash: null, reason: 'no-changes' };
   }
 
-  const add = runShellCapture('git add --all -- .', rootDir);
+  const enforceRoots = asBoolean(commitPolicy.enforceRoots, true);
+  const allowedRoots = normalizeRelativePrefixList(commitPolicy.allowedRoots);
+  if (enforceRoots && allowedRoots.length > 0) {
+    const dirtyPaths = dirtyRepoPaths(rootDir);
+    const outsideRoots = dirtyPaths.filter((entry) => !allowedRoots.some((root) => pathMatchesRootPrefix(entry, root)));
+    if (outsideRoots.length > 0) {
+      return {
+        ok: false,
+        committed: false,
+        commitHash: null,
+        reason: `Atomic root policy violation for ${planId}. Paths outside allowed roots: ${outsideRoots.join(', ')}`
+      };
+    }
+  }
+
+  const preStagedPaths = stagedRepoPaths(rootDir, { includeTransient: true });
+  const stagedTransient = preStagedPaths.filter((entry) => isTransientAutomationPath(entry));
+  if (stagedTransient.length > 0) {
+    return {
+      ok: false,
+      committed: false,
+      commitHash: null,
+      reason: `Atomic commit refused because transient runtime files are already staged: ${stagedTransient.join(', ')}`
+    };
+  }
+  if (enforceRoots && allowedRoots.length > 0) {
+    const stagedOutsideRoots = preStagedPaths.filter(
+      (entry) => !allowedRoots.some((root) => pathMatchesRootPrefix(entry, root))
+    );
+    if (stagedOutsideRoots.length > 0) {
+      return {
+        ok: false,
+        committed: false,
+        commitHash: null,
+        reason: `Atomic root policy violation for ${planId}. Staged paths outside allowed roots: ${stagedOutsideRoots.join(', ')}`
+      };
+    }
+  }
+
+  const addTargets = allowedRoots.length > 0 ? allowedRoots.map((entry) => shellQuote(entry)).join(' ') : '.';
+  const add = runShellCapture(`git add --all -- ${addTargets}`, rootDir);
   if (add.status !== 0) {
     return { ok: false, committed: false, commitHash: null, reason: 'git add failed' };
   }
@@ -3661,6 +4054,23 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
   return targetPath;
 }
 
+async function announceStageReuse(paths, state, plan, roleState, options) {
+  if (!Array.isArray(roleState?.reusedPrefixStages) || roleState.reusedPrefixStages.length === 0) {
+    return;
+  }
+  if (roleState.reuseAnnouncedAtRunId === state.runId) {
+    return;
+  }
+  roleState.reuseAnnouncedAtRunId = state.runId;
+  state.roleState[plan.planId] = roleState;
+  await logEvent(paths, state, 'role_stage_reused', {
+    planId: plan.planId,
+    reusedStages: roleState.reusedPrefixStages,
+    nextRole: roleState.stages[Math.min(roleState.currentIndex, roleState.stages.length - 1)] ?? ROLE_WORKER
+  }, options.dryRun);
+  progressLog(options, `role stage reuse ${plan.planId}: skipped ${roleState.reusedPrefixStages.join(' -> ')}`);
+}
+
 async function processPlan(plan, paths, state, options, config) {
   let lastAssessment = computeRiskAssessment(plan, state, config);
   const gate = evaluatePolicyGate(
@@ -3685,7 +4095,8 @@ async function processPlan(plan, paths, state, options, config) {
   const maxSessionsPerPlan = asInteger(options.maxSessionsPerPlan, DEFAULT_MAX_SESSIONS_PER_PLAN);
   const planStartedAt = nowIso();
   let rollovers = 0;
-  let roleState = ensureRoleState(state, plan.planId, lastAssessment, resolvePipelineStages(lastAssessment, config));
+  let roleState = ensureRoleState(state, plan, lastAssessment, resolvePipelineStages(lastAssessment, config), config);
+  await announceStageReuse(paths, state, plan, roleState, options);
 
   for (let session = 1; session <= maxSessionsPerPlan; session += 1) {
     lastAssessment = computeRiskAssessment(plan, state, config);
@@ -3704,7 +4115,8 @@ async function processPlan(plan, paths, state, options, config) {
         riskTier: lastAssessment.effectiveRiskTier
       };
     }
-    roleState = ensureRoleState(state, plan.planId, lastAssessment, resolvePipelineStages(lastAssessment, config));
+    roleState = ensureRoleState(state, plan, lastAssessment, resolvePipelineStages(lastAssessment, config), config);
+    await announceStageReuse(paths, state, plan, roleState, options);
     const stageTotal = roleState.stages.length;
     const roleIndex = Math.min(roleState.currentIndex, Math.max(0, stageTotal - 1));
     const stageIndex = roleIndex + 1;
@@ -3864,7 +4276,16 @@ async function processPlan(plan, paths, state, options, config) {
 
         let commitResult = { ok: true, committed: false, commitHash: null };
         if (asBoolean(options.commit, config.git.atomicCommits !== false)) {
-          commitResult = createAtomicCommit(paths.rootDir, plan.planId, options.dryRun, options.allowDirty);
+          commitResult = createAtomicCommit(
+            paths.rootDir,
+            plan.planId,
+            options.dryRun,
+            options.allowDirty,
+            {
+              enforceRoots: asBoolean(config.git?.atomicCommitRoots?.enforce, true),
+              allowedRoots: resolveAtomicCommitRoots(plan, config, paths, { completedRel: relocatedPlan.rel })
+            }
+          );
           if (!commitResult.ok) {
             return {
               outcome: 'failed',
@@ -4174,7 +4595,21 @@ async function processPlan(plan, paths, state, options, config) {
 
     let commitResult = { ok: true, committed: false, commitHash: null };
     if (asBoolean(options.commit, config.git.atomicCommits !== false)) {
-      commitResult = createAtomicCommit(paths.rootDir, plan.planId, options.dryRun, options.allowDirty);
+      commitResult = createAtomicCommit(
+        paths.rootDir,
+        plan.planId,
+        options.dryRun,
+        options.allowDirty,
+        {
+          enforceRoots: asBoolean(config.git?.atomicCommitRoots?.enforce, true),
+          allowedRoots: resolveAtomicCommitRoots(
+            plan,
+            config,
+            paths,
+            { completedRel: toPosix(path.relative(paths.rootDir, completedPath)) }
+          )
+        }
+      );
       if (!commitResult.ok) {
         return {
           outcome: 'failed',
@@ -4251,8 +4686,12 @@ async function runLoop(paths, state, options, config, runMode) {
       ...state.blockedPlanIds,
       ...deferredPlanIds
     ]);
-    const executable = executablePlans(catalog.active, completedIds, failedOrBlockedIds);
-    const blockedByDependency = blockedPlans(catalog.active, completedIds, failedOrBlockedIds);
+    let executable = executablePlans(catalog.active, completedIds, failedOrBlockedIds);
+    let blockedByDependency = blockedPlans(catalog.active, completedIds, failedOrBlockedIds);
+    if (options.planId) {
+      executable = executable.filter((plan) => matchesPlanIdFilter(plan, options.planId));
+      blockedByDependency = blockedByDependency.filter((plan) => matchesPlanIdFilter(plan, options.planId));
+    }
 
     state.queue = executable.map((plan) => plan.planId);
     await saveState(paths, state, options.dryRun);
@@ -4351,6 +4790,563 @@ async function runLoop(paths, state, options, config, runMode) {
   return processed;
 }
 
+function planDependenciesReady(plan, completedPlanIds) {
+  return (plan.dependencies ?? []).every((dependency) => completedPlanIds.has(dependency));
+}
+
+function schedulerLocksForPlan(plan) {
+  const locks = new Set();
+  for (const lock of Array.isArray(plan.concurrencyLocks) ? plan.concurrencyLocks : []) {
+    locks.add(`custom:${String(lock).trim().toLowerCase()}`);
+  }
+  const targets =
+    Array.isArray(plan.specTargets) && plan.specTargets.length > 0
+      ? plan.specTargets
+      : ['docs/product-specs/current-state.md'];
+  for (const target of targets) {
+    locks.add(`spec:${target}`);
+  }
+  if (targets.includes('docs/product-specs/current-state.md')) {
+    locks.add('shared:product-spec-current-state');
+  }
+  return [...locks].sort((a, b) => a.localeCompare(b));
+}
+
+function selectParallelDispatchBatch(candidates, activeLocks, maxToSelect) {
+  const selected = [];
+  const localLocks = new Set(activeLocks);
+  for (const plan of candidates) {
+    if (selected.length >= maxToSelect) {
+      break;
+    }
+    const planLocks = schedulerLocksForPlan(plan);
+    const conflicts = planLocks.some((entry) => localLocks.has(entry));
+    if (conflicts) {
+      continue;
+    }
+    selected.push(plan);
+    for (const lock of planLocks) {
+      localLocks.add(lock);
+    }
+  }
+  return selected;
+}
+
+function parallelWorkerRunId(runId, planId) {
+  return `${runId}-${planId}`.replace(/[^a-zA-Z0-9._-]/g, '-');
+}
+
+function replaceParallelCommandTokens(template, details) {
+  return String(template)
+    .replaceAll('{plan_id}', details.planId)
+    .replaceAll('{branch}', details.branchName)
+    .replaceAll('{base_ref}', details.baseRef)
+    .replaceAll('{git_remote}', details.gitRemote)
+    .replaceAll('{run_id}', details.runId)
+    .replaceAll('{head_sha}', details.headSha ?? '')
+    .replaceAll('{worktree}', details.worktreeDir);
+}
+
+function buildParallelWorkerCommand(plan, state, options, parallelOptions) {
+  const args = [
+    'node',
+    './scripts/automation/orchestrator.mjs',
+    'run',
+    '--mode',
+    state.effectiveMode,
+    '--max-plans',
+    '1',
+    '--skip-promotion',
+    'true',
+    '--plan-id',
+    plan.planId,
+    '--run-id',
+    parallelWorkerRunId(state.runId, plan.planId),
+    '--parallel-plans',
+    '1',
+    '--max-rollovers',
+    String(asInteger(options.maxRollovers, DEFAULT_MAX_ROLLOVERS)),
+    '--max-sessions-per-plan',
+    String(asInteger(options.maxSessionsPerPlan, DEFAULT_MAX_SESSIONS_PER_PLAN)),
+    '--context-threshold',
+    String(asInteger(options.contextThreshold, DEFAULT_CONTEXT_THRESHOLD)),
+    '--require-result-payload',
+    String(asBoolean(options.requireResultPayload, DEFAULT_REQUIRE_RESULT_PAYLOAD)),
+    '--output',
+    parallelOptions.workerOutputMode,
+    '--failure-tail-lines',
+    String(asInteger(options.failureTailLines, DEFAULT_FAILURE_TAIL_LINES)),
+    '--heartbeat-seconds',
+    String(asInteger(options.heartbeatSeconds, DEFAULT_HEARTBEAT_SECONDS)),
+    '--stall-warn-seconds',
+    String(asInteger(options.stallWarnSeconds, DEFAULT_STALL_WARN_SECONDS)),
+    '--commit',
+    String(asBoolean(options.commit, true)),
+    '--allow-dirty',
+    'false'
+  ];
+  if (options.dryRun) {
+    args.push('--dry-run', 'true');
+  }
+  return args.map((entry) => shellQuote(entry)).join(' ');
+}
+
+async function prepareParallelWorktree(paths, parallelOptions, plan, state, options) {
+  const runToken = sanitizeBranchToken(state.runId) || `run-${Date.now()}`;
+  const planToken = sanitizeBranchToken(plan.planId) || `plan-${Date.now()}`;
+  const branchName = `${parallelOptions.branchPrefix}/${runToken}/${planToken}`;
+  const worktreeDir = path.join(paths.rootDir, parallelOptions.worktreeRoot, `${runToken}-${planToken}`);
+
+  if (!options.dryRun) {
+    await fs.mkdir(path.dirname(worktreeDir), { recursive: true });
+    if (await exists(worktreeDir)) {
+      await fs.rm(worktreeDir, { recursive: true, force: true });
+    }
+    try {
+      const add = runShellCapture(
+        `git worktree add --detach ${shellQuote(worktreeDir)} ${shellQuote(parallelOptions.baseRef)}`,
+        paths.rootDir
+      );
+      if (add.status !== 0) {
+        throw new Error(`Failed to create worktree for ${plan.planId}. ${tailLines(executionOutput(add), 5)}`);
+      }
+      const checkout = runShellCapture(
+        `git -C ${shellQuote(worktreeDir)} checkout -B ${shellQuote(branchName)}`,
+        paths.rootDir
+      );
+      if (checkout.status !== 0) {
+        throw new Error(`Failed to create branch ${branchName} for ${plan.planId}. ${tailLines(executionOutput(checkout), 5)}`);
+      }
+    } catch (error) {
+      runShellCapture(`git worktree remove --force ${shellQuote(worktreeDir)}`, paths.rootDir);
+      throw error;
+    }
+  }
+
+  return {
+    branchName,
+    worktreeDir
+  };
+}
+
+async function cleanupParallelWorktree(paths, worktreeDir, options) {
+  if (options.dryRun) {
+    return { ok: true, reason: null };
+  }
+  const remove = runShellCapture(`git worktree remove --force ${shellQuote(worktreeDir)}`, paths.rootDir);
+  if (remove.status !== 0) {
+    const prune = runShellCapture('git worktree prune', paths.rootDir);
+    if (prune.status === 0) {
+      return {
+        ok: false,
+        reason: `worktree cleanup failed but prune succeeded for ${worktreeDir}: ${tailLines(executionOutput(remove), 5)}`
+      };
+    }
+    return {
+      ok: false,
+      reason:
+        `worktree cleanup failed for ${worktreeDir}: ${tailLines(executionOutput(remove), 5)}; ` +
+        `prune failed: ${tailLines(executionOutput(prune), 5)}`
+    };
+  }
+  return { ok: true, reason: null };
+}
+
+async function runParallelWorkerPlan(plan, paths, state, options, config, parallelOptions) {
+  let prepared = null;
+  let execution = { status: 0, error: null, stdout: '', stderr: '' };
+  let result = null;
+  try {
+    prepared = await prepareParallelWorktree(paths, parallelOptions, plan, state, options);
+    const workerRunId = parallelWorkerRunId(state.runId, plan.planId);
+    const workerCommand = buildParallelWorkerCommand(plan, state, options, parallelOptions);
+    const baseShaResult = options.dryRun
+      ? { status: 0, stdout: '' }
+      : runShellCapture(`git -C ${shellQuote(prepared.worktreeDir)} rev-parse HEAD`, paths.rootDir);
+    const baseSha = baseShaResult.status === 0 ? String(baseShaResult.stdout ?? '').trim() : null;
+
+    if (!options.dryRun) {
+      execution = await runShellMonitored(
+        workerCommand,
+        prepared.worktreeDir,
+        process.env,
+        undefined,
+        'pipe',
+        options,
+        { phase: 'parallel-worker', planId: plan.planId, role: 'worker', activity: 'branch-execution' }
+      );
+    }
+
+    let workerState = null;
+    const workerStatePath = path.join(prepared.worktreeDir, 'docs', 'ops', 'automation', 'run-state.json');
+    if (!options.dryRun && execution.status === 0) {
+      if (!(await exists(workerStatePath))) {
+        throw new Error(`Worker run-state missing for ${plan.planId}: ${toPosix(path.relative(paths.rootDir, workerStatePath))}`);
+      }
+      workerState = await readJsonStrict(workerStatePath);
+    } else {
+      workerState = await readJsonIfExists(workerStatePath, null);
+    }
+    const completed = new Set(Array.isArray(workerState?.completedPlanIds) ? workerState.completedPlanIds : []);
+    const failed = new Set(Array.isArray(workerState?.failedPlanIds) ? workerState.failedPlanIds : []);
+    const blocked = new Set(Array.isArray(workerState?.blockedPlanIds) ? workerState.blockedPlanIds : []);
+
+    const headShaResult = options.dryRun
+      ? { status: 0, stdout: '' }
+      : runShellCapture(`git -C ${shellQuote(prepared.worktreeDir)} rev-parse HEAD`, paths.rootDir);
+    const headSha = headShaResult.status === 0 ? String(headShaResult.stdout ?? '').trim() : null;
+    const committed = Boolean(baseSha && headSha && baseSha !== headSha);
+
+    let outcome = 'pending';
+    let reason = 'branch worker pending';
+    if (completed.has(plan.planId)) {
+      outcome = 'completed';
+      reason = 'completed in branch worker';
+    } else if (failed.has(plan.planId) || execution.status !== 0) {
+      outcome = 'failed';
+      reason = execution.status !== 0
+        ? `branch worker failed (exit ${execution.status ?? 'n/a'}): ${tailLines(executionOutput(execution), 8)}`
+        : 'branch worker marked failed';
+    } else if (blocked.has(plan.planId)) {
+      outcome = 'blocked';
+      reason = 'blocked in branch worker';
+    } else if (execution.status === 0 && !options.dryRun) {
+      outcome = 'failed';
+      reason = 'branch worker exited 0 but did not report terminal plan outcome in run-state';
+    }
+
+    if (!options.dryRun && committed && parallelOptions.pushBranches) {
+      const push = runShellCapture(
+        `git push -u ${shellQuote(parallelOptions.gitRemote)} ${shellQuote(prepared.branchName)}`,
+        prepared.worktreeDir
+      );
+      if (push.status !== 0) {
+        outcome = 'failed';
+        reason = `branch push failed: ${tailLines(executionOutput(push), 8)}`;
+      }
+    }
+
+    if (
+      !options.dryRun &&
+      committed &&
+      parallelOptions.openPullRequests &&
+      parallelOptions.pullRequest.createCommand
+    ) {
+      const prCommand = replaceParallelCommandTokens(parallelOptions.pullRequest.createCommand, {
+        planId: plan.planId,
+        branchName: prepared.branchName,
+        baseRef: parallelOptions.baseRef,
+        gitRemote: parallelOptions.gitRemote,
+        runId: workerRunId,
+        headSha,
+        worktreeDir: prepared.worktreeDir
+      });
+      const pr = runShellCapture(prCommand, prepared.worktreeDir);
+      if (pr.status !== 0) {
+        outcome = 'failed';
+        reason = `PR creation failed: ${tailLines(executionOutput(pr), 8)}`;
+      }
+      if (pr.status === 0 && parallelOptions.pullRequest.mergeCommand) {
+        const mergeCommand = replaceParallelCommandTokens(parallelOptions.pullRequest.mergeCommand, {
+          planId: plan.planId,
+          branchName: prepared.branchName,
+          baseRef: parallelOptions.baseRef,
+          gitRemote: parallelOptions.gitRemote,
+          runId: workerRunId,
+          headSha,
+          worktreeDir: prepared.worktreeDir
+        });
+        const merge = runShellCapture(mergeCommand, prepared.worktreeDir);
+        if (merge.status !== 0) {
+          outcome = 'failed';
+          reason = `PR merge/queue command failed: ${tailLines(executionOutput(merge), 8)}`;
+        }
+      }
+    }
+
+    result = {
+      planId: plan.planId,
+      planFile: plan.rel,
+      outcome,
+      branchName: prepared.branchName,
+      worktreeDir: prepared.worktreeDir,
+      runId: workerRunId,
+      committed,
+      baseSha,
+      headSha,
+      reason,
+      exitCode: execution.status
+    };
+    return result;
+  } finally {
+    if (prepared && !parallelOptions.keepWorktrees) {
+      const cleanup = await cleanupParallelWorktree(paths, prepared.worktreeDir, options);
+      if (!cleanup.ok) {
+        if (result) {
+          result.cleanupWarning = cleanup.reason;
+        } else if (!execution || execution.status === 0) {
+          throw new Error(cleanup.reason || `worktree cleanup failed for ${prepared.worktreeDir}`);
+        }
+      }
+    }
+  }
+}
+
+async function runParallelCommand(paths, options) {
+  const config = await loadConfig(paths);
+  Object.assign(options, resolveRuntimeExecutorOptions(options, config));
+  const parallelOptions = resolveParallelExecutionOptions(options, config);
+  if (parallelOptions.parallelPlans <= 1) {
+    return runCommand(paths, options);
+  }
+
+  if (!gitAvailable(paths.rootDir)) {
+    throw new Error('Parallel execution requires git (worktree/branch mode).');
+  }
+  if (asBoolean(options.allowDirty, false) && asBoolean(options.commit, config.git.atomicCommits !== false)) {
+    throw new Error('Refusing --allow-dirty true with --commit true. Disable commits or start from a clean worktree.');
+  }
+  if (
+    !asBoolean(options.allowDirty, false) &&
+    gitDirty(paths.rootDir, { ignoreTransientAutomationArtifacts: true })
+  ) {
+    throw new Error('Refusing parallel execution with dirty git worktree.');
+  }
+
+  const modeResolution = resolveEffectiveMode(options.mode);
+  const runId = options.runId || randomRunId();
+  const state = createInitialState(runId, modeResolution.requestedMode, modeResolution.effectiveMode);
+  state.capabilities = await detectCapabilities();
+
+  assertExecutorConfigured(options, config);
+  assertValidationConfigured(options, config, paths);
+
+  await ensureDirectories(paths, options.dryRun);
+  await acquireRunLock(paths, state, options);
+  await saveState(paths, state, options.dryRun);
+
+  try {
+    await logEvent(paths, state, 'run_started_parallel', {
+      requestedMode: modeResolution.requestedMode,
+      effectiveMode: modeResolution.effectiveMode,
+      parallelPlans: parallelOptions.parallelPlans,
+      branchPrefix: parallelOptions.branchPrefix,
+      baseRef: parallelOptions.baseRef,
+      worktreeRoot: parallelOptions.worktreeRoot
+    }, options.dryRun);
+
+    if (!asBoolean(options.skipPromotion, false)) {
+      const promoted = await promoteFuturePlans(paths, state, options);
+      if (promoted > 0) {
+        progressLog(options, `promoted ${promoted} future plan(s) into docs/exec-plans/active.`);
+      }
+    }
+
+    const catalog = await collectPlanCatalog(paths);
+    reconcileOutcomeTracking(state, catalog);
+
+    let candidates = catalog.active
+      .filter((plan) => ACTIVE_STATUSES.has(plan.status))
+      .filter((plan) => plan.status !== 'failed' && plan.status !== 'blocked' && plan.status !== 'completed')
+      .sort((a, b) => {
+        const priorityDelta = priorityOrder(a.priority) - priorityOrder(b.priority);
+        if (priorityDelta !== 0) return priorityDelta;
+        return a.rel.localeCompare(b.rel);
+      });
+    if (options.planId) {
+      candidates = candidates.filter((plan) => matchesPlanIdFilter(plan, options.planId));
+    }
+    const maxPlans = asInteger(options.maxPlans, Number.MAX_SAFE_INTEGER);
+    if (Number.isFinite(maxPlans)) {
+      candidates = candidates.slice(0, maxPlans);
+    }
+
+    const completedForScheduling = new Set([...state.completedPlanIds, ...catalog.completed.map((plan) => plan.planId)]);
+    const pending = new Map(candidates.map((plan) => [plan.planId, plan]));
+    const launched = new Set();
+    const active = new Map();
+    const activeLocks = new Map();
+    const dependencyWaitCache = new Map();
+    const outcomeSummary = {
+      completed: 0,
+      blocked: 0,
+      failed: 0,
+      pending: 0
+    };
+    let processed = 0;
+    state.parallelState.activeWorkers = {};
+
+    while ((launched.size < pending.size || active.size > 0) && processed < maxPlans) {
+      const waiting = [...pending.values()]
+        .filter((plan) => !launched.has(plan.planId))
+        .filter((plan) => !planDependenciesReady(plan, completedForScheduling));
+      for (const blocked of waiting) {
+        const missingDependencies = blocked.dependencies.filter((dependency) => !completedForScheduling.has(dependency));
+        const cacheValue = missingDependencies.slice().sort().join(',');
+        if (dependencyWaitCache.get(blocked.planId) === cacheValue) {
+          continue;
+        }
+        dependencyWaitCache.set(blocked.planId, cacheValue);
+        await logEvent(paths, state, 'plan_waiting_dependency_parallel', {
+          planId: blocked.planId,
+          missingDependencies
+        }, options.dryRun);
+      }
+
+      const ready = [...pending.values()]
+        .filter((plan) => !launched.has(plan.planId))
+        .filter((plan) => planDependenciesReady(plan, completedForScheduling));
+      const remainingBudget = Math.max(0, maxPlans - launched.size);
+      const freeSlots = Math.max(0, Math.min(parallelOptions.parallelPlans - active.size, remainingBudget));
+      state.queue = ready.map((plan) => plan.planId);
+      await saveState(paths, state, options.dryRun);
+      if (freeSlots > 0 && ready.length > 0) {
+        const reservedLocks = new Set([...activeLocks.values()].flat());
+        const batch = selectParallelDispatchBatch(ready, reservedLocks, freeSlots);
+        for (const plan of batch) {
+          launched.add(plan.planId);
+          const locks = schedulerLocksForPlan(plan);
+          activeLocks.set(plan.planId, locks);
+          progressLog(options, `parallel worker start ${plan.planId}`);
+          await logEvent(paths, state, 'parallel_worker_started', {
+            planId: plan.planId,
+            planFile: plan.rel,
+            branchPrefix: parallelOptions.branchPrefix,
+            locks
+          }, options.dryRun);
+          state.parallelState.activeWorkers[plan.planId] = {
+            planId: plan.planId,
+            planFile: plan.rel,
+            branchPrefix: parallelOptions.branchPrefix,
+            startedAt: nowIso(),
+            locks
+          };
+          const workerPromise = runParallelWorkerPlan(plan, paths, state, options, config, parallelOptions)
+            .then((result) => ({ ...result }))
+            .catch((error) => ({
+              planId: plan.planId,
+              planFile: plan.rel,
+              outcome: 'failed',
+              reason: error instanceof Error ? error.message : String(error),
+              committed: false,
+              branchName: null,
+              worktreeDir: null,
+              runId: parallelWorkerRunId(state.runId, plan.planId),
+              baseSha: null,
+              headSha: null,
+              exitCode: 1
+            }));
+          active.set(plan.planId, workerPromise);
+        }
+        await saveState(paths, state, options.dryRun);
+      }
+
+      if (active.size === 0) {
+        const unresolved = [...pending.values()].filter((plan) => !launched.has(plan.planId));
+        for (const unresolvedPlan of unresolved) {
+          const missingDependencies = unresolvedPlan.dependencies.filter(
+            (dependency) => !completedForScheduling.has(dependency)
+          );
+          await logEvent(paths, state, 'plan_unscheduled_parallel', {
+            planId: unresolvedPlan.planId,
+            reason:
+              missingDependencies.length > 0
+                ? 'dependencies-not-integrated'
+                : 'conflict-locks-or-budget',
+            missingDependencies
+          }, options.dryRun);
+        }
+        break;
+      }
+
+      const nextFinished = await Promise.race(
+        [...active.entries()].map(([planId, promise]) => promise.then((result) => ({ planId, result })))
+      );
+      active.delete(nextFinished.planId);
+      activeLocks.delete(nextFinished.planId);
+      delete state.parallelState.activeWorkers[nextFinished.planId];
+      processed += 1;
+
+      const result = nextFinished.result;
+      const plan = pending.get(result.planId);
+      if (!plan) {
+        continue;
+      }
+
+      if (result.outcome === 'completed') {
+        outcomeSummary.completed += 1;
+        if (parallelOptions.assumeDependencyCompletion) {
+          completedForScheduling.add(plan.planId);
+        }
+        await logEvent(paths, state, 'plan_completed_parallel', {
+          planId: plan.planId,
+          branch: result.branchName,
+          committed: result.committed,
+          headSha: result.headSha,
+          cleanupWarning: result.cleanupWarning ?? null
+        }, options.dryRun);
+      } else if (result.outcome === 'blocked') {
+        outcomeSummary.blocked += 1;
+        await logEvent(paths, state, 'plan_blocked_parallel', {
+          planId: plan.planId,
+          branch: result.branchName,
+          reason: result.reason,
+          cleanupWarning: result.cleanupWarning ?? null
+        }, options.dryRun);
+      } else if (result.outcome === 'failed') {
+        outcomeSummary.failed += 1;
+        await logEvent(paths, state, 'plan_failed_parallel', {
+          planId: plan.planId,
+          branch: result.branchName,
+          reason: result.reason,
+          cleanupWarning: result.cleanupWarning ?? null
+        }, options.dryRun);
+      } else {
+        outcomeSummary.pending += 1;
+        await logEvent(paths, state, 'plan_pending_parallel', {
+          planId: plan.planId,
+          branch: result.branchName,
+          reason: result.reason,
+          cleanupWarning: result.cleanupWarning ?? null
+        }, options.dryRun);
+      }
+      state.parallelState.lastResults[plan.planId] = {
+        outcome: result.outcome,
+        reason: result.reason ?? null,
+        branch: result.branchName ?? null,
+        headSha: result.headSha ?? null,
+        cleanupWarning: result.cleanupWarning ?? null,
+        finishedAt: nowIso()
+      };
+      progressLog(options, `parallel worker end ${plan.planId} outcome=${result.outcome}`);
+      await saveState(paths, state, options.dryRun);
+    }
+
+    const unresolvedNotLaunched = [...pending.values()].filter((plan) => !launched.has(plan.planId)).length;
+    state.queue = [...pending.values()].filter((plan) => !launched.has(plan.planId)).map((plan) => plan.planId);
+    state.parallelState.activeWorkers = {};
+    if (unresolvedNotLaunched > 0) {
+      outcomeSummary.pending += unresolvedNotLaunched;
+    }
+
+    const runDurationSeconds = durationSeconds(state.startedAt);
+    await logEvent(paths, state, 'run_finished_parallel', {
+      processedPlans: processed,
+      branchCompletedPlans: outcomeSummary.completed,
+      branchBlockedPlans: outcomeSummary.blocked,
+      branchFailedPlans: outcomeSummary.failed,
+      branchPendingPlans: outcomeSummary.pending,
+      unlaunchedPlans: unresolvedNotLaunched,
+      durationSeconds: runDurationSeconds,
+      parallelPlans: parallelOptions.parallelPlans
+    }, options.dryRun);
+    await saveState(paths, state, options.dryRun);
+    printParallelRunSummary(options, state, processed, runDurationSeconds, outcomeSummary);
+  } finally {
+    await releaseRunLock(paths, options);
+  }
+}
+
 async function runCommand(paths, options) {
   const config = await loadConfig(paths);
   Object.assign(options, resolveRuntimeExecutorOptions(options, config));
@@ -4393,7 +5389,8 @@ async function runCommand(paths, options) {
       roleOrchestration: {
         enabled: roleConfig.enabled,
         mode: roleConfig.mode,
-        pipelines: roleConfig.pipelines
+        pipelines: roleConfig.pipelines,
+        stageReuse: roleConfig.stageReuse
       }
     }, options.dryRun);
 
@@ -4455,6 +5452,13 @@ async function resumeCommand(paths, options) {
 
   const state = normalizePersistedState(persisted);
   state.capabilities = await detectCapabilities();
+  if (
+    !asBoolean(options.allowDirty, false) &&
+    gitAvailable(paths.rootDir) &&
+    gitDirty(paths.rootDir, { ignoreTransientAutomationArtifacts: true })
+  ) {
+    throw new Error('Refusing to resume with a dirty git worktree. Use --allow-dirty true to override.');
+  }
   assertExecutorConfigured(options, config);
   assertValidationConfigured(options, config, paths);
   await ensureDirectories(paths, options.dryRun);
@@ -4473,7 +5477,8 @@ async function resumeCommand(paths, options) {
       roleOrchestration: {
         enabled: roleConfig.enabled,
         mode: roleConfig.mode,
-        pipelines: roleConfig.pipelines
+        pipelines: roleConfig.pipelines,
+        stageReuse: roleConfig.stageReuse
       }
     }, options.dryRun);
     progressLog(
@@ -4641,6 +5646,7 @@ async function main() {
     ...rawOptions,
     mode: rawOptions.mode ?? 'guarded',
     maxPlans: asInteger(rawOptions['max-plans'] ?? rawOptions.maxPlans, Number.MAX_SAFE_INTEGER),
+    parallelPlans: asInteger(rawOptions['parallel-plans'] ?? rawOptions.parallelPlans, DEFAULT_PARALLEL_PLANS),
     contextThreshold: asInteger(rawOptions['context-threshold'] ?? rawOptions.contextThreshold, null),
     requireResultPayload: rawOptions['require-result-payload'] ?? rawOptions.requireResultPayload,
     handoffTokenBudget: asInteger(rawOptions['handoff-token-budget'] ?? rawOptions.handoffTokenBudget, DEFAULT_HANDOFF_TOKEN_BUDGET),
@@ -4669,7 +5675,16 @@ async function main() {
   const paths = buildPaths(rootDir);
 
   if (command === 'run') {
+    if (asInteger(options.parallelPlans, DEFAULT_PARALLEL_PLANS) > 1) {
+      await runParallelCommand(paths, options);
+      return;
+    }
     await runCommand(paths, options);
+    return;
+  }
+
+  if (command === 'run-parallel') {
+    await runParallelCommand(paths, options);
     return;
   }
 

@@ -25,8 +25,6 @@ Source of Truth: This document.
 
 ## Validation Baseline
 
-- `npm run docs:verify`
-- `npm run architecture:verify`
-- `npm run agent:verify`
-- `npm run plans:verify`
+- `npm run verify:fast`
+- `npm run verify:full`
 - Focused tests for critical reliability-sensitive paths.
