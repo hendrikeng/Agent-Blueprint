@@ -23,6 +23,28 @@ Use the least ceremony required for the risk profile:
 2. `Guarded`: sequential orchestration with risk routing and approval gates.
 3. `Conveyor`: parallel/worktree orchestration with optional branch/PR automation.
 
+## Mermaid Diagram Of Orchestration Flow
+
+```mermaid
+flowchart TD
+  A[Task intake / Plan document] --> B[Parse metadata: scope, deps, risk, autonomy]
+  B --> C[Compute effective risk tier]
+  C --> D{Risk tier}
+  D -->|low| E[Worker stage]
+  D -->|medium| F[Planner -> Worker -> Reviewer]
+  D -->|high| G[Planner -> Explorer -> Worker -> Reviewer]
+
+  E --> H[Completion gate: is plan marked complete?]
+  F --> H
+  G --> H
+
+  H -->|Not complete| I[Continue sessions / handoff when context low]
+  H -->|Complete| J[Run validation lanes]
+  J --> K[Curate evidence + write evidence index]
+  K --> L[Finalize: move plan to completed + snapshot]
+  L --> M[Optional atomic commit / PR workflow]
+```
+
 ## Lite Quickstart
 
 Start with the lowest-overhead path first:
