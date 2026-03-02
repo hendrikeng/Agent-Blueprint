@@ -271,6 +271,7 @@ Executor commands should use these outcomes:
 - `pending` keeps work in the active implementation role instead of auto-advancing the full pipeline; reviewer `pending` routes back to worker for fixes.
 - Planner/explorer `pending` with implementation-handoff reasons (for example, read-only constraints or implementation still pending) auto-advances to the next stage to avoid no-op loops.
 - Repeated identical `pending` signals for the same role fail fast in-run so orchestration does not spin on no-progress loops.
+- `blocked` / `failed` / `pending` outcomes print concrete `next steps` guidance with a ready-to-run `automation:resume` command.
 - `blocked` remains reserved for external/manual gates; `failed` remains a validation/execution failure signal.
 - When a plan completes, `Done-Evidence` points to its canonical evidence index file.
 - During curation, removed evidence paths are automatically rewritten in plan docs to the retained canonical reference.

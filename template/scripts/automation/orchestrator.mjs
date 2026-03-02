@@ -1649,6 +1649,73 @@ function pendingSignalSignature(role, nextRole, reason) {
   return `${normalizedRole}->${normalizedNextRole}|${normalizedReason}`;
 }
 
+function approvalEnvPrefixForRiskTier(riskTier) {
+  const normalized = parseRiskTier(riskTier, 'low');
+  if (normalized === 'high') {
+    return 'ORCH_APPROVED_MEDIUM=1 ORCH_APPROVED_HIGH=1 ';
+  }
+  if (normalized === 'medium') {
+    return 'ORCH_APPROVED_MEDIUM=1 ';
+  }
+  return '';
+}
+
+function suggestedResumeCommand(state, riskTier) {
+  const mode = String(state?.effectiveMode ?? 'guarded').trim() || 'guarded';
+  return `${approvalEnvPrefixForRiskTier(riskTier)}npm run automation:resume -- --mode ${mode} --retry-failed true --auto-unblock true --max-plans 1 --allow-dirty true`;
+}
+
+function deriveOutcomeNextSteps(plan, outcome, state, config, riskTier) {
+  const status = String(outcome?.outcome ?? '').trim().toLowerCase();
+  const reason = String(outcome?.reason ?? '').trim();
+  const reasonLower = reason.toLowerCase();
+  const steps = [];
+  const resumeCommand = suggestedResumeCommand(state, riskTier);
+  const securityApprovalField =
+    resolveRoleOrchestration(config).approvalGates.securityApprovalMetadataField || 'Security-Approval';
+
+  if (status === 'blocked') {
+    if (reasonLower.includes('security approval required')) {
+      steps.push(`Set '${securityApprovalField}: approved' in the active plan metadata.`);
+      steps.push(`Resume: ${resumeCommand}`);
+      return steps;
+    }
+    if (reasonLower.includes('dependency')) {
+      steps.push('Complete missing dependency plans first, then resume.');
+      steps.push(`Resume: ${resumeCommand}`);
+      return steps;
+    }
+    steps.push('Run `npm run automation:audit -- --json true` to inspect blocker details.');
+    steps.push(`Resume: ${resumeCommand}`);
+    return steps;
+  }
+
+  if (status === 'failed') {
+    if (reasonLower.includes('executor exited with status') || reasonLower.includes('executor failed')) {
+      steps.push(`Inspect latest session logs in docs/ops/automation/runtime/${state.runId}/.`);
+    }
+    if (reasonLower.includes('atomic root policy violation')) {
+      steps.push('Stage only plan-scoped files (or run with `--commit false`) while unrelated workspace changes exist.');
+    }
+    steps.push(`Retry: ${resumeCommand}`);
+    return steps;
+  }
+
+  if (status === 'pending') {
+    if (reasonLower.includes('repeated pending signal without progress')) {
+      steps.push('Update the active plan with one concrete worker action (or mark current role stage complete) before retry.');
+    } else if (reasonLower.includes('maximum sessions reached without completion')) {
+      steps.push('Narrow to one implementation slice, then resume.');
+    } else if (reasonLower.includes('host validation pending')) {
+      steps.push('Run required host validations (for example `npm run verify:full`) and resume.');
+    }
+    steps.push(`Continue: ${resumeCommand}`);
+    return steps;
+  }
+
+  return steps;
+}
+
 function requiresSecurityApproval(plan, assessment, config) {
   const roleConfig = resolveRoleOrchestration(config);
   if (!roleConfig.enabled) {
@@ -5197,24 +5264,53 @@ async function runLoop(paths, state, options, config, runMode) {
       }, options.dryRun);
       progressLog(options, `plan completed ${nextPlan.planId}`);
     } else if (outcome.outcome === 'blocked') {
+      const nextSteps = deriveOutcomeNextSteps(
+        nextPlan,
+        outcome,
+        state,
+        config,
+        outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
+      );
       if (!state.blockedPlanIds.includes(nextPlan.planId)) {
         state.blockedPlanIds.push(nextPlan.planId);
       }
       progressLog(options, `blocked ${nextPlan.planId}: ${outcome.reason}`);
+      if (nextSteps.length > 0) {
+        progressLog(options, `next steps ${nextPlan.planId}: ${nextSteps.join(' | ')}`);
+      }
       await logEvent(paths, state, 'plan_blocked', {
         planId: nextPlan.planId,
         reason: outcome.reason,
-        riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
+        riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier,
+        nextSteps
       }, options.dryRun);
     } else if (outcome.outcome === 'pending') {
+      const nextSteps = deriveOutcomeNextSteps(
+        nextPlan,
+        outcome,
+        state,
+        config,
+        outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
+      );
       deferredPlanIds.add(nextPlan.planId);
       await logEvent(paths, state, 'plan_pending', {
         planId: nextPlan.planId,
         reason: outcome.reason,
-        riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
+        riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier,
+        nextSteps
       }, options.dryRun);
       progressLog(options, `plan pending ${nextPlan.planId}: ${outcome.reason}`);
+      if (nextSteps.length > 0) {
+        progressLog(options, `next steps ${nextPlan.planId}: ${nextSteps.join(' | ')}`);
+      }
     } else {
+      const nextSteps = deriveOutcomeNextSteps(
+        nextPlan,
+        outcome,
+        state,
+        config,
+        outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
+      );
       delete state.roleState[nextPlan.planId];
       registerPlanFailureAttempt(state, nextPlan.planId, outcome.reason ?? 'unknown failure');
       if (!state.failedPlanIds.includes(nextPlan.planId)) {
@@ -5223,9 +5319,13 @@ async function runLoop(paths, state, options, config, runMode) {
       await logEvent(paths, state, 'plan_failed', {
         planId: nextPlan.planId,
         reason: outcome.reason,
-        riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
+        riskTier: outcome.riskTier ?? nextPlanRisk.effectiveRiskTier,
+        nextSteps
       }, options.dryRun);
       progressLog(options, `plan failed ${nextPlan.planId}: ${outcome.reason}`);
+      if (nextSteps.length > 0) {
+        progressLog(options, `next steps ${nextPlan.planId}: ${nextSteps.join(' | ')}`);
+      }
     }
 
     await saveState(paths, state, options.dryRun);
