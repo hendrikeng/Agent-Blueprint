@@ -5392,8 +5392,11 @@ async function runParallelWorkerPlan(plan, paths, state, options, config, parall
       outcome = 'blocked';
       reason = 'blocked in branch worker';
     } else if (execution.status === 0 && !options.dryRun) {
-      outcome = 'failed';
-      reason = 'branch worker exited 0 but did not report terminal plan outcome in run-state';
+      const outputTail = tailLines(executionOutput(execution), 8);
+      outcome = 'pending';
+      reason = outputTail
+        ? `branch worker exited 0 without terminal plan outcome; treated as pending. output: ${outputTail}`
+        : 'branch worker exited 0 without terminal plan outcome; treated as pending';
     }
 
     if (!options.dryRun && committed && parallelOptions.pushBranches) {
