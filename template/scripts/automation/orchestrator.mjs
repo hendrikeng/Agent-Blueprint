@@ -3218,22 +3218,6 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     });
   }
 
-  if (
-    normalizedStatus === 'completed' &&
-    hasContextRemaining &&
-    contextRemaining <= options.contextThreshold
-  ) {
-    return withSessionTouchSummary({
-      status: 'handoff_required',
-      reason: `contextRemaining (${contextRemaining}) at/below threshold (${options.contextThreshold})`,
-      summary: resultPayload.summary ?? '',
-      role,
-      provider: roleProfile.provider,
-      model: roleProfile.model || null,
-      sessionLogPath
-    });
-  }
-
   return withSessionTouchSummary({
     status: normalizedStatus,
     reason: resultPayload.reason ?? null,
