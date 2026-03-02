@@ -848,14 +848,58 @@ function formatTouchSummaryDetails(summary) {
   return `touched=${payload.count} categories=[${categories}] sample=[${samples}]`;
 }
 
-function monitorTouchedPaths(cwd, baselineSet, options = {}) {
-  if (!(baselineSet instanceof Set)) {
+function touchPathSignature(rootDir, relativePath) {
+  const normalized = toPosix(String(relativePath ?? '').trim()).replace(/^\.?\//, '');
+  if (!normalized) {
+    return 'missing';
+  }
+  const absPath = path.join(rootDir, normalized);
+  try {
+    const stat = fsSync.statSync(absPath);
+    const kind = stat.isFile() ? 'f' : stat.isDirectory() ? 'd' : 'o';
+    return `${kind}:${Math.round(stat.mtimeMs)}:${stat.size}`;
+  } catch {
+    return 'missing';
+  }
+}
+
+function createTouchBaseline(cwd) {
+  const initialPaths = dirtyRepoPaths(cwd, { includeTransient: true })
+    .filter((entry) => !isTransientAutomationPath(entry));
+  const initialPathSet = new Set(initialPaths);
+  const initialSignatures = new Map();
+  for (const filePath of initialPathSet) {
+    initialSignatures.set(filePath, touchPathSignature(cwd, filePath));
+  }
+  return {
+    initialPathSet,
+    initialSignatures,
+    touchedPathSet: new Set()
+  };
+}
+
+function monitorTouchedPaths(cwd, baselineState, options = {}) {
+  if (!baselineState || !(baselineState.initialPathSet instanceof Set)) {
     return null;
   }
 
   const current = dirtyRepoPaths(cwd, { includeTransient: true })
     .filter((entry) => !isTransientAutomationPath(entry));
-  const touched = current.filter((entry) => !baselineSet.has(entry));
+  for (const entry of current) {
+    if (!baselineState.initialPathSet.has(entry)) {
+      baselineState.touchedPathSet.add(entry);
+      continue;
+    }
+    const initialSignature = baselineState.initialSignatures.get(entry);
+    if (initialSignature === undefined) {
+      continue;
+    }
+    const currentSignature = touchPathSignature(cwd, entry);
+    if (currentSignature !== initialSignature) {
+      baselineState.touchedPathSet.add(entry);
+    }
+  }
+  const touched = [...baselineState.touchedPathSet];
   const summary = summarizeTouchedPaths(touched, options.touchSampleSize);
   return {
     ...summary,
@@ -900,9 +944,7 @@ async function runShellMonitored(
   let warnEmitted = false;
   const touchSummaryEnabled = asBoolean(options.touchSummary, DEFAULT_TOUCH_SUMMARY);
   const touchSampleSize = Math.max(1, asInteger(options.touchSampleSize, DEFAULT_TOUCH_SAMPLE_SIZE));
-  const touchBaseline = touchSummaryEnabled && gitAvailable(cwd)
-    ? new Set(dirtyRepoPaths(cwd, { includeTransient: true }).filter((entry) => !isTransientAutomationPath(entry)))
-    : null;
+  const touchBaseline = touchSummaryEnabled && gitAvailable(cwd) ? createTouchBaseline(cwd) : null;
   let touchSummary = null;
   let lastTouchChangeAtMs = startedAtMs;
   let lastTouchFingerprint = null;
