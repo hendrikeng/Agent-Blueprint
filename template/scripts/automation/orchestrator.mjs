@@ -125,6 +125,7 @@ function usage() {
   console.log(`Usage:
   node ./scripts/automation/orchestrator.mjs run [options]
   node ./scripts/automation/orchestrator.mjs run-parallel [options]
+  node ./scripts/automation/orchestrator.mjs resume-parallel [options]
   node ./scripts/automation/orchestrator.mjs resume [options]
   node ./scripts/automation/orchestrator.mjs audit [options]
   node ./scripts/automation/orchestrator.mjs curate-evidence [options]
@@ -5333,12 +5334,67 @@ async function cleanupParallelWorktree(paths, worktreeDir, options) {
   return { ok: true, reason: null };
 }
 
+async function seedParallelWorkerPlanFile(plan, paths, worktreeDir, options) {
+  if (options.dryRun) {
+    return { ok: true, seeded: false, planRel: null };
+  }
+  if (!(await exists(plan.filePath))) {
+    return {
+      ok: false,
+      seeded: false,
+      planRel: null,
+      reason: `Parallel worker source plan file missing for ${plan.planId}: ${plan.rel}`
+    };
+  }
+
+  const planRel = assertSafeRelativePlanPath(toPosix(path.relative(paths.rootDir, plan.filePath)));
+  const targetPath = path.join(worktreeDir, planRel);
+  if (await exists(targetPath)) {
+    return { ok: true, seeded: false, planRel };
+  }
+
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await fs.copyFile(plan.filePath, targetPath);
+
+  const add = runShellCapture(
+    `git -C ${shellQuote(worktreeDir)} add ${shellQuote(planRel)}`,
+    paths.rootDir
+  );
+  if (add.status !== 0) {
+    return {
+      ok: false,
+      seeded: false,
+      planRel,
+      reason: `Failed to seed ${plan.planId} into worker worktree: ${tailLines(executionOutput(add), 5)}`
+    };
+  }
+
+  const commit = runShellCapture(
+    `git -C ${shellQuote(worktreeDir)} commit -m ${shellQuote(`chore(automation): seed active plan ${plan.planId}`)} -- ${shellQuote(planRel)}`,
+    paths.rootDir
+  );
+  if (commit.status !== 0) {
+    return {
+      ok: false,
+      seeded: false,
+      planRel,
+      reason: `Failed to commit seeded active plan ${plan.planId} in worker worktree: ${tailLines(executionOutput(commit), 5)}`
+    };
+  }
+
+  return { ok: true, seeded: true, planRel };
+}
+
 async function runParallelWorkerPlan(plan, paths, state, options, config, parallelOptions) {
   let prepared = null;
   let execution = { status: 0, error: null, stdout: '', stderr: '' };
   let result = null;
   try {
     prepared = await prepareParallelWorktree(paths, parallelOptions, plan, state, options);
+    const seededPlan = await seedParallelWorkerPlanFile(plan, paths, prepared.worktreeDir, options);
+    if (!seededPlan.ok) {
+      throw new Error(seededPlan.reason || `Failed to seed worker plan file for ${plan.planId}.`);
+    }
     const workerRunId = parallelWorkerRunId(state.runId, plan.planId);
     const workerCommand = buildParallelWorkerCommand(plan, state, options, parallelOptions);
     const baseShaResult = options.dryRun
@@ -5480,8 +5536,9 @@ async function runParallelCommand(paths, options) {
   const config = await loadConfig(paths);
   Object.assign(options, resolveRuntimeExecutorOptions(options, config));
   const parallelOptions = resolveParallelExecutionOptions(options, config);
+  const resumeParallel = asBoolean(options.resumeParallel, false);
   if (parallelOptions.parallelPlans <= 1) {
-    return runCommand(paths, options);
+    return resumeParallel ? resumeCommand(paths, options) : runCommand(paths, options);
   }
 
   if (!gitAvailable(paths.rootDir)) {
@@ -5490,17 +5547,34 @@ async function runParallelCommand(paths, options) {
   if (asBoolean(options.allowDirty, false) && asBoolean(options.commit, config.git.atomicCommits !== false)) {
     throw new Error('Refusing --allow-dirty true with --commit true. Disable commits or start from a clean worktree.');
   }
+  let modeResolution = null;
+  let state = null;
+  if (resumeParallel) {
+    const persisted = await readJsonIfExists(paths.runStatePath, null);
+    if (!persisted || !persisted.runId) {
+      throw new Error('No existing run-state found. Start with `run` first.');
+    }
+    if (options.runId && options.runId !== persisted.runId) {
+      throw new Error(`Requested run-id '${options.runId}' does not match persisted run '${persisted.runId}'.`);
+    }
+    state = normalizePersistedState(persisted);
+    state.capabilities = await detectCapabilities();
+  } else {
+    modeResolution = resolveEffectiveMode(options.mode);
+    const runId = options.runId || randomRunId();
+    state = createInitialState(runId, modeResolution.requestedMode, modeResolution.effectiveMode);
+    state.capabilities = await detectCapabilities();
+  }
   if (
     !asBoolean(options.allowDirty, false) &&
     gitDirty(paths.rootDir, { ignoreTransientAutomationArtifacts: true })
   ) {
-    throw new Error('Refusing parallel execution with dirty git worktree.');
+    throw new Error(
+      resumeParallel
+        ? 'Refusing parallel resume with dirty git worktree.'
+        : 'Refusing parallel execution with dirty git worktree.'
+    );
   }
-
-  const modeResolution = resolveEffectiveMode(options.mode);
-  const runId = options.runId || randomRunId();
-  const state = createInitialState(runId, modeResolution.requestedMode, modeResolution.effectiveMode);
-  state.capabilities = await detectCapabilities();
 
   assertExecutorConfigured(options, config);
   assertValidationConfigured(options, config, paths);
@@ -5510,16 +5584,28 @@ async function runParallelCommand(paths, options) {
   await saveState(paths, state, options.dryRun);
 
   try {
-    await logEvent(paths, state, 'run_started_parallel', {
-      requestedMode: modeResolution.requestedMode,
-      effectiveMode: modeResolution.effectiveMode,
-      parallelPlans: parallelOptions.parallelPlans,
-      branchPrefix: parallelOptions.branchPrefix,
-      baseRef: parallelOptions.baseRef,
-      worktreeRoot: parallelOptions.worktreeRoot
-    }, options.dryRun);
+    if (resumeParallel) {
+      await logEvent(paths, state, 'run_resumed_parallel', {
+        requestedMode: options.mode ?? state.requestedMode,
+        effectiveMode: state.effectiveMode,
+        parallelPlans: parallelOptions.parallelPlans,
+        branchPrefix: parallelOptions.branchPrefix,
+        baseRef: parallelOptions.baseRef,
+        worktreeRoot: parallelOptions.worktreeRoot,
+        capabilities: state.capabilities
+      }, options.dryRun);
+    } else {
+      await logEvent(paths, state, 'run_started_parallel', {
+        requestedMode: modeResolution.requestedMode,
+        effectiveMode: modeResolution.effectiveMode,
+        parallelPlans: parallelOptions.parallelPlans,
+        branchPrefix: parallelOptions.branchPrefix,
+        baseRef: parallelOptions.baseRef,
+        worktreeRoot: parallelOptions.worktreeRoot
+      }, options.dryRun);
+    }
 
-    if (!asBoolean(options.skipPromotion, false)) {
+    if (!resumeParallel && !asBoolean(options.skipPromotion, false)) {
       const promoted = await promoteFuturePlans(paths, state, options);
       if (promoted > 0) {
         progressLog(options, `promoted ${promoted} future plan(s) into docs/exec-plans/active.`);
@@ -6082,7 +6168,24 @@ async function main() {
     return;
   }
 
+  if (command === 'resume-parallel') {
+    options.resumeParallel = true;
+    if (rawOptions['skip-promotion'] == null && rawOptions.skipPromotion == null) {
+      options.skipPromotion = true;
+    }
+    await runParallelCommand(paths, options);
+    return;
+  }
+
   if (command === 'resume') {
+    if (asInteger(options.parallelPlans, DEFAULT_PARALLEL_PLANS) > 1) {
+      options.resumeParallel = true;
+      if (rawOptions['skip-promotion'] == null && rawOptions.skipPromotion == null) {
+        options.skipPromotion = true;
+      }
+      await runParallelCommand(paths, options);
+      return;
+    }
     await resumeCommand(paths, options);
     return;
   }

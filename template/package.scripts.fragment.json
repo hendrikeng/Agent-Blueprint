@@ -17,7 +17,7 @@
     "interop:github:export:write": "node ./scripts/automation/export-github-agent-profiles.mjs --write-profiles true",
     "automation:run": "node ./scripts/automation/orchestrator.mjs run",
     "automation:run:parallel": "node ./scripts/automation/orchestrator.mjs run-parallel",
-    "automation:resume:parallel": "node ./scripts/automation/orchestrator.mjs run-parallel",
+    "automation:resume:parallel": "node ./scripts/automation/orchestrator.mjs resume-parallel",
     "automation:resume": "node ./scripts/automation/orchestrator.mjs resume",
     "automation:audit": "node ./scripts/automation/orchestrator.mjs audit"
   }
