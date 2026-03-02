@@ -83,5 +83,7 @@ Recommended baseline:
 
 - If completion gates are not yet satisfied, orchestration restarts at `worker` stage and reruns required review.
 - `pending` session results do not auto-advance risk pipeline stages; reviewer `pending` is routed back to `worker`.
+- Planner/explorer `pending` entries that clearly indicate implementation handoff (read-only or implementation-incomplete reasons) are auto-advanced to the next stage.
+- Repeated identical `pending` signals for the same role fail fast to prevent no-progress loops.
 - Worker/reviewer sessions should not run host-bound validation commands (infra/bootstrap, DB migrations, Playwright/E2E); those are executed by the host-validation lane from `validation.hostRequired`.
 - Risk and stage decisions are recorded in `run-events.jsonl`.

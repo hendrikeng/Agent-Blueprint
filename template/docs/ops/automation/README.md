@@ -69,7 +69,7 @@ Use the manual path when any of these are true:
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
 - `node ./scripts/automation/orchestrator.mjs curate-evidence [--scope active|completed|all] [--plan-id <value>]`
 - Optional continuation controls:
-  - `--max-sessions-per-plan <n>` (default `20`)
+  - `--max-sessions-per-plan <n>` (default `12`)
   - `--max-rollovers <n>` (default `20`)
 - Output controls:
   - `--output minimal|ticker|pretty|verbose` (default `pretty`)
@@ -269,6 +269,8 @@ Executor commands should use these outcomes:
 - Failed plans are automatically re-queued on `resume` when policy/security/dependency gates are now satisfied (up to `--max-failed-retries`).
 - Blocked plans are automatically re-queued on `resume` when their blocking gates are now satisfied (for example, approvals provided).
 - `pending` keeps work in the active implementation role instead of auto-advancing the full pipeline; reviewer `pending` routes back to worker for fixes.
+- Planner/explorer `pending` with implementation-handoff reasons (for example, read-only constraints or implementation still pending) auto-advances to the next stage to avoid no-op loops.
+- Repeated identical `pending` signals for the same role fail fast in-run so orchestration does not spin on no-progress loops.
 - `blocked` remains reserved for external/manual gates; `failed` remains a validation/execution failure signal.
 - When a plan completes, `Done-Evidence` points to its canonical evidence index file.
 - During curation, removed evidence paths are automatically rewritten in plan docs to the retained canonical reference.

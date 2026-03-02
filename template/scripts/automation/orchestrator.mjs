@@ -27,7 +27,7 @@ import {
 const DEFAULT_CONTEXT_THRESHOLD = 10000;
 const DEFAULT_HANDOFF_TOKEN_BUDGET = 1500;
 const DEFAULT_MAX_ROLLOVERS = 20;
-const DEFAULT_MAX_SESSIONS_PER_PLAN = 20;
+const DEFAULT_MAX_SESSIONS_PER_PLAN = 12;
 const DEFAULT_HANDOFF_EXIT_CODE = 75;
 const DEFAULT_REQUIRE_RESULT_PAYLOAD = true;
 const DEFAULT_COMMAND_TIMEOUT_SECONDS = 1800;
@@ -138,7 +138,7 @@ Options:
   --require-result-payload true|false Require ORCH_RESULT_PATH payload with contextRemaining (default: true)
   --handoff-token-budget <n>         Metadata field for handoff budget reporting
   --max-rollovers <n>                Maximum rollovers per plan (default: 20)
-  --max-sessions-per-plan <n>        Maximum executor sessions per plan in one run (default: 20)
+  --max-sessions-per-plan <n>        Maximum executor sessions per plan in one run (default: 12)
   --validation "cmd1;;cmd2"          Validation commands separated by ';;'
   --commit true|false                Create atomic git commit per completed plan
   --skip-promotion true|false        Skip future->active promotion stage
@@ -1604,6 +1604,49 @@ function setRoleStateToRole(roleState, role) {
     resetRoleStateToImplementation(roleState);
   }
   roleState.updatedAt = nowIso();
+}
+
+function pendingReasonSuggestsImplementationHandoff(reason) {
+  const text = String(reason ?? '').trim().toLowerCase();
+  if (!text) {
+    return false;
+  }
+
+  return (
+    text.includes('implementation') ||
+    text.includes('worker') ||
+    text.includes('read-only') ||
+    text.includes('read only') ||
+    text.includes('cannot apply plan doc edits')
+  );
+}
+
+function resolvePendingNextRole(currentRole, roleState, roleIndex, pendingReason) {
+  if (currentRole === ROLE_REVIEWER) {
+    return ROLE_WORKER;
+  }
+
+  if (currentRole !== ROLE_PLANNER && currentRole !== ROLE_EXPLORER) {
+    return currentRole;
+  }
+
+  if (!pendingReasonSuggestsImplementationHandoff(pendingReason)) {
+    return currentRole;
+  }
+
+  const nextRoleIndex = Math.min(roleIndex + 1, Math.max(0, roleState.stages.length - 1));
+  const nextRoleCandidate = roleState.stages[nextRoleIndex] ?? currentRole;
+  return normalizeRoleName(nextRoleCandidate, currentRole);
+}
+
+function pendingSignalSignature(role, nextRole, reason) {
+  const normalizedRole = normalizeRoleName(role, ROLE_WORKER);
+  const normalizedNextRole = normalizeRoleName(nextRole, normalizedRole);
+  const normalizedReason = String(reason ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+  return `${normalizedRole}->${normalizedNextRole}|${normalizedReason}`;
 }
 
 function requiresSecurityApproval(plan, assessment, config) {
@@ -4330,6 +4373,7 @@ async function processPlan(plan, paths, state, options, config) {
   const maxSessionsPerPlan = asInteger(options.maxSessionsPerPlan, DEFAULT_MAX_SESSIONS_PER_PLAN);
   const planStartedAt = nowIso();
   let rollovers = 0;
+  let lastPendingSignal = null;
   let roleState = ensureRoleState(state, plan, lastAssessment, resolvePipelineStages(lastAssessment, config), config);
   await announceStageReuse(paths, state, plan, roleState, options);
 
@@ -4560,7 +4604,26 @@ async function processPlan(plan, paths, state, options, config) {
 
     if (sessionResult.status === 'pending') {
       const pendingReason = sessionResult.reason ?? 'Executor reported pending implementation work.';
-      const nextRole = currentRole === ROLE_REVIEWER ? ROLE_WORKER : currentRole;
+      const nextRole = resolvePendingNextRole(currentRole, roleState, roleIndex, pendingReason);
+      const signal = pendingSignalSignature(currentRole, nextRole, pendingReason);
+      if (nextRole === currentRole && signal === lastPendingSignal) {
+        const failFastReason = `Repeated pending signal without progress for role '${currentRole}'. ${pendingReason}`;
+        await logEvent(paths, state, 'session_pending_fail_fast', {
+          planId: plan.planId,
+          session,
+          role: currentRole,
+          nextRole,
+          effectiveRiskTier: lastAssessment.effectiveRiskTier,
+          reason: failFastReason
+        }, options.dryRun);
+        progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
+        return {
+          outcome: 'pending',
+          reason: failFastReason,
+          riskTier: lastAssessment.effectiveRiskTier
+        };
+      }
+      lastPendingSignal = nextRole === currentRole ? signal : null;
       setRoleStateToRole(roleState, nextRole);
       state.roleState[plan.planId] = roleState;
       await saveState(paths, state, options.dryRun);
@@ -4586,6 +4649,8 @@ async function processPlan(plan, paths, state, options, config) {
       );
       continue;
     }
+
+    lastPendingSignal = null;
 
     advanceRoleState(roleState, currentRole);
     state.roleState[plan.planId] = roleState;
