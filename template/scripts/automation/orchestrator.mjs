@@ -1590,6 +1590,17 @@ function resetRoleStateToImplementation(roleState) {
   roleState.updatedAt = nowIso();
 }
 
+function setRoleStateToRole(roleState, role) {
+  const targetRole = normalizeRoleName(role, ROLE_WORKER);
+  const targetIndex = roleState.stages.indexOf(targetRole);
+  if (targetIndex >= 0) {
+    roleState.currentIndex = targetIndex;
+  } else {
+    resetRoleStateToImplementation(roleState);
+  }
+  roleState.updatedAt = nowIso();
+}
+
 function requiresSecurityApproval(plan, assessment, config) {
   const roleConfig = resolveRoleOrchestration(config);
   if (!roleConfig.enabled) {
@@ -3960,6 +3971,19 @@ function resolveAtomicCommitRoots(plan, config, paths, completionContext = {}) {
   roots.add(evidenceIndexRel);
   roots.add(assertSafeRelativePlanPath(toPosix(path.relative(paths.rootDir, path.join(paths.evidenceIndexDir, 'README.md')))));
 
+  // Plan-scoped evidence artifacts are updated by curation and should be included in atomic roots.
+  const activeEvidenceFile = `docs/exec-plans/active/evidence/${plan.planId}.md`;
+  roots.add(assertSafeRelativePlanPath(activeEvidenceFile));
+  roots.add(assertSafeRelativePlanPath('docs/exec-plans/active/evidence/README.md'));
+
+  // Runtime context compilation may run during continuation sessions and mutate this generated file.
+  const runtimeContextPath = normalizedRelativePrefix(
+    config?.context?.runtimeContextPath ?? 'docs/generated/agent-runtime-context.md'
+  );
+  if (runtimeContextPath) {
+    roots.add(assertSafeRelativePlanPath(runtimeContextPath));
+  }
+
   return [...roots]
     .map((entry) => normalizedRelativePrefix(entry))
     .filter(Boolean)
@@ -4528,6 +4552,35 @@ async function processPlan(plan, paths, state, options, config) {
 
     const refreshedPlan = await readPlanRecord(paths.rootDir, plan.filePath, 'active');
     syncPlanRecord(plan, refreshedPlan);
+
+    if (sessionResult.status === 'pending') {
+      const pendingReason = sessionResult.reason ?? 'Executor reported pending implementation work.';
+      const nextRole = currentRole === ROLE_REVIEWER ? ROLE_WORKER : currentRole;
+      setRoleStateToRole(roleState, nextRole);
+      state.roleState[plan.planId] = roleState;
+      await saveState(paths, state, options.dryRun);
+      if (session >= maxSessionsPerPlan) {
+        return {
+          outcome: 'pending',
+          reason: `Maximum sessions reached without completion (${maxSessionsPerPlan}). ${pendingReason}`,
+          riskTier: lastAssessment.effectiveRiskTier
+        };
+      }
+      await logEvent(paths, state, 'session_continued', {
+        planId: plan.planId,
+        session,
+        role: currentRole,
+        nextRole,
+        effectiveRiskTier: lastAssessment.effectiveRiskTier,
+        nextSession: session + 1,
+        reason: pendingReason
+      }, options.dryRun);
+      progressLog(
+        options,
+        `session pending ${plan.planId}: nextRole=${nextRole} reason=${pendingReason}`
+      );
+      continue;
+    }
 
     advanceRoleState(roleState, currentRole);
     state.roleState[plan.planId] = roleState;

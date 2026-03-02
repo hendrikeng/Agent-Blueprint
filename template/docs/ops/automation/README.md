@@ -268,6 +268,7 @@ Executor commands should use these outcomes:
 - If validation lanes are required but unconfigured, `run`/`resume` fail immediately (fail-closed).
 - Failed plans are automatically re-queued on `resume` when policy/security/dependency gates are now satisfied (up to `--max-failed-retries`).
 - Blocked plans are automatically re-queued on `resume` when their blocking gates are now satisfied (for example, approvals provided).
+- `pending` keeps work in the active implementation role instead of auto-advancing the full pipeline; reviewer `pending` routes back to worker for fixes.
 - `blocked` remains reserved for external/manual gates; `failed` remains a validation/execution failure signal.
 - When a plan completes, `Done-Evidence` points to its canonical evidence index file.
 - During curation, removed evidence paths are automatically rewritten in plan docs to the retained canonical reference.
