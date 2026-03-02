@@ -8,6 +8,20 @@ function toPosix(value) {
   return value.split(path.sep).join('/');
 }
 
+function normalizePrefixList(values) {
+  return [...new Set(
+    (Array.isArray(values) ? values : [])
+      .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\/+/, ''))
+      .filter(Boolean)
+      .map((entry) => (entry.endsWith('/') ? entry : `${entry}/`))
+  )];
+}
+
+function hasAnyPrefix(value, prefixes) {
+  const normalized = toPosix(String(value ?? '').trim()).replace(/^\/+/, '');
+  return prefixes.some((prefix) => normalized.startsWith(prefix));
+}
+
 function toDate(value) {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return null;
@@ -190,25 +204,34 @@ export async function runGovernanceAnalysis({
 
   const docsDir = path.join(rootDir, 'docs');
   const markdownFilesAbs = await walkMarkdownFiles(docsDir);
+  const markdownExcludePrefixes = normalizePrefixList(
+    config.markdownExcludePrefixes ?? [
+      'docs/ops/automation/runtime/',
+      'docs/ops/automation/handoffs/'
+    ]
+  );
+  const markdownFilesRel = markdownFilesAbs
+    .map((entry) => toPosix(path.relative(rootDir, entry)))
+    .filter((rel) => !hasAnyPrefix(rel, markdownExcludePrefixes));
 
-  const explicitScanFiles = [
-    path.join(rootDir, 'AGENTS.md'),
-    path.join(rootDir, 'README.md'),
-    path.join(rootDir, 'ARCHITECTURE.md'),
-    ...((config.scanFiles ?? []).map((rel) => path.join(rootDir, rel)))
+  const explicitScanFilesRel = [
+    'AGENTS.md',
+    'README.md',
+    'ARCHITECTURE.md',
+    ...((config.scanFiles ?? []).map((rel) => toPosix(String(rel ?? '').trim())).filter(Boolean))
   ];
 
-  const sourceFiles = [...new Set([...explicitScanFiles, ...markdownFilesAbs])].filter(async () => true);
+  const sourceFiles = [...new Set([...explicitScanFilesRel, ...markdownFilesRel])];
 
   const contents = new Map();
   const refsGraph = new Map();
 
-  for (const fileAbs of sourceFiles) {
+  for (const rel of sourceFiles) {
+    const fileAbs = path.join(rootDir, rel);
     if (!(await exists(fileAbs))) {
       continue;
     }
 
-    const rel = toPosix(path.relative(rootDir, fileAbs));
     const content = await fs.readFile(fileAbs, 'utf8');
     contents.set(rel, content);
     refsGraph.set(rel, extractRefs(content, rel));

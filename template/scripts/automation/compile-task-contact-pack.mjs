@@ -41,6 +41,38 @@ function toPosix(value) {
   return String(value).split(path.sep).join('/');
 }
 
+function resolveDocRef(target, sourceFile) {
+  const trimmed = String(target ?? '').trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('#') ||
+    trimmed.startsWith('mailto:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://')
+  ) {
+    return null;
+  }
+  const withoutHash = trimmed.split('#')[0]?.split('?')[0] ?? '';
+  if (!withoutHash) {
+    return null;
+  }
+  if (withoutHash.startsWith('/')) {
+    return toPosix(withoutHash.slice(1));
+  }
+  const sourceDir = path.posix.dirname(toPosix(sourceFile));
+  return toPosix(path.posix.normalize(path.posix.join(sourceDir, withoutHash)));
+}
+
+function absolutizeMarkdownLinks(line, sourceFile) {
+  return String(line ?? '').replace(/\[([^\]]*)\]\(([^)]+)\)/g, (full, label, target) => {
+    const resolved = resolveDocRef(target, sourceFile);
+    if (!resolved) {
+      return full;
+    }
+    return `[${label}](${resolved})`;
+  });
+}
+
 function asInteger(value, fallback) {
   if (value == null) {
     return fallback;
@@ -86,7 +118,7 @@ function summarizeSentence(value, maxWords = 24) {
   return `${words.slice(0, maxWords).join(' ')}...`;
 }
 
-function parseEvidenceReferences(raw, maxItems) {
+function parseEvidenceReferences(raw, maxItems, sourceFile) {
   const lines = String(raw ?? '').split(/\r?\n/);
   const matches = [];
   for (const line of lines) {
@@ -95,16 +127,16 @@ function parseEvidenceReferences(raw, maxItems) {
       continue;
     }
     if (trimmed.startsWith('- ')) {
-      matches.push(trimmed.slice(2).trim());
+      matches.push(absolutizeMarkdownLinks(trimmed.slice(2).trim(), sourceFile));
       continue;
     }
     if (/^\d+\.\s+/.test(trimmed)) {
-      matches.push(trimmed.replace(/^\d+\.\s+/, '').trim());
+      matches.push(absolutizeMarkdownLinks(trimmed.replace(/^\d+\.\s+/, '').trim(), sourceFile));
       continue;
     }
     const bracketMatch = trimmed.match(/\[.+?\]\(.+?\)/);
     if (bracketMatch) {
-      matches.push(bracketMatch[0]);
+      matches.push(absolutizeMarkdownLinks(bracketMatch[0], sourceFile));
     }
   }
   return unique(matches).slice(0, Math.max(0, maxItems));
@@ -205,7 +237,8 @@ export async function compileTaskContactPack(input) {
       if (!evidenceRaw) {
         continue;
       }
-      const parsed = parseEvidenceReferences(evidenceRaw, maxRecentEvidenceItems);
+      const evidenceRel = toPosix(path.relative(rootDir, evidencePath));
+      const parsed = parseEvidenceReferences(evidenceRaw, maxRecentEvidenceItems, evidenceRel);
       for (const entry of parsed) {
         evidenceReferences.push(entry);
         if (evidenceReferences.length >= maxRecentEvidenceItems) {
