@@ -118,7 +118,7 @@ Start with:
 
 ## Automation Conveyor Commands
 
-- Start run (guarded, parallel=3, recovery defaults): `npm run automation:run`
+- Start run (guarded, sequential, recovery defaults): `npm run automation:run`
 - Start parallel run (same defaults, explicit command): `npm run automation:run:parallel`
 - Resume parallel execution (same defaults): `npm run automation:resume:parallel`
 - Resume run: `npm run automation:resume`

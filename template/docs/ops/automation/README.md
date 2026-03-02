@@ -64,7 +64,7 @@ Use the manual path when any of these are true:
 
 ## CLI
 
-- `node ./scripts/automation/orchestrator.mjs run --mode guarded --parallel-plans 3 --retry-failed true --auto-unblock true --max-failed-retries 2 --output pretty`
+- `node ./scripts/automation/orchestrator.mjs run --mode guarded --retry-failed true --auto-unblock true --max-failed-retries 2 --output pretty`
 - `node ./scripts/automation/orchestrator.mjs run-parallel --mode guarded --parallel-plans 3 --retry-failed true --auto-unblock true --max-failed-retries 2 --output pretty`
 - `node ./scripts/automation/orchestrator.mjs resume`
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
@@ -254,7 +254,7 @@ Pretty output example:
 Parallelism note:
 
 - `--max-plans` is a processing cap.
-- `run` uses the configured/default concurrency (`--parallel-plans`, default `3` in this template).
+- `run` is sequential by default.
 - `run --parallel-plans <n>` (or `run-parallel`) dispatches independent plans into isolated git worktrees/branches.
 - `resume-parallel` is available when you want to continue an existing run with parallel workers.
 - npm convenience alias: `npm run automation:resume:parallel` (maps to `resume-parallel` with template defaults).

@@ -55,7 +55,7 @@ const DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS = 6;
 const DEFAULT_RETRY_FAILED_PLANS = true;
 const DEFAULT_AUTO_UNBLOCK_PLANS = true;
 const DEFAULT_MAX_FAILED_RETRIES = 2;
-const DEFAULT_PARALLEL_PLANS = 3;
+const DEFAULT_PARALLEL_PLANS = 1;
 const DEFAULT_PARALLEL_WORKTREE_ROOT = 'docs/ops/automation/runtime/worktrees';
 const DEFAULT_PARALLEL_BRANCH_PREFIX = 'orch';
 const DEFAULT_PARALLEL_BASE_REF = 'HEAD';
@@ -148,7 +148,7 @@ function usage() {
 Options:
   --mode guarded|full                Autonomy mode (default: guarded)
   --max-plans <n>                    Maximum plans to process in this run
-  --parallel-plans <n>               Number of plans to execute in parallel (default: 3)
+  --parallel-plans <n>               Number of plans to execute in parallel (default: 1)
   --context-threshold <n>            Trigger rollover when contextRemaining < n
   --require-result-payload true|false Require ORCH_RESULT_PATH payload with contextRemaining (default: true)
   --handoff-token-budget <n>         Metadata field for handoff budget reporting

@@ -206,7 +206,7 @@
     "workerStallFailSeconds": 900
   },
   "parallel": {
-    "maxPlans": 3,
+    "maxPlans": 1,
     "worktreeRoot": "docs/ops/automation/runtime/worktrees",
     "branchPrefix": "orch",
     "baseRef": "HEAD",
