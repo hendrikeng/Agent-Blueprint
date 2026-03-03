@@ -44,6 +44,10 @@ const DEFAULT_HEARTBEAT_SECONDS = 12;
 const DEFAULT_STALL_WARN_SECONDS = 120;
 const DEFAULT_TOUCH_SUMMARY = true;
 const DEFAULT_TOUCH_SAMPLE_SIZE = 3;
+const DEFAULT_TOUCH_SCAN_MODE = 'adaptive';
+const DEFAULT_TOUCH_SCAN_MIN_HEARTBEATS = 1;
+const DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS = 8;
+const DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED = 2;
 const DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS = 180;
 const DEFAULT_WORKER_RETRY_FIRST_TOUCH_DEADLINE_SECONDS = 60;
 const DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT = 1;
@@ -73,6 +77,9 @@ const DEFAULT_EVIDENCE_TRACK_MODE = 'curated';
 const DEFAULT_EVIDENCE_DEDUP_MODE = 'strict-upsert';
 const DEFAULT_EVIDENCE_PRUNE_ON_COMPLETE = true;
 const DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER = 1;
+const DEFAULT_EVIDENCE_SESSION_CURATION_MODE = 'on-change';
+const DEFAULT_EVIDENCE_SESSION_INDEX_REFRESH_MODE = 'on-change';
+const DEFAULT_CONTACT_PACK_CACHE_MODE = 'run-memory';
 const DEFAULT_ROLE_ORCHESTRATION_ENABLED = true;
 const DEFAULT_RISK_THRESHOLD_MEDIUM = 3;
 const DEFAULT_RISK_THRESHOLD_HIGH = 6;
@@ -135,6 +142,8 @@ const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
 const SAFE_PLAN_RELATIVE_PATH_REGEX = /^[A-Za-z0-9._/-]+$/;
 const REDACTED_VALUE = '[REDACTED]';
 const SENSITIVE_KEY_REGEX = /(token|secret|password|passphrase|api[-_]?key|authorization|cookie|session)/i;
+const RUN_MEMORY_PLAN_RECORD_CACHE = new Map();
+const RUN_MEMORY_CONTACT_PACK_CACHE = new Map();
 
 function usage() {
   console.log(`Usage:
@@ -169,6 +178,10 @@ Options:
   --stall-warn-seconds <n>           Warn when no command output for this many seconds (default: 120)
   --touch-summary true|false         Show live touched-file summary in heartbeats (default: true)
   --touch-sample-size <n>            Number of touched-file examples in heartbeat details (default: 3)
+  --touch-scan-mode adaptive|always|off Touch scan cadence policy for heartbeats (default: adaptive)
+  --touch-scan-min-heartbeats <n>    Minimum heartbeats between touch scans in adaptive mode (default: 1)
+  --touch-scan-max-heartbeats <n>    Maximum heartbeats between touch scans in adaptive mode (default: 8)
+  --touch-scan-backoff-unchanged <n> Adaptive backoff multiplier when scans are unchanged (default: 2)
   --worker-first-touch-deadline-seconds <n> Fail-fast worker sessions that make no edits after n seconds (default: 180, 0 disables)
   --worker-no-touch-retry-limit <n> Retry worker pending-without-edits sessions automatically up to n times (default: 1)
   --worker-stall-fail-seconds <n>   Fail-fast worker sessions that go idle after making edits (default: 900, 0 disables)
@@ -229,6 +242,30 @@ function normalizeOutputMode(value, fallback = DEFAULT_OUTPUT_MODE) {
     return 'verbose';
   }
   return 'minimal';
+}
+
+function normalizeTouchScanMode(value, fallback = DEFAULT_TOUCH_SCAN_MODE) {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  if (normalized === 'always' || normalized === 'adaptive' || normalized === 'off') {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeSessionEvidenceMode(value, fallback = DEFAULT_EVIDENCE_SESSION_CURATION_MODE) {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  if (normalized === 'always' || normalized === 'on-change' || normalized === 'off') {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeContactPackCacheMode(value, fallback = DEFAULT_CONTACT_PACK_CACHE_MODE) {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  if (normalized === 'off' || normalized === 'run-memory') {
+    return normalized;
+  }
+  return fallback;
 }
 
 function shouldCaptureCommandOutput(options) {
@@ -944,12 +981,32 @@ async function runShellMonitored(
   let processError = null;
   let settled = false;
   let warnEmitted = false;
+  let timeoutTimer = null;
+  let forceKillTimer = null;
   const touchSummaryEnabled = asBoolean(options.touchSummary, DEFAULT_TOUCH_SUMMARY);
+  const touchScanMode = normalizeTouchScanMode(options.touchScanMode, DEFAULT_TOUCH_SCAN_MODE);
+  const touchScanMinHeartbeats = Math.max(
+    1,
+    asInteger(options.touchScanMinHeartbeats, DEFAULT_TOUCH_SCAN_MIN_HEARTBEATS)
+  );
+  const touchScanMaxHeartbeats = Math.max(
+    touchScanMinHeartbeats,
+    asInteger(options.touchScanMaxHeartbeats, DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS)
+  );
+  const touchScanBackoffUnchanged = Math.max(
+    1,
+    asInteger(options.touchScanBackoffUnchanged, DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED)
+  );
   const touchSampleSize = Math.max(1, asInteger(options.touchSampleSize, DEFAULT_TOUCH_SAMPLE_SIZE));
-  const touchBaseline = touchSummaryEnabled && gitAvailable(cwd) ? createTouchBaseline(cwd) : null;
+  const touchMonitoringEnabled = touchSummaryEnabled && touchScanMode !== 'off';
+  const touchBaseline = touchMonitoringEnabled && gitAvailable(cwd) ? createTouchBaseline(cwd) : null;
   let touchSummary = null;
   let lastTouchChangeAtMs = startedAtMs;
   let lastTouchFingerprint = null;
+  let heartbeatsUntilNextTouchScan = 0;
+  let currentTouchScanInterval = touchScanMinHeartbeats;
+  let touchScansExecuted = 0;
+  let touchScansSkipped = 0;
   const firstTouchDeadlineSeconds = Math.max(
     0,
     asInteger(options.workerFirstTouchDeadlineSeconds, DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS)
@@ -997,25 +1054,67 @@ async function runShellMonitored(
   );
   const heartbeatEnabled = isPrettyOutput(options) || isTickerOutput(options);
   let heartbeatTimer = null;
-  const emitHeartbeat = () => {
-    if (touchBaseline) {
-      const latestTouchSummary = monitorTouchedPaths(cwd, touchBaseline, { touchSampleSize });
-      if (latestTouchSummary) {
-        touchSummary = latestTouchSummary;
-        if (latestTouchSummary.fingerprint !== lastTouchFingerprint) {
-          lastTouchFingerprint = latestTouchSummary.fingerprint;
-          lastTouchChangeAtMs = Date.now();
-          if (latestTouchSummary.count > 0) {
-            progressLog(
-              options,
-              `file activity phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} ${formatTouchSummaryDetails(latestTouchSummary)}`
-            );
-          }
-        }
+
+  function maybeRefreshTouchSummary(nowMs = Date.now(), force = false) {
+    if (!touchBaseline) {
+      return;
+    }
+
+    const forceDeadlineScan = enforceFirstTouchDeadline && !workerFirstMeaningfulTouchObserved;
+    let shouldScan = force || forceDeadlineScan;
+    if (!shouldScan) {
+      if (touchScanMode === 'always') {
+        shouldScan = true;
+      } else if (touchScanMode === 'adaptive') {
+        shouldScan = heartbeatsUntilNextTouchScan <= 0;
       }
     }
 
+    if (!shouldScan) {
+      touchScansSkipped += 1;
+      heartbeatsUntilNextTouchScan = Math.max(0, heartbeatsUntilNextTouchScan - 1);
+      return;
+    }
+
+    touchScansExecuted += 1;
+    const latestTouchSummary = monitorTouchedPaths(cwd, touchBaseline, { touchSampleSize });
+    if (!latestTouchSummary) {
+      heartbeatsUntilNextTouchScan = 0;
+      return;
+    }
+
+    touchSummary = latestTouchSummary;
+    const changed = latestTouchSummary.fingerprint !== lastTouchFingerprint;
+    if (changed) {
+      lastTouchFingerprint = latestTouchSummary.fingerprint;
+      lastTouchChangeAtMs = nowMs;
+      if (latestTouchSummary.count > 0) {
+        progressLog(
+          options,
+          `file activity phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} ${formatTouchSummaryDetails(latestTouchSummary)}`
+        );
+      }
+    }
+
+    if (touchScanMode === 'adaptive') {
+      if (changed) {
+        currentTouchScanInterval = touchScanMinHeartbeats;
+      } else {
+        const nextInterval = Math.max(
+          touchScanMinHeartbeats,
+          Math.floor(currentTouchScanInterval * touchScanBackoffUnchanged)
+        );
+        currentTouchScanInterval = Math.min(touchScanMaxHeartbeats, nextInterval);
+      }
+      heartbeatsUntilNextTouchScan = Math.max(0, currentTouchScanInterval - 1);
+    } else {
+      heartbeatsUntilNextTouchScan = 0;
+    }
+  }
+
+  const emitHeartbeat = () => {
     const nowMs = Date.now();
+    maybeRefreshTouchSummary(nowMs);
     const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
     const effectiveProgressAtMs = Math.max(lastOutputAtMs, lastTouchChangeAtMs);
     const idleSeconds = Math.floor((nowMs - effectiveProgressAtMs) / 1000);
@@ -1095,8 +1194,6 @@ async function runShellMonitored(
     heartbeatTimer.unref?.();
   }
 
-  let timeoutTimer = null;
-  let forceKillTimer = null;
   if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
     timeoutTimer = setTimeout(() => {
       timedOut = true;
@@ -1134,9 +1231,8 @@ async function runShellMonitored(
       }
       settled = true;
       cleanupTimers();
-      const finalTouchSummary = touchBaseline
-        ? (monitorTouchedPaths(cwd, touchBaseline, { touchSampleSize }) ?? touchSummary)
-        : touchSummary;
+      maybeRefreshTouchSummary(Date.now(), true);
+      const finalTouchSummary = touchSummary;
       resolve({
         status,
         signal,
@@ -1149,7 +1245,16 @@ async function runShellMonitored(
               : processError,
         stdout,
         stderr,
-        touchSummary: finalTouchSummary ?? null
+        touchSummary: finalTouchSummary ?? null,
+        touchMonitor: {
+          mode: touchBaseline
+            ? touchScanMode
+            : touchSummaryEnabled
+              ? (touchScanMode === 'off' ? 'off' : 'unavailable')
+              : 'disabled',
+          scansExecuted: touchScansExecuted,
+          scansSkipped: touchScansSkipped
+        }
       });
     };
 
@@ -1232,7 +1337,8 @@ async function loadConfig(paths) {
         enabled: DEFAULT_CONTACT_PACKS_ENABLED,
         maxPolicyBullets: DEFAULT_CONTACT_PACKS_MAX_POLICY_BULLETS,
         includeRecentEvidence: DEFAULT_CONTACT_PACKS_INCLUDE_RECENT_EVIDENCE,
-        maxRecentEvidenceItems: DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS
+        maxRecentEvidenceItems: DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS,
+        cacheMode: DEFAULT_CONTACT_PACK_CACHE_MODE
       }
     },
     validationCommands: [],
@@ -1255,6 +1361,8 @@ async function loadConfig(paths) {
       }
     },
     evidence: {
+      sessionCurationMode: DEFAULT_EVIDENCE_SESSION_CURATION_MODE,
+      sessionIndexRefreshMode: DEFAULT_EVIDENCE_SESSION_INDEX_REFRESH_MODE,
       compaction: {
         mode: 'compact-index',
         maxReferences: DEFAULT_EVIDENCE_MAX_REFERENCES
@@ -1340,6 +1448,10 @@ async function loadConfig(paths) {
       stallWarnSeconds: DEFAULT_STALL_WARN_SECONDS,
       touchSummary: DEFAULT_TOUCH_SUMMARY,
       touchSampleSize: DEFAULT_TOUCH_SAMPLE_SIZE,
+      touchScanMode: DEFAULT_TOUCH_SCAN_MODE,
+      touchScanMinHeartbeats: DEFAULT_TOUCH_SCAN_MIN_HEARTBEATS,
+      touchScanMaxHeartbeats: DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS,
+      touchScanBackoffUnchanged: DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED,
       workerFirstTouchDeadlineSeconds: DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS,
       workerNoTouchRetryLimit: DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT,
       workerStallFailSeconds: DEFAULT_WORKER_STALL_FAIL_SECONDS
@@ -1626,6 +1738,33 @@ function resolveRuntimeExecutorOptions(options, config) {
     1,
     asInteger(options.touchSampleSize ?? options['touch-sample-size'] ?? config.logging?.touchSampleSize, DEFAULT_TOUCH_SAMPLE_SIZE)
   );
+  const touchScanMode = normalizeTouchScanMode(
+    options.touchScanMode ?? options['touch-scan-mode'] ?? config.logging?.touchScanMode,
+    DEFAULT_TOUCH_SCAN_MODE
+  );
+  const touchScanMinHeartbeats = Math.max(
+    1,
+    asInteger(
+      options.touchScanMinHeartbeats ?? options['touch-scan-min-heartbeats'] ?? config.logging?.touchScanMinHeartbeats,
+      DEFAULT_TOUCH_SCAN_MIN_HEARTBEATS
+    )
+  );
+  const touchScanMaxHeartbeats = Math.max(
+    touchScanMinHeartbeats,
+    asInteger(
+      options.touchScanMaxHeartbeats ?? options['touch-scan-max-heartbeats'] ?? config.logging?.touchScanMaxHeartbeats,
+      DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS
+    )
+  );
+  const touchScanBackoffUnchanged = Math.max(
+    1,
+    asInteger(
+      options.touchScanBackoffUnchanged ??
+        options['touch-scan-backoff-unchanged'] ??
+        config.logging?.touchScanBackoffUnchanged,
+      DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED
+    )
+  );
   const workerFirstTouchDeadlineSeconds = Math.max(
     0,
     asInteger(
@@ -1670,6 +1809,18 @@ function resolveRuntimeExecutorOptions(options, config) {
     0,
     asInteger(contactPacks.maxRecentEvidenceItems, DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS)
   );
+  const contactPackCacheMode = normalizeContactPackCacheMode(
+    contactPacks.cacheMode,
+    DEFAULT_CONTACT_PACK_CACHE_MODE
+  );
+  const evidenceSessionCurationMode = normalizeSessionEvidenceMode(
+    config.evidence?.sessionCurationMode,
+    DEFAULT_EVIDENCE_SESSION_CURATION_MODE
+  );
+  const evidenceSessionIndexRefreshMode = normalizeSessionEvidenceMode(
+    config.evidence?.sessionIndexRefreshMode,
+    DEFAULT_EVIDENCE_SESSION_INDEX_REFRESH_MODE
+  );
   const retryFailedPlans = asBoolean(
     options.retryFailed ?? options['retry-failed'] ?? config.recovery?.retryFailed,
     DEFAULT_RETRY_FAILED_PLANS
@@ -1701,12 +1852,20 @@ function resolveRuntimeExecutorOptions(options, config) {
     stallWarnSeconds,
     touchSummary,
     touchSampleSize,
+    touchScanMode,
+    touchScanMinHeartbeats,
+    touchScanMaxHeartbeats,
+    touchScanBackoffUnchanged,
     workerFirstTouchDeadlineSeconds,
     workerNoTouchRetryLimit,
+    workerStallFailSeconds,
     contactPackEnabled,
     contactPackMaxPolicyBullets,
     contactPackIncludeRecentEvidence,
     contactPackMaxRecentEvidenceItems,
+    contactPackCacheMode,
+    evidenceSessionCurationMode,
+    evidenceSessionIndexRefreshMode,
     retryFailedPlans,
     autoUnblockPlans,
     maxFailedRetries
@@ -2598,11 +2757,64 @@ async function readPlanRecord(rootDir, filePath, phase) {
   };
 }
 
+function clonePlanRecord(record) {
+  return {
+    ...record,
+    metadata: new Map(
+      [...(record.metadata instanceof Map ? record.metadata.entries() : [])].map(([key, value]) => [
+        key,
+        value && typeof value === 'object'
+          ? { ...value }
+          : value
+      ])
+    ),
+    dependencies: [...(record.dependencies ?? [])],
+    tags: [...(record.tags ?? [])],
+    specTargets: [...(record.specTargets ?? [])],
+    doneEvidence: [...(record.doneEvidence ?? [])],
+    atomicRoots: [...(record.atomicRoots ?? [])],
+    concurrencyLocks: [...(record.concurrencyLocks ?? [])]
+  };
+}
+
+async function readPlanRecordCached(rootDir, filePath, phase) {
+  const cacheKey = `${phase}:${toPosix(path.resolve(filePath))}`;
+  let signature = null;
+  try {
+    const stat = await fs.stat(filePath);
+    signature = `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    RUN_MEMORY_PLAN_RECORD_CACHE.delete(cacheKey);
+    return readPlanRecord(rootDir, filePath, phase);
+  }
+
+  const cached = RUN_MEMORY_PLAN_RECORD_CACHE.get(cacheKey);
+  if (cached && cached.signature === signature && cached.record) {
+    return clonePlanRecord(cached.record);
+  }
+
+  const record = await readPlanRecord(rootDir, filePath, phase);
+  RUN_MEMORY_PLAN_RECORD_CACHE.set(cacheKey, {
+    signature,
+    record: clonePlanRecord(record)
+  });
+  return record;
+}
+
 async function loadPlanRecords(rootDir, directoryPath, phase) {
   const files = await listMarkdownFiles(directoryPath);
+  const activeCacheKeys = new Set(files.map((filePath) => `${phase}:${toPosix(path.resolve(filePath))}`));
+  for (const cacheKey of RUN_MEMORY_PLAN_RECORD_CACHE.keys()) {
+    if (!cacheKey.startsWith(`${phase}:`)) {
+      continue;
+    }
+    if (!activeCacheKeys.has(cacheKey)) {
+      RUN_MEMORY_PLAN_RECORD_CACHE.delete(cacheKey);
+    }
+  }
   const records = [];
   for (const filePath of files) {
-    records.push(await readPlanRecord(rootDir, filePath, phase));
+    records.push(await readPlanRecordCached(rootDir, filePath, phase));
   }
   return records;
 }
@@ -2836,6 +3048,10 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     DEFAULT_RUNTIME_CONTEXT_PATH;
   const role = normalizeRoleName(sessionContext.role, ROLE_WORKER);
   const contactPackEnabled = asBoolean(options.contactPackEnabled, DEFAULT_CONTACT_PACKS_ENABLED);
+  const contactPackCacheMode = normalizeContactPackCacheMode(
+    options.contactPackCacheMode,
+    DEFAULT_CONTACT_PACK_CACHE_MODE
+  );
   if (!contactPackEnabled) {
     return {
       enabled: false,
@@ -2858,6 +3074,37 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     };
   }
 
+  const cacheKey = createHash('sha256').update(JSON.stringify({
+    runId: state.runId,
+    planId: plan.planId,
+    planShapeHash: computePlanShapeHash(plan),
+    role,
+    declaredRiskTier: parseRiskTier(sessionContext.declaredRiskTier, 'low'),
+    effectiveRiskTier: parseRiskTier(sessionContext.effectiveRiskTier, 'low'),
+    stageIndex: Math.max(1, asInteger(sessionContext.stageIndex, 1)),
+    stageTotal: Math.max(1, asInteger(sessionContext.stageTotal, 1)),
+    outputPath: contactPackRel,
+    configPath: toPosix(path.relative(paths.rootDir, paths.orchestratorConfigPath)),
+    maxPolicyBullets: asInteger(options.contactPackMaxPolicyBullets, DEFAULT_CONTACT_PACKS_MAX_POLICY_BULLETS),
+    includeRecentEvidence: asBoolean(options.contactPackIncludeRecentEvidence, DEFAULT_CONTACT_PACKS_INCLUDE_RECENT_EVIDENCE),
+    maxRecentEvidenceItems: asInteger(options.contactPackMaxRecentEvidenceItems, DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS)
+  })).digest('hex');
+  if (contactPackCacheMode === 'run-memory') {
+    const cached = RUN_MEMORY_CONTACT_PACK_CACHE.get(cacheKey);
+    if (cached && await exists(path.join(paths.rootDir, cached.contactPackFile))) {
+      return {
+        enabled: true,
+        contactPackFile: cached.contactPackFile,
+        generated: false,
+        reason: 'run-memory-cache-hit',
+        bytes: cached.bytes,
+        lineCount: cached.lineCount,
+        policyRuleCount: cached.policyRuleCount,
+        evidenceCount: cached.evidenceCount
+      };
+    }
+  }
+
   const result = await compileTaskContactPack({
     rootDir: paths.rootDir,
     planId: plan.planId,
@@ -2873,6 +3120,16 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     includeRecentEvidence: options.contactPackIncludeRecentEvidence,
     maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems
   });
+
+  if (contactPackCacheMode === 'run-memory') {
+    RUN_MEMORY_CONTACT_PACK_CACHE.set(cacheKey, {
+      contactPackFile: result.outputPath,
+      bytes: result.bytes,
+      lineCount: result.lineCount,
+      policyRuleCount: result.policyRuleCount,
+      evidenceCount: result.evidenceCount
+    });
+  }
 
   return {
     enabled: true,
@@ -3062,9 +3319,11 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
   const commandOutput = captureOutput ? executionOutput(execution) : '';
   const durationSeconds = Math.max(0, (Date.now() - executionStartedAtMs) / 1000);
   const sessionTouchSummary = execution.touchSummary ?? null;
+  const sessionTouchMonitor = execution.touchMonitor ?? null;
   const withSessionTouchSummary = (result) => ({
     ...result,
     touchSummary: sessionTouchSummary,
+    touchMonitor: sessionTouchMonitor,
     contactPackFile,
     durationSeconds
   });
@@ -3974,6 +4233,65 @@ function resolveEvidenceLifecycleConfig(config) {
     dedupMode: String(lifecycle.dedupMode ?? DEFAULT_EVIDENCE_DEDUP_MODE).trim().toLowerCase(),
     pruneOnComplete: asBoolean(lifecycle.pruneOnComplete, DEFAULT_EVIDENCE_PRUNE_ON_COMPLETE),
     keepMaxPerBlocker: Math.max(1, asInteger(lifecycle.keepMaxPerBlocker, DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER))
+  };
+}
+
+function evidenceMaintenanceRootsForPlan(plan) {
+  return [
+    assertSafeRelativePlanPath(plan.rel),
+    'docs/exec-plans/active/evidence/',
+    'docs/exec-plans/completed/evidence/',
+    'docs/exec-plans/evidence-index/',
+    `docs/exec-plans/evidence-index/${plan.planId}.md`
+  ];
+}
+
+function normalizeTouchedPathList(paths = []) {
+  return [...new Set(
+    (Array.isArray(paths) ? paths : [])
+      .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, ''))
+      .filter(Boolean)
+  )];
+}
+
+function hasPlanEvidencePathChanges(plan, touchedPaths = []) {
+  const roots = evidenceMaintenanceRootsForPlan(plan);
+  return normalizeTouchedPathList(touchedPaths).some((filePath) => (
+    roots.some((root) => pathMatchesRootPrefix(filePath, root))
+  ));
+}
+
+function evaluateSessionEvidenceMaintenance(plan, paths, sessionResult, options) {
+  const indexMode = normalizeSessionEvidenceMode(
+    options.evidenceSessionIndexRefreshMode,
+    DEFAULT_EVIDENCE_SESSION_INDEX_REFRESH_MODE
+  );
+  const curationMode = normalizeSessionEvidenceMode(
+    options.evidenceSessionCurationMode,
+    DEFAULT_EVIDENCE_SESSION_CURATION_MODE
+  );
+
+  let changed = false;
+  let detectedVia = 'none';
+  const touchSummary = sessionResult?.touchSummary ?? null;
+  if (Array.isArray(touchSummary?.touched)) {
+    changed = hasPlanEvidencePathChanges(plan, touchSummary.touched);
+    detectedVia = 'touch-summary';
+  } else {
+    const dirtyPaths = dirtyRepoPaths(paths.rootDir, { includeTransient: true });
+    changed = hasPlanEvidencePathChanges(plan, dirtyPaths);
+    detectedVia = 'dirty-scan';
+  }
+
+  const shouldRefreshIndex = indexMode === 'always' || (indexMode === 'on-change' && changed);
+  const shouldCurate = curationMode === 'always' || (curationMode === 'on-change' && changed);
+  return {
+    changed,
+    detectedVia,
+    shouldRefreshIndex,
+    shouldCurate,
+    indexMode,
+    curationMode
   };
 }
 
@@ -5135,7 +5453,10 @@ async function processPlan(plan, paths, state, options, config) {
           : null,
       touchCount: sessionResult.touchSummary?.count ?? 0,
       touchCategories: sessionResult.touchSummary?.categories ?? [],
-      touchSamples: sessionResult.touchSummary?.samples ?? []
+      touchSamples: sessionResult.touchSummary?.samples ?? [],
+      touchScanMode: sessionResult.touchMonitor?.mode ?? null,
+      touchScansExecuted: sessionResult.touchMonitor?.scansExecuted ?? 0,
+      touchScansSkipped: sessionResult.touchMonitor?.scansSkipped ?? 0
     }, options.dryRun);
     const workerTouchCount =
       typeof sessionResult.touchSummary?.count === 'number' && Number.isFinite(sessionResult.touchSummary.count)
@@ -5166,20 +5487,28 @@ async function processPlan(plan, paths, state, options, config) {
     if (sessionResult.failureTail && !isTickerOutput(options)) {
       progressLog(options, `session failure tail:\n${sessionResult.failureTail}`);
     }
-    await refreshEvidenceIndex(plan, paths, state, options, config);
-    const sessionCuration = await curateEvidenceForPlan(plan, paths, options, config);
-    if (sessionCuration.filesPruned > 0 || sessionCuration.filesUpdated > 0) {
-      await logEvent(paths, state, 'evidence_curated', {
-        planId: plan.planId,
-        stage: 'session',
-        session,
-        directoriesVisited: sessionCuration.directoriesVisited,
-        filesPruned: sessionCuration.filesPruned,
-        filesKept: sessionCuration.filesKept,
-        filesUpdated: sessionCuration.filesUpdated,
-        replacementsApplied: sessionCuration.replacementsApplied
-      }, options.dryRun);
+    const evidenceMaintenance = evaluateSessionEvidenceMaintenance(plan, paths, sessionResult, options);
+    if (evidenceMaintenance.shouldRefreshIndex) {
       await refreshEvidenceIndex(plan, paths, state, options, config);
+    }
+    if (evidenceMaintenance.shouldCurate) {
+      const sessionCuration = await curateEvidenceForPlan(plan, paths, options, config);
+      if (sessionCuration.filesPruned > 0 || sessionCuration.filesUpdated > 0) {
+        await logEvent(paths, state, 'evidence_curated', {
+          planId: plan.planId,
+          stage: 'session',
+          session,
+          directoriesVisited: sessionCuration.directoriesVisited,
+          filesPruned: sessionCuration.filesPruned,
+          filesKept: sessionCuration.filesKept,
+          filesUpdated: sessionCuration.filesUpdated,
+          replacementsApplied: sessionCuration.replacementsApplied,
+          changedDetectedVia: evidenceMaintenance.detectedVia
+        }, options.dryRun);
+        if (evidenceMaintenance.shouldRefreshIndex) {
+          await refreshEvidenceIndex(plan, paths, state, options, config);
+        }
+      }
     }
 
     if (sessionResult.status === 'handoff_required') {
@@ -6202,10 +6531,20 @@ function buildParallelWorkerCommand(plan, state, options, parallelOptions) {
     String(asBoolean(options.touchSummary, DEFAULT_TOUCH_SUMMARY)),
     '--touch-sample-size',
     String(asInteger(options.touchSampleSize, DEFAULT_TOUCH_SAMPLE_SIZE)),
+    '--touch-scan-mode',
+    String(normalizeTouchScanMode(options.touchScanMode, DEFAULT_TOUCH_SCAN_MODE)),
+    '--touch-scan-min-heartbeats',
+    String(asInteger(options.touchScanMinHeartbeats, DEFAULT_TOUCH_SCAN_MIN_HEARTBEATS)),
+    '--touch-scan-max-heartbeats',
+    String(asInteger(options.touchScanMaxHeartbeats, DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS)),
+    '--touch-scan-backoff-unchanged',
+    String(asInteger(options.touchScanBackoffUnchanged, DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED)),
     '--worker-first-touch-deadline-seconds',
     String(asInteger(options.workerFirstTouchDeadlineSeconds, DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS)),
     '--worker-no-touch-retry-limit',
     String(asInteger(options.workerNoTouchRetryLimit, DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT)),
+    '--worker-stall-fail-seconds',
+    String(asInteger(options.workerStallFailSeconds, DEFAULT_WORKER_STALL_FAIL_SECONDS)),
     '--retry-failed',
     String(asBoolean(options.retryFailedPlans, DEFAULT_RETRY_FAILED_PLANS)),
     '--auto-unblock',
@@ -6821,11 +7160,22 @@ async function runCommand(paths, options) {
       sessionPolicy: {
         contextThreshold: options.contextThreshold,
         requireResultPayload: options.requireResultPayload,
+        touchScan: {
+          mode: options.touchScanMode,
+          minHeartbeats: options.touchScanMinHeartbeats,
+          maxHeartbeats: options.touchScanMaxHeartbeats,
+          backoffUnchanged: options.touchScanBackoffUnchanged
+        },
+        evidenceSessionMaintenance: {
+          indexRefreshMode: options.evidenceSessionIndexRefreshMode,
+          curationMode: options.evidenceSessionCurationMode
+        },
         contactPacks: {
           enabled: options.contactPackEnabled,
           maxPolicyBullets: options.contactPackMaxPolicyBullets,
           includeRecentEvidence: options.contactPackIncludeRecentEvidence,
-          maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems
+          maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems,
+          cacheMode: options.contactPackCacheMode
         }
       },
       roleOrchestration: {
@@ -6923,11 +7273,22 @@ async function resumeCommand(paths, options) {
       sessionPolicy: {
         contextThreshold: options.contextThreshold,
         requireResultPayload: options.requireResultPayload,
+        touchScan: {
+          mode: options.touchScanMode,
+          minHeartbeats: options.touchScanMinHeartbeats,
+          maxHeartbeats: options.touchScanMaxHeartbeats,
+          backoffUnchanged: options.touchScanBackoffUnchanged
+        },
+        evidenceSessionMaintenance: {
+          indexRefreshMode: options.evidenceSessionIndexRefreshMode,
+          curationMode: options.evidenceSessionCurationMode
+        },
         contactPacks: {
           enabled: options.contactPackEnabled,
           maxPolicyBullets: options.contactPackMaxPolicyBullets,
           includeRecentEvidence: options.contactPackIncludeRecentEvidence,
-          maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems
+          maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems,
+          cacheMode: options.contactPackCacheMode
         }
       },
       roleOrchestration: {

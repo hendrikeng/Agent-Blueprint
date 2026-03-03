@@ -24,7 +24,8 @@
       "enabled": true,
       "maxPolicyBullets": 10,
       "includeRecentEvidence": true,
-      "maxRecentEvidenceItems": 6
+      "maxRecentEvidenceItems": 6,
+      "cacheMode": "run-memory"
     }
   },
   "validation": {
@@ -59,6 +60,8 @@
     "maxFailedRetries": 2
   },
   "evidence": {
+    "sessionCurationMode": "on-change",
+    "sessionIndexRefreshMode": "on-change",
     "compaction": {
       "mode": "compact-index",
       "maxReferences": 25
@@ -201,6 +204,10 @@
     "stallWarnSeconds": 120,
     "touchSummary": true,
     "touchSampleSize": 3,
+    "touchScanMode": "adaptive",
+    "touchScanMinHeartbeats": 1,
+    "touchScanMaxHeartbeats": 8,
+    "touchScanBackoffUnchanged": 2,
     "workerFirstTouchDeadlineSeconds": 180,
     "workerNoTouchRetryLimit": 1,
     "workerStallFailSeconds": 900
@@ -211,7 +218,7 @@
     "branchPrefix": "orch",
     "baseRef": "HEAD",
     "gitRemote": "origin",
-    "workerOutputMode": "pretty",
+    "workerOutputMode": "minimal",
     "keepWorktrees": false,
     "pushBranches": false,
     "openPullRequests": false,

@@ -103,10 +103,11 @@ Use the manual path when any of these are true:
   - `"requireResultPayload": true`
   - `"context.runtimeContextPath"` points to compiled runtime instructions (`docs/generated/agent-runtime-context.md` by default).
   - `"context.maxTokens"` sets a hard budget for compiled runtime context size.
-  - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`).
-  - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 12`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.workerFirstTouchDeadlineSeconds": 180`, and `"logging.workerNoTouchRetryLimit": 1` tune operator-facing output noise, liveness, live file-touch visibility, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast).
+  - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`, `cacheMode`).
+  - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 12`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.touchScanMode": "adaptive"`, `"logging.touchScanMinHeartbeats": 1`, `"logging.touchScanMaxHeartbeats": 8`, `"logging.touchScanBackoffUnchanged": 2`, `"logging.workerFirstTouchDeadlineSeconds": 180`, and `"logging.workerNoTouchRetryLimit": 1` tune operator-facing output noise, liveness, live file-touch visibility, touch-scan cadence, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast).
   - `"recovery.retryFailed": true`, `"recovery.autoUnblock": true`, and `"recovery.maxFailedRetries": 3` control automatic retry/unblock behavior for resumable plans.
   - `"parallel.maxPlans"` sets default worker concurrency for `run --parallel-plans`.
+  - `"parallel.workerOutputMode": "minimal"` keeps branch workers concise by default.
   - `"parallel.worktreeRoot"`, `"parallel.branchPrefix"`, `"parallel.baseRef"`, `"parallel.gitRemote"` configure branch/worktree strategy.
   - `"parallel.pushBranches": true` pushes worker branches automatically.
   - `"parallel.openPullRequests": true` with `"parallel.pullRequest.createCommand"` can open PRs per completed worker branch.
@@ -160,6 +161,8 @@ Use the manual path when any of these are true:
   - `evidence.lifecycle.dedupMode: "strict-upsert"` deduplicates noisy rerun artifacts by blocker signature.
   - `evidence.lifecycle.pruneOnComplete: true` re-runs curation before completion.
   - `evidence.lifecycle.keepMaxPerBlocker` controls how many artifacts remain per dedup group (default `1`).
+  - `evidence.sessionCurationMode: "on-change"` runs per-session curation only when plan/evidence paths changed.
+  - `evidence.sessionIndexRefreshMode: "on-change"` refreshes per-session evidence indexes only when plan/evidence paths changed.
   - Historical cleanup supports `--scope completed` to canonicalize completed-plan evidence metadata and indexes.
   - Evidence folders with markdown artifacts always have a canonical `README.md` generated/maintained by curation.
   - `docs/exec-plans/evidence-index/README.md` is generated/maintained as the index-directory guide.
@@ -171,7 +174,7 @@ Use the manual path when any of these are true:
   - File-touch detail lines (`file activity ...`) emit category counts and representative file samples when touched-file sets change.
   - Raw command output is written to `docs/ops/automation/runtime/<run-id>/` session/validation logs.
   - Failure summaries include only the last `--failure-tail-lines` lines and a pointer to the full log file.
-  - `logging.heartbeatSeconds`, `logging.stallWarnSeconds`, `logging.touchSummary`, `logging.touchSampleSize`, `logging.workerFirstTouchDeadlineSeconds`, and `logging.workerNoTouchRetryLimit` tune heartbeat cadence, stall-warning threshold, file-touch detail level, worker first-edit deadline fail-fast (`--worker-first-touch-deadline-seconds`), and automatic worker no-touch retries (`--worker-no-touch-retry-limit`).
+  - `logging.heartbeatSeconds`, `logging.stallWarnSeconds`, `logging.touchSummary`, `logging.touchSampleSize`, `logging.touchScanMode`, `logging.touchScanMinHeartbeats`, `logging.touchScanMaxHeartbeats`, `logging.touchScanBackoffUnchanged`, `logging.workerFirstTouchDeadlineSeconds`, and `logging.workerNoTouchRetryLimit` tune heartbeat cadence, stall-warning threshold, file-touch detail level/cadence, worker first-edit deadline fail-fast (`--worker-first-touch-deadline-seconds`), and automatic worker no-touch retries (`--worker-no-touch-retry-limit`).
 - Drift guardrail:
   - Run `npm run blueprint:verify` to fail on orchestration policy drift (role-model enforcement, role command placeholders, pretty logging default, runtime-context and stage-reuse policy).
 - Do not use provider interactive modes (they will block orchestration); use non-interactive CLI flags in provider commands.
