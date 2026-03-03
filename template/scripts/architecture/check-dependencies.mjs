@@ -45,6 +45,98 @@ function findBoundaryRule(eslintConfig) {
   return null;
 }
 
+const RG_CANDIDATES = [
+  process.env.RG_BIN,
+  'rg',
+  '/opt/homebrew/bin/rg',
+  '/usr/local/bin/rg',
+  '/usr/bin/rg'
+].filter(Boolean);
+
+function matchesGlobSuffix(filePath, globs) {
+  const normalized = toPosix(filePath);
+  for (const glob of globs) {
+    const value = String(glob ?? '').trim();
+    if (!value) {
+      continue;
+    }
+    if (value.startsWith('*.')) {
+      if (normalized.endsWith(value.slice(1))) {
+        return true;
+      }
+      continue;
+    }
+    if (normalized.endsWith(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function runRegexFallback(pattern, absDir, globs = ['*.ts', '*.tsx']) {
+  const matches = [];
+  const stack = [absDir];
+  let regex = null;
+  try {
+    regex = new RegExp(pattern);
+  } catch (error) {
+    throw new Error(
+      `rg is unavailable and fallback regex compilation failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+
+    let entries = [];
+    try {
+      entries = fsSync.readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name === '.next' || entry.name === '.git') {
+        continue;
+      }
+
+      const nextPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(nextPath);
+        continue;
+      }
+      if (!entry.isFile() || !matchesGlobSuffix(nextPath, globs)) {
+        continue;
+      }
+
+      let content = '';
+      try {
+        content = fsSync.readFileSync(nextPath, 'utf8');
+      } catch {
+        continue;
+      }
+
+      const lines = content.split(/\r?\n/);
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        regex.lastIndex = 0;
+        if (!regex.test(line)) {
+          continue;
+        }
+        matches.push(`${toPosix(nextPath)}:${index + 1}:${line}`);
+        if (matches.length >= 200) {
+          return matches.join('\n');
+        }
+      }
+    }
+  }
+
+  return matches.join('\n');
+}
+
 function runRg(pattern, absDir, globs = ['*.ts', '*.tsx']) {
   const args = ['-n', '--pcre2', '--max-count', '200'];
   for (const glob of globs) {
@@ -52,37 +144,41 @@ function runRg(pattern, absDir, globs = ['*.ts', '*.tsx']) {
   }
   args.push(pattern, absDir);
 
-  const result = spawnSync('rg', args, {
-    encoding: 'utf8',
-    maxBuffer: 1024 * 1024 * 16
-  });
+  for (const binary of RG_CANDIDATES) {
+    const result = spawnSync(binary, args, {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024 * 16
+    });
 
-  if (result.status === 1) {
-    return '';
-  }
-
-  if (result.error) {
-    const code = typeof result.error.code === 'string' ? result.error.code : 'unknown';
-    if (code === 'ENOENT') {
-      throw new Error('rg binary not found in PATH');
+    if (result.error) {
+      const code = typeof result.error.code === 'string' ? result.error.code : 'unknown';
+      if (code === 'ENOENT') {
+        continue;
+      }
+      if (code === 'ENOBUFS') {
+        throw new Error('rg output exceeded buffer limit (max-count=200, maxBuffer=16MB)');
+      }
+      throw new Error(result.error.message || `rg failed (${code})`);
     }
-    if (code === 'ENOBUFS') {
-      throw new Error('rg output exceeded buffer limit (max-count=200, maxBuffer=16MB)');
+
+    if (result.status === 1) {
+      return '';
     }
-    throw new Error(result.error.message || `rg failed (${code})`);
+
+    if (result.status !== 0) {
+      throw new Error(
+        result.stderr?.trim() ||
+        result.stdout?.trim() ||
+        (result.signal
+          ? `rg terminated by signal ${result.signal}`
+          : `rg failed with exit code ${result.status}`)
+      );
+    }
+
+    return result.stdout.trim();
   }
 
-  if (result.status !== 0) {
-    throw new Error(
-      result.stderr?.trim() ||
-      result.stdout?.trim() ||
-      (result.signal
-        ? `rg terminated by signal ${result.signal}`
-        : `rg failed with exit code ${result.status}`)
-    );
-  }
-
-  return result.stdout.trim();
+  return runRegexFallback(pattern, absDir, globs);
 }
 
 async function checkNxDependencyConstraints(check, violations) {
