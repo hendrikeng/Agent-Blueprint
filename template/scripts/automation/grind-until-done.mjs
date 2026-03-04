@@ -49,10 +49,41 @@ if (!hasCliFlag('--commit')) {
 let stableCycles = 0;
 let previousSignature = '';
 
+function parseCliDetailPairs(entries) {
+  const pairs = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const token = String(entries[index] ?? '');
+    if (!token.startsWith('--')) {
+      continue;
+    }
+    const key = token.replace(/^--/, '').trim();
+    const next = entries[index + 1];
+    if (typeof next === 'string' && !next.startsWith('--')) {
+      pairs.push([key, next]);
+      index += 1;
+      continue;
+    }
+    pairs.push([key, 'true']);
+  }
+  return pairs;
+}
+
 function runOrchestrator(command) {
   const args = ['./scripts/automation/orchestrator.mjs', command, ...baseArgs, ...passthroughArgs];
-  const renderedArgs = [command, ...baseArgs, ...passthroughArgs].join(' ');
-  console.log(`[grind] starting: node ./scripts/automation/orchestrator.mjs ${renderedArgs}`);
+  const parsedPairs = parseCliDetailPairs([...baseArgs, ...passthroughArgs]);
+  const dedupedPairs = new Map();
+  for (const [key, value] of parsedPairs) {
+    dedupedPairs.set(key, value);
+  }
+  const detailPairs = [
+    ['command', command],
+    ...dedupedPairs.entries()
+  ];
+  const keyWidth = Math.max(...detailPairs.map(([key]) => key.length));
+  console.log('[grind] starting orchestrator');
+  for (const [key, value] of detailPairs) {
+    console.log(`         ${key.padEnd(keyWidth, ' ')} = ${value}`);
+  }
   const result = spawnSync('node', args, { stdio: 'inherit', env: process.env });
   if (result.status !== 0) {
     process.exit(result.status ?? 1);

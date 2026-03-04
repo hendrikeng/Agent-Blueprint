@@ -690,10 +690,8 @@ function printPrettyRunMessage(options, prefix, message) {
   const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
   const keyWidth = Math.min(20, Math.max(...parsed.details.map((entry) => entry.key.length)));
   for (const entry of parsed.details) {
-    const key = colorize(options, '90', entry.key.padEnd(keyWidth, ' '));
-    const separator = colorize(options, '90', ' = ');
-    const value = colorize(options, '37', entry.value);
-    console.log(`${continuationPrefix}${key}${separator}${value}`);
+    const detailLine = `${entry.key.padEnd(keyWidth, ' ')} = ${entry.value}`;
+    printIndentedPrettyMessage(continuationPrefix, detailLine);
   }
 }
 
@@ -1238,18 +1236,34 @@ function safeDisplayToken(value, fallback = 'n/a') {
   return rendered.length > 0 ? rendered : fallback;
 }
 
+function compactDisplayToken(value, fallback = 'n/a', maxLength = 24) {
+  const rendered = safeDisplayToken(value, fallback);
+  if (rendered.length <= maxLength) {
+    return rendered;
+  }
+  if (maxLength <= 8) {
+    return rendered.slice(0, maxLength);
+  }
+  const available = maxLength - 1;
+  const head = Math.ceil(available / 2);
+  const tail = Math.floor(available / 2);
+  return `${rendered.slice(0, head)}…${rendered.slice(rendered.length - tail)}`;
+}
+
 function formatCommandHeartbeatLine(options, context, elapsedSeconds, idleSeconds) {
   const stamp = colorize(options, '90', nowIso().slice(11, 19));
   const dots = nextPrettyLiveDots(options);
   const tag = prettyLevelTag(options, idleSeconds >= options.stallWarnSeconds ? 'warn' : 'run');
-  const phase = safeDisplayToken(context.phase, 'session');
-  const planId = safeDisplayToken(context.planId, 'run');
-  const role = safeDisplayToken(context.role, 'n/a');
-  const activity = safeDisplayToken(context.activity, phase);
+  const phase = compactDisplayToken(context.phase, 'session', 10);
+  const planId = compactDisplayToken(context.planId, 'run', 26);
+  const role = compactDisplayToken(context.role, 'n/a', 10);
+  const activity = compactDisplayToken(context.activity, phase, 16);
   const touchSummary = formatTouchSummaryInline(context.touchSummary);
+  const elapsed = formatDurationClock(elapsedSeconds);
+  const idle = formatDurationClock(idleSeconds);
   return (
-    `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity} ` +
-    `elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${touchSummary}`
+    `${stamp} ${dots} ${tag} heartbeat | plan=${planId} | role=${role} | phase=${phase} | activity=${activity} | ` +
+    `elapsed=${elapsed} | idle=${idle} | ${touchSummary}`
   );
 }
 
