@@ -218,7 +218,7 @@ Options:
   --json true|false                  JSON output for audit
   --output minimal|ticker|pretty|verbose Console output mode (default: pretty)
   --failure-tail-lines <n>           Lines of command output to print on failures (default: 60)
-  --heartbeat-seconds <n>            Live status heartbeat cadence in seconds (default: 12)
+  --heartbeat-seconds <n>            Live status heartbeat cadence in seconds (default: 120)
   --stall-warn-seconds <n>           Warn when no command output for this many seconds (default: 120)
   --touch-summary true|false         Show live touched-file summary in heartbeats (default: true)
   --touch-sample-size <n>            Number of touched-file examples in heartbeat details (default: 3)
@@ -1581,6 +1581,7 @@ async function runShellMonitored(
   let latestProviderActivityAtMs = null;
   let liveActivityUpdates = 0;
   let lastLiveActivityAcceptedAtMs = 0;
+  let lastVisibleStatusAtMs = startedAtMs;
   const touchSummaryEnabled = asBoolean(options.touchSummary, DEFAULT_TOUCH_SUMMARY);
   const touchScanMode = normalizeTouchScanMode(options.touchScanMode, DEFAULT_TOUCH_SCAN_MODE);
   const touchScanMinHeartbeats = Math.max(
@@ -1634,6 +1635,10 @@ async function runShellMonitored(
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit'
   });
 
+  function markVisibleStatus(nowMs = Date.now()) {
+    lastVisibleStatusAtMs = nowMs;
+  }
+
   function maybeRecordLiveActivity(line, source, nowMs = Date.now()) {
     if (!liveActivityEnabled) {
       return;
@@ -1652,6 +1657,7 @@ async function runShellMonitored(
     latestProviderActivityAtMs = nowMs;
     lastLiveActivityAcceptedAtMs = nowMs;
     liveActivityUpdates += 1;
+    let surfaced = false;
     const callback = context && typeof context.onLiveActivity === 'function' ? context.onLiveActivity : null;
     if (callback) {
       callback({
@@ -1659,6 +1665,7 @@ async function runShellMonitored(
         message: sanitized,
         timestamp: nowIso()
       });
+      surfaced = true;
     }
     if (isPrettyOutput(options)) {
       const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
@@ -1668,6 +1675,10 @@ async function runShellMonitored(
       const workingMessage = colorize(options, '37', sanitized);
       clearLiveStatusLine();
       printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
+      surfaced = true;
+    }
+    if (surfaced) {
+      markVisibleStatus(nowMs);
     }
   }
 
@@ -1764,6 +1775,7 @@ async function runShellMonitored(
           options,
           `file activity phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} ${formatTouchSummaryDetails(latestTouchSummary)}`
         );
+        markVisibleStatus(nowMs);
       }
     }
 
@@ -1799,11 +1811,14 @@ async function runShellMonitored(
         ? Math.max(lastOutputAtMs, lastMeaningfulTouchAtMs)
         : effectiveProgressAtMs;
     const workerIdleSeconds = Math.floor((nowMs - effectiveWorkerProgressAtMs) / 1000);
-
-    progressLog(
-      options,
-      formatCommandHeartbeatMessage({ ...context, touchSummary }, elapsedSeconds, idleSeconds)
-    );
+    const shouldEmitHeartbeat = nowMs - lastVisibleStatusAtMs >= heartbeatMs;
+    if (shouldEmitHeartbeat) {
+      progressLog(
+        options,
+        formatCommandHeartbeatMessage({ ...context, touchSummary }, elapsedSeconds, idleSeconds)
+      );
+      markVisibleStatus(nowMs);
+    }
 
     if (idleSeconds * 1000 >= stallWarnMs && !warnEmitted) {
       warnEmitted = true;
