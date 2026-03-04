@@ -477,6 +477,11 @@ function extractLiveActivityFromJsonLine(line) {
   return null;
 }
 
+function looksLikeJsonEnvelope(line) {
+  const rendered = String(line ?? '').trim();
+  return rendered.startsWith('{') && rendered.endsWith('}');
+}
+
 function sanitizeLiveActivityLine(line, redactionPatterns, maxChars) {
   let rendered = stripAnsiControl(line).replace(/\s+/g, ' ').trim();
   if (!rendered) {
@@ -1378,7 +1383,14 @@ async function runShellMonitored(
     }
     for (const line of parts) {
       const jsonActivity = extractLiveActivityFromJsonLine(line);
-      maybeRecordLiveActivity(jsonActivity ?? line, source, nowMs);
+      if (jsonActivity) {
+        maybeRecordLiveActivity(jsonActivity, source, nowMs);
+        continue;
+      }
+      if (looksLikeJsonEnvelope(line)) {
+        continue;
+      }
+      maybeRecordLiveActivity(line, source, nowMs);
     }
   }
 
@@ -1580,16 +1592,18 @@ async function runShellMonitored(
       }
       settled = true;
       cleanupTimers();
-      maybeRecordLiveActivity(
-        extractLiveActivityFromJsonLine(stdoutRemainder) ?? stdoutRemainder,
-        'stdout',
-        Date.now()
-      );
-      maybeRecordLiveActivity(
-        extractLiveActivityFromJsonLine(stderrRemainder) ?? stderrRemainder,
-        'stderr',
-        Date.now()
-      );
+      const stdoutJsonActivity = extractLiveActivityFromJsonLine(stdoutRemainder);
+      if (stdoutJsonActivity) {
+        maybeRecordLiveActivity(stdoutJsonActivity, 'stdout', Date.now());
+      } else if (!looksLikeJsonEnvelope(stdoutRemainder)) {
+        maybeRecordLiveActivity(stdoutRemainder, 'stdout', Date.now());
+      }
+      const stderrJsonActivity = extractLiveActivityFromJsonLine(stderrRemainder);
+      if (stderrJsonActivity) {
+        maybeRecordLiveActivity(stderrJsonActivity, 'stderr', Date.now());
+      } else if (!looksLikeJsonEnvelope(stderrRemainder)) {
+        maybeRecordLiveActivity(stderrRemainder, 'stderr', Date.now());
+      }
       maybeRefreshTouchSummary(Date.now(), true);
       const finalTouchSummary = touchSummary;
       resolve({
