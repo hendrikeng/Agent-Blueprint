@@ -684,17 +684,26 @@ function parseStructuredLogMessage(message) {
   const headline = normalized.slice(0, firstDetailIndex).trim();
   const detailText = normalized.slice(firstDetailIndex).trim();
   const details = [];
+  const keyTokenPattern = /^([A-Za-z][A-Za-z0-9_-]*)=(.*)$/;
+  let currentKey = null;
+  let currentValue = '';
   for (const token of detailText.split(/\s+/)) {
-    const separatorIndex = token.indexOf('=');
-    if (separatorIndex <= 0) {
+    const keyMatch = token.match(keyTokenPattern);
+    if (keyMatch) {
+      if (currentKey && currentValue.trim()) {
+        details.push({ key: currentKey, value: currentValue.trim() });
+      }
+      currentKey = keyMatch[1];
+      currentValue = keyMatch[2] ?? '';
       continue;
     }
-    const key = token.slice(0, separatorIndex).trim();
-    const value = token.slice(separatorIndex + 1).trim();
-    if (!key || !value) {
+    if (!currentKey) {
       continue;
     }
-    details.push({ key, value });
+    currentValue = currentValue ? `${currentValue} ${token}` : token;
+  }
+  if (currentKey && currentValue.trim()) {
+    details.push({ key: currentKey, value: currentValue.trim() });
   }
   if (details.length === 0) {
     return { headline: normalized, details: [] };
