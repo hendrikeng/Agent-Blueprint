@@ -1057,15 +1057,6 @@ function safeDisplayToken(value, fallback = 'n/a') {
   return rendered.length > 0 ? rendered : fallback;
 }
 
-function formatLiveActivityInline(value) {
-  const rendered = String(value ?? '').replace(/\s+/g, ' ').trim();
-  if (!rendered) {
-    return '';
-  }
-  const escaped = rendered.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return ` agent="${escaped}"`;
-}
-
 function formatCommandHeartbeatLine(options, context, elapsedSeconds, idleSeconds) {
   const stamp = colorize(options, '90', nowIso().slice(11, 19));
   const dots = nextPrettyLiveDots(options);
@@ -1074,10 +1065,9 @@ function formatCommandHeartbeatLine(options, context, elapsedSeconds, idleSecond
   const planId = safeDisplayToken(context.planId, 'run');
   const role = safeDisplayToken(context.role, 'n/a');
   const activity = safeDisplayToken(context.activity, phase);
-  const liveActivity = formatLiveActivityInline(context.liveActivity);
   const touchSummary = formatTouchSummaryInline(context.touchSummary);
   return (
-    `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity}${liveActivity} ` +
+    `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity} ` +
     `elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${touchSummary}`
   );
 }
@@ -1386,6 +1376,12 @@ async function runShellMonitored(
         timestamp: nowIso()
       });
     }
+    if (isPrettyOutput(options)) {
+      const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
+      const workingLabel = colorize(options, '36', `• Working (${formatDuration(elapsedSeconds)})`);
+      clearLiveStatusLine();
+      console.log(`${workingLabel} ${sanitized}`);
+    }
   }
 
   function processStreamChunk(source, chunk, nowMs = Date.now()) {
@@ -1517,7 +1513,7 @@ async function runShellMonitored(
         options,
         formatCommandHeartbeatLine(
           options,
-          { ...context, touchSummary, liveActivity: latestProviderActivity },
+          { ...context, touchSummary },
           elapsedSeconds,
           idleSeconds
         )
@@ -1525,7 +1521,7 @@ async function runShellMonitored(
     } else {
       progressLog(
         options,
-        `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))}${formatLiveActivityInline(latestProviderActivity)} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`
+        `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`
       );
     }
 
