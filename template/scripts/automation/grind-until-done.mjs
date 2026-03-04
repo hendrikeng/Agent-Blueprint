@@ -49,6 +49,20 @@ if (!hasCliFlag('--commit')) {
 let stableCycles = 0;
 let previousSignature = '';
 
+function canUseColor() {
+  if (!process.stdout.isTTY) return false;
+  if (String(process.env.NO_COLOR ?? '').trim() !== '') return false;
+  if (String(process.env.CI ?? '').trim() !== '') return false;
+  return String(process.env.TERM ?? '').trim().toLowerCase() !== 'dumb';
+}
+
+function colorize(code, text) {
+  if (!canUseColor()) {
+    return text;
+  }
+  return `\x1b[${code}m${text}\x1b[0m`;
+}
+
 function parseCliDetailPairs(entries) {
   const pairs = [];
   for (let index = 0; index < entries.length; index += 1) {
@@ -79,10 +93,17 @@ function runOrchestrator(command) {
     ['command', command],
     ...dedupedPairs.entries()
   ];
-  const keyWidth = Math.max(...detailPairs.map(([key]) => key.length));
-  console.log('[grind] starting orchestrator');
+  const keyWidth = Math.max(16, Math.max(...detailPairs.map(([key]) => key.length)));
+  const stamp = colorize('90', new Date().toISOString().slice(11, 19));
+  const glyph = colorize('35', '*');
+  const tag = colorize('35', 'GRIND');
+  const headline = colorize('37', 'starting orchestrator');
+  console.log(`${stamp} ${glyph} ${tag} ${headline}`);
   for (const [key, value] of detailPairs) {
-    console.log(`         ${key.padEnd(keyWidth, ' ')} = ${value}`);
+    const keyLabel = colorize('90', key.padEnd(keyWidth, ' '));
+    const separator = colorize('90', ' = ');
+    const valueLabel = colorize('37', value);
+    console.log(`                 ${keyLabel}${separator}${valueLabel}`);
   }
   const result = spawnSync('node', args, { stdio: 'inherit', env: process.env });
   if (result.status !== 0) {

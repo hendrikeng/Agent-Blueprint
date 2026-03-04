@@ -679,6 +679,67 @@ function parseStructuredLogMessage(message) {
   return { headline: headline || normalized, details };
 }
 
+function colorizeStructuredHeadline(options, headline, level = 'run') {
+  const value = String(headline ?? '').trim();
+  const lower = value.toLowerCase();
+  if (!value) {
+    return value;
+  }
+  if (lower.startsWith('heartbeat') || lower.startsWith('file activity')) {
+    return colorize(options, '32', value);
+  }
+  if (lower.startsWith('plan start') || (lower.startsWith('session') && lower.includes(' start'))) {
+    return colorize(options, '32', value);
+  }
+  if (lower.startsWith('run resumed') || lower.startsWith('run start')) {
+    return colorize(options, '36', value);
+  }
+  if (level === 'warn') {
+    return colorize(options, '33', value);
+  }
+  if (level === 'error') {
+    return colorize(options, '31', value);
+  }
+  return value;
+}
+
+function colorizeStructuredValue(options, key, value, level = 'run') {
+  const keyLower = String(key ?? '').trim().toLowerCase();
+  const valueText = String(value ?? '').trim();
+  const valueLower = valueText.toLowerCase();
+  if (!valueText) {
+    return valueText;
+  }
+
+  if (keyLower === 'runid') return colorize(options, '96', valueText);
+  if (keyLower === 'plan') return colorize(options, '36', valueText);
+  if (keyLower === 'model') return colorize(options, '94', valueText);
+  if (keyLower === 'provider') return colorize(options, '36', valueText);
+  if (keyLower === 'role') return colorize(options, '35', valueText);
+  if (keyLower === 'phase' || keyLower === 'activity') return colorize(options, '32', valueText);
+  if (keyLower === 'elapsed' || keyLower === 'idle') return colorize(options, '32', valueText);
+  if (keyLower === 'touch') return colorize(options, '36', valueText);
+
+  if (['declared', 'effective', 'risk', 'status'].includes(keyLower)) {
+    if (valueLower === 'low' || valueLower === 'completed' || valueLower === 'passed') {
+      return colorize(options, '32', valueText);
+    }
+    if (valueLower === 'medium' || valueLower === 'pending' || valueLower === 'blocked') {
+      return colorize(options, '33', valueText);
+    }
+    if (valueLower === 'high' || valueLower === 'failed' || valueLower === 'error') {
+      return colorize(options, '31', valueText);
+    }
+    return colorize(options, '33', valueText);
+  }
+
+  if (keyLower === 'score') return colorize(options, '35', valueText);
+
+  if (level === 'warn') return colorize(options, '33', valueText);
+  if (level === 'error') return colorize(options, '31', valueText);
+  return colorize(options, '37', valueText);
+}
+
 function printPrettyRunMessage(options, prefix, message, level = 'run') {
   const parsed = parseStructuredLogMessage(message);
   if (parsed.details.length === 0) {
@@ -687,30 +748,19 @@ function printPrettyRunMessage(options, prefix, message, level = 'run') {
       printIndentedPrettyMessage(prefix, message);
       return;
     }
-    if (headlineText.startsWith('heartbeat') || headlineText.startsWith('file activity')) {
-      printIndentedPrettyMessage(prefix, colorize(options, '32', headlineText));
-      return;
-    }
-    if (level === 'warn') {
-      printIndentedPrettyMessage(prefix, colorize(options, '33', headlineText));
-      return;
-    }
-    printIndentedPrettyMessage(prefix, headlineText);
+    printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(options, headlineText, level));
     return;
   }
 
   const headlineText = String(parsed.headline ?? '').trim();
-  if (headlineText.startsWith('heartbeat') || headlineText.startsWith('file activity')) {
-    printIndentedPrettyMessage(prefix, colorize(options, '32', headlineText));
-  } else if (level === 'warn') {
-    printIndentedPrettyMessage(prefix, colorize(options, '33', headlineText));
-  } else {
-    printIndentedPrettyMessage(prefix, headlineText);
-  }
+  printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(options, headlineText, level));
   const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
-  const keyWidth = Math.min(20, Math.max(...parsed.details.map((entry) => entry.key.length)));
+  const keyWidth = 16;
   for (const entry of parsed.details) {
-    printIndentedPrettyMessage(`${continuationPrefix}${entry.key.padEnd(keyWidth, ' ')} = `, entry.value);
+    const keyLabel = colorize(options, '90', `${entry.key.padEnd(keyWidth, ' ')}`);
+    const separator = colorize(options, '90', ' = ');
+    const valueLabel = colorizeStructuredValue(options, entry.key, entry.value, level);
+    printIndentedPrettyMessage(`${continuationPrefix}${keyLabel}${separator}`, valueLabel);
   }
 }
 
