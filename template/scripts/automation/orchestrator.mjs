@@ -648,6 +648,55 @@ function printIndentedPrettyMessage(prefix, message) {
     console.log(`${continuationPrefix}${line}`);
   }
 }
+
+function parseStructuredLogMessage(message) {
+  const normalized = String(message ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return { headline: '', details: [] };
+  }
+  const firstDetailIndex = normalized.search(/\b[A-Za-z][A-Za-z0-9_-]*=[^\s]+/);
+  if (firstDetailIndex < 0) {
+    return { headline: normalized, details: [] };
+  }
+  const headline = normalized.slice(0, firstDetailIndex).trim();
+  const detailText = normalized.slice(firstDetailIndex).trim();
+  const details = [];
+  for (const token of detailText.split(/\s+/)) {
+    const separatorIndex = token.indexOf('=');
+    if (separatorIndex <= 0) {
+      continue;
+    }
+    const key = token.slice(0, separatorIndex).trim();
+    const value = token.slice(separatorIndex + 1).trim();
+    if (!key || !value) {
+      continue;
+    }
+    details.push({ key, value });
+  }
+  if (details.length === 0) {
+    return { headline: normalized, details: [] };
+  }
+  return { headline: headline || normalized, details };
+}
+
+function printPrettyRunMessage(options, prefix, message) {
+  const parsed = parseStructuredLogMessage(message);
+  if (parsed.details.length === 0) {
+    printIndentedPrettyMessage(prefix, parsed.headline);
+    return;
+  }
+
+  printIndentedPrettyMessage(prefix, parsed.headline);
+  const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
+  const keyWidth = Math.min(20, Math.max(...parsed.details.map((entry) => entry.key.length)));
+  for (const entry of parsed.details) {
+    const key = colorize(options, '90', entry.key.padEnd(keyWidth, ' '));
+    const separator = colorize(options, '90', ' = ');
+    const value = colorize(options, '37', entry.value);
+    console.log(`${continuationPrefix}${key}${separator}${value}`);
+  }
+}
+
 function shouldCaptureCommandOutput(options) {
   return normalizeOutputMode(options?.outputMode, DEFAULT_OUTPUT_MODE) !== 'verbose';
 }
@@ -786,7 +835,12 @@ function progressLog(options, message) {
     const level = classifyPrettyLevel(message);
     const spinner = nextPrettySpinner(options);
     const tag = prettyLevelTag(options, level);
-    printIndentedPrettyMessage(`${stamp} ${spinner} ${tag} `, message);
+    const prefix = `${stamp} ${spinner} ${tag} `;
+    if (level === 'run') {
+      printPrettyRunMessage(options, prefix, message);
+      return;
+    }
+    printIndentedPrettyMessage(prefix, message);
     return;
   }
   console.log(`[orchestrator] ${message}`);
@@ -966,6 +1020,20 @@ function formatDuration(totalSeconds) {
     return `${minutes}m ${secs}s`;
   }
   return `${secs}s`;
+}
+
+function formatDurationClock(totalSeconds) {
+  if (!Number.isFinite(totalSeconds) || totalSeconds == null) {
+    return '--:--';
+  }
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 function randomRunId() {
@@ -1494,7 +1562,7 @@ async function runShellMonitored(
       const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
       const stamp = colorize(options, '90', nowIso().slice(11, 19));
       const spinner = nextPrettySpinner(options);
-      const workingLabel = colorize(options, '1;36', `WORKING (${formatDuration(elapsedSeconds)})`);
+      const workingLabel = colorize(options, '36', `WORKING (${formatDurationClock(elapsedSeconds)})`);
       const workingMessage = colorize(options, '37', sanitized);
       clearLiveStatusLine();
       printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
