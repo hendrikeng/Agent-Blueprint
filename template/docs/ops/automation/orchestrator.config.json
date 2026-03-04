@@ -208,6 +208,17 @@
     "touchScanMinHeartbeats": 1,
     "touchScanMaxHeartbeats": 8,
     "touchScanBackoffUnchanged": 2,
+    "liveActivity": {
+      "mode": "best-effort",
+      "maxChars": 120,
+      "sampleSeconds": 2,
+      "emitEventLines": false,
+      "redactPatterns": [
+        "(token|secret|password|passphrase|api[-_]?key|authorization|cookie|session)\\s*[:=]\\s*\\S+",
+        "ghp_[A-Za-z0-9]+",
+        "sk-[A-Za-z0-9]+"
+      ]
+    },
     "workerFirstTouchDeadlineSeconds": 180,
     "workerRetryFirstTouchDeadlineSeconds": 180,
     "workerNoTouchRetryLimit": 1,

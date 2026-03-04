@@ -17,6 +17,7 @@ import {
   inferPlanId
 } from './lib/plan-metadata.mjs';
 
+const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rootDir = process.cwd();
 const directories = {
   future: path.join(rootDir, 'docs', 'future'),
@@ -28,6 +29,45 @@ const findings = [];
 
 function addFinding(code, message, filePath) {
   findings.push({ code, message, filePath });
+}
+
+function parseArgs(argv) {
+  const options = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (!token.startsWith('--')) {
+      continue;
+    }
+    const key = token.slice(2);
+    const next = argv[index + 1];
+    if (!next || next.startsWith('--')) {
+      options[key] = true;
+      continue;
+    }
+    options[key] = next;
+    index += 1;
+  }
+  return options;
+}
+
+function normalizePlanId(value) {
+  const rendered = String(value ?? '').trim().toLowerCase();
+  if (!rendered) {
+    return null;
+  }
+  return PLAN_ID_REGEX.test(rendered) ? rendered : null;
+}
+
+function candidatePlanScopeIds(plan, targetPlanId) {
+  const candidates = new Set();
+  if (plan.planId === targetPlanId) {
+    candidates.add(targetPlanId);
+  }
+  const rel = String(plan.rel ?? '').trim().toLowerCase();
+  if (rel.endsWith(`/${targetPlanId}.md`) || rel.endsWith(`-${targetPlanId}.md`)) {
+    candidates.add(targetPlanId);
+  }
+  return candidates;
 }
 
 async function scanPhase(phase, directoryPath) {
@@ -169,6 +209,16 @@ async function scanPhase(phase, directoryPath) {
 }
 
 async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const scopedPlanIdInput = options['plan-id'] ?? options.planId;
+  const scopedPlanId = scopedPlanIdInput == null ? null : normalizePlanId(scopedPlanIdInput);
+  if (scopedPlanIdInput != null && !scopedPlanId) {
+    console.error(
+      `[plans-verify] invalid --plan-id '${String(scopedPlanIdInput)}' (expected lowercase kebab-case).`
+    );
+    process.exit(1);
+  }
+
   const [futurePlans, activePlans, completedPlans] = await Promise.all([
     scanPhase('future', directories.future),
     scanPhase('active', directories.active),
@@ -208,7 +258,40 @@ async function main() {
     }
   }
 
-  const summary = `plans=${allPlans.length} future=${futurePlans.length} active=${activePlans.length} completed=${completedPlans.length}`;
+  let scopeSummary = '';
+  if (scopedPlanId) {
+    const scopedFiles = new Set();
+    for (const plan of allPlans) {
+      const ids = candidatePlanScopeIds(plan, scopedPlanId);
+      if (ids.size > 0) {
+        scopedFiles.add(plan.rel);
+      }
+    }
+    if (scopedFiles.size === 0) {
+      addFinding(
+        'PLAN_ID_NOT_FOUND',
+        `Plan-ID '${scopedPlanId}' was not found in future/active/completed plans`,
+        'docs/exec-plans'
+      );
+    }
+    const scopedFindings = findings.filter((finding) => {
+      if (finding.code === 'PLAN_ID_NOT_FOUND') {
+        return true;
+      }
+      if (scopedFiles.has(finding.filePath)) {
+        return true;
+      }
+      if (finding.code === 'DUPLICATE_PLAN_ID' && finding.message.includes(`'${scopedPlanId}'`)) {
+        return true;
+      }
+      return false;
+    });
+    findings.length = 0;
+    findings.push(...scopedFindings);
+    scopeSummary = ` scopePlanId=${scopedPlanId}`;
+  }
+
+  const summary = `plans=${allPlans.length} future=${futurePlans.length} active=${activePlans.length} completed=${completedPlans.length}${scopeSummary}`;
 
   if (findings.length > 0) {
     console.error(`[plans-verify] failed (${findings.length} issue(s), ${summary}).`);

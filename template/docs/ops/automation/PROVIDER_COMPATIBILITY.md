@@ -26,6 +26,8 @@ Every provider command must support:
 - Structured result payload written by executor wrapper to `ORCH_RESULT_PATH`.
 - Prompt templates must support task-scoped contact packs via `{contact_pack_file}`.
 
+Provider live-progress text is optional and best-effort only; it is not part of the required execution contract.
+
 ## Baseline Command Templates
 
 - Codex: `codex exec --full-auto -c model_reasoning_effort={role_reasoning_effort} -m {role_model} {prompt}`
@@ -50,6 +52,13 @@ The orchestrator relies on the executor wrapper to enforce structured output:
 - Allowed status values: `completed`, `blocked`, `handoff_required`, `pending`
 
 If payload is missing or invalid, orchestration treats the session as incomplete and forces safe continuation behavior.
+
+## Live Activity Telemetry (Optional)
+
+- Orchestrator heartbeats may surface provider text as `agent="..."` when available.
+- This channel is informational only and must not control retries, completion, or policy gates.
+- Missing, delayed, or format-shifted provider text must not fail orchestration.
+- If enabled, `provider_activity` events in `run-events.jsonl` are optional telemetry and may be sparse/rate-limited.
 
 ## GitHub Interop Caveat
 

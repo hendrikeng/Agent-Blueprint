@@ -79,6 +79,11 @@ Use the manual path when any of these are true:
   - `--stall-warn-seconds <n>` (default `120`)
   - `--touch-summary true|false` (default `true`)
   - `--touch-sample-size <n>` (default `3`)
+  - `--live-activity-mode off|best-effort` (default `best-effort`)
+  - `--live-activity-max-chars <n>` (default `120`)
+  - `--live-activity-sample-seconds <n>` (default `2`)
+  - `--live-activity-emit-event-lines true|false` (default `false`)
+  - `--live-activity-redact-patterns "<regex1>;;<regex2>"` (optional)
   - `--worker-first-touch-deadline-seconds <n>` (default `180`, `0` disables)
   - `--worker-retry-first-touch-deadline-seconds <n>` (default inherits `--worker-first-touch-deadline-seconds`)
   - `--worker-no-touch-retry-limit <n>` (default `1`)
@@ -107,7 +112,7 @@ Use the manual path when any of these are true:
   - `"context.maxTokens"` sets a hard budget for compiled runtime context size.
   - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`, `cacheMode`).
   - `With "context.contactPacks.cacheMode": "run-memory", cache keys include an evidence freshness token (state signature when available, otherwise evidence-index file stat) to avoid stale recent-evidence payloads.`
-  - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 12`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.touchScanMode": "adaptive"`, `"logging.touchScanMinHeartbeats": 1`, `"logging.touchScanMaxHeartbeats": 8`, `"logging.touchScanBackoffUnchanged": 2`, `"logging.workerFirstTouchDeadlineSeconds": 180`, `"logging.workerRetryFirstTouchDeadlineSeconds": 180`, `"logging.workerNoTouchRetryLimit": 1`, and `"logging.workerPendingStreakLimit": 4` tune operator-facing output noise, liveness, live file-touch visibility, touch-scan cadence, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast; retry sessions inherit the base deadline unless overridden; `workerPendingStreakLimit: 0` disables worker same-role pending streak fail-fast).
+  - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 12`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.touchScanMode": "adaptive"`, `"logging.touchScanMinHeartbeats": 1`, `"logging.touchScanMaxHeartbeats": 8`, `"logging.touchScanBackoffUnchanged": 2`, `"logging.liveActivity": {"mode": "best-effort", "maxChars": 120, "sampleSeconds": 2, "emitEventLines": false, "redactPatterns": [...]}`, `"logging.workerFirstTouchDeadlineSeconds": 180`, `"logging.workerRetryFirstTouchDeadlineSeconds": 180`, `"logging.workerNoTouchRetryLimit": 1`, and `"logging.workerPendingStreakLimit": 4` tune operator-facing output noise, liveness, live file-touch visibility, provider live-message surfacing, touch-scan cadence, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast; retry sessions inherit the base deadline unless overridden; `workerPendingStreakLimit: 0` disables worker same-role pending streak fail-fast).
   - `"recovery.retryFailed": true`, `"recovery.autoUnblock": true`, and `"recovery.maxFailedRetries": 3` control automatic retry/unblock behavior for resumable plans.
   - `"parallel.maxPlans"` sets default worker concurrency for `run --parallel-plans`.
   - `"parallel.workerOutputMode": "minimal"` keeps branch workers concise by default.
@@ -173,11 +178,13 @@ Use the manual path when any of these are true:
   - `pretty` output adds interactive-style, color-capable lifecycle logs plus a single live heartbeat line for in-flight session/validation activity.
   - `minimal` output prints high-signal lifecycle lines only (plan/session start-end, role transitions, validation state, blockers).
   - `ticker` output prints compact single-line lifecycle events and a single-line run summary.
+  - Live heartbeats can include best-effort provider text as `agent="..."` when available; this stream is informational only and never used for orchestration gating.
   - Live heartbeats include touched-file summaries (`touch=<count>(<category>:<count>,...)`) so long-running sessions still show concrete progress.
   - File-touch detail lines (`file activity ...`) emit category counts and representative file samples when touched-file sets change.
+  - `logging.liveActivity.emitEventLines: true` appends optional `provider_activity` events to `run-events.jsonl` (disabled by default to limit noise).
   - Raw command output is written to `docs/ops/automation/runtime/<run-id>/` session/validation logs.
   - Failure summaries include only the last `--failure-tail-lines` lines and a pointer to the full log file.
-  - `logging.heartbeatSeconds`, `logging.stallWarnSeconds`, `logging.touchSummary`, `logging.touchSampleSize`, `logging.touchScanMode`, `logging.touchScanMinHeartbeats`, `logging.touchScanMaxHeartbeats`, `logging.touchScanBackoffUnchanged`, `logging.workerFirstTouchDeadlineSeconds`, `logging.workerRetryFirstTouchDeadlineSeconds`, `logging.workerNoTouchRetryLimit`, and `logging.workerPendingStreakLimit` tune heartbeat cadence, stall-warning threshold, file-touch detail level/cadence, worker first-edit deadline fail-fast (`--worker-first-touch-deadline-seconds`), retry-session first-edit deadline (`--worker-retry-first-touch-deadline-seconds`), automatic worker no-touch retries (`--worker-no-touch-retry-limit`), and same-role worker pending streak fail-fast (`--worker-pending-streak-limit`).
+  - `logging.heartbeatSeconds`, `logging.stallWarnSeconds`, `logging.touchSummary`, `logging.touchSampleSize`, `logging.touchScanMode`, `logging.touchScanMinHeartbeats`, `logging.touchScanMaxHeartbeats`, `logging.touchScanBackoffUnchanged`, `logging.liveActivity.mode`, `logging.liveActivity.maxChars`, `logging.liveActivity.sampleSeconds`, `logging.liveActivity.redactPatterns`, `logging.workerFirstTouchDeadlineSeconds`, `logging.workerRetryFirstTouchDeadlineSeconds`, `logging.workerNoTouchRetryLimit`, and `logging.workerPendingStreakLimit` tune heartbeat cadence, stall-warning threshold, file-touch detail level/cadence, provider live-message capture/redaction/rate-limiting, worker first-edit deadline fail-fast (`--worker-first-touch-deadline-seconds`), retry-session first-edit deadline (`--worker-retry-first-touch-deadline-seconds`), automatic worker no-touch retries (`--worker-no-touch-retry-limit`), and same-role worker pending streak fail-fast (`--worker-pending-streak-limit`).
 - Drift guardrail:
   - Run `npm run blueprint:verify` to fail on orchestration policy drift (role-model enforcement, role command placeholders, pretty logging default, runtime-context and stage-reuse policy).
 - Do not use provider interactive modes (they will block orchestration); use non-interactive CLI flags in provider commands.
@@ -186,6 +193,7 @@ Use the manual path when any of these are true:
 
 - Fast iteration profile: `npm run verify:fast`
   - Runs mandatory safety checks plus scope-selected verifiers.
+  - When run inside orchestration sessions, `verify:fast` receives `ORCH_PLAN_ID` and scopes `check-plan-metadata` to the in-flight plan to avoid unrelated plan-metadata drift blocking completion.
   - Runs `node ./scripts/docs/repair-plan-references.mjs` before docs governance checks so stale plan-path links are auto-healed while keeping strict governance enabled.
 - Full merge profile: `npm run verify:full`
   - Runs all required repository gates.
@@ -254,7 +262,7 @@ Pretty output example:
 16:04:07 | RUN   run started runId=run-20260301160407-k4l9wd mode=guarded output=pretty failureTailLines=60
 16:04:07 / RUN   plan start attendee-search-suggestion-qa-hardening declared=low effective=low score=0
 16:04:07 \ RUN   session 1 start attendee-search-suggestion-qa-hardening role=worker stage=1/1 provider=codex model=gpt-5.3-codex risk=low
-16:04:19 ... RUN  phase=session plan=attendee-search-suggestion-qa-hardening role=worker activity=implementing elapsed=12s idle=3s touch=4(source:3,tests:1)
+16:04:19 ... RUN  phase=session plan=attendee-search-suggestion-qa-hardening role=worker activity=implementing agent="reviewing organizer service edge cases" elapsed=12s idle=3s touch=4(source:3,tests:1)
 16:04:19 - RUN    file activity phase=session plan=attendee-search-suggestion-qa-hardening role=worker touched=4 categories=[source:3, tests:1] sample=[libs/events/backend/src/lib/event-organizer.service.ts, libs/events/backend/src/lib/event-organizer.service.spec.ts, docs/exec-plans/active/evidence/attendee-search-suggestion-qa-hardening.md]
 ```
 

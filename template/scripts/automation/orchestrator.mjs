@@ -53,6 +53,15 @@ const DEFAULT_WORKER_RETRY_FIRST_TOUCH_DEADLINE_SECONDS = DEFAULT_WORKER_FIRST_T
 const DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT = 1;
 const DEFAULT_WORKER_PENDING_STREAK_LIMIT = 4;
 const DEFAULT_WORKER_STALL_FAIL_SECONDS = 900;
+const DEFAULT_LIVE_ACTIVITY_MODE = 'best-effort';
+const DEFAULT_LIVE_ACTIVITY_MAX_CHARS = 120;
+const DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS = 2;
+const DEFAULT_LIVE_ACTIVITY_EMIT_EVENT_LINES = false;
+const DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS = [
+  '(token|secret|password|passphrase|api[-_]?key|authorization|cookie|session)\\s*[:=]\\s*\\S+',
+  'ghp_[A-Za-z0-9]+',
+  'sk-[A-Za-z0-9]+'
+];
 const DEFAULT_CONTACT_PACKS_ENABLED = true;
 const DEFAULT_CONTACT_PACKS_MAX_POLICY_BULLETS = 10;
 const DEFAULT_CONTACT_PACKS_INCLUDE_RECENT_EVIDENCE = true;
@@ -143,6 +152,7 @@ const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
 const SAFE_PLAN_RELATIVE_PATH_REGEX = /^[A-Za-z0-9._/-]+$/;
 const REDACTED_VALUE = '[REDACTED]';
 const SENSITIVE_KEY_REGEX = /(token|secret|password|passphrase|api[-_]?key|authorization|cookie|session)/i;
+const ANSI_ESCAPE_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const RUN_MEMORY_PLAN_RECORD_CACHE = new Map();
 const RUN_MEMORY_CONTACT_PACK_CACHE = new Map();
 
@@ -183,6 +193,11 @@ Options:
   --touch-scan-min-heartbeats <n>    Minimum heartbeats between touch scans in adaptive mode (default: 1)
   --touch-scan-max-heartbeats <n>    Maximum heartbeats between touch scans in adaptive mode (default: 8)
   --touch-scan-backoff-unchanged <n> Adaptive backoff multiplier when scans are unchanged (default: 2)
+  --live-activity-mode off|best-effort Provider text to heartbeat channel (default: best-effort)
+  --live-activity-max-chars <n>      Max provider message chars shown in heartbeat (default: 120)
+  --live-activity-sample-seconds <n> Minimum seconds between live message updates (default: 2)
+  --live-activity-emit-event-lines true|false Emit provider_activity events to run-events.jsonl (default: false)
+  --live-activity-redact-patterns "<regex1>;;<regex2>" Extra redaction regexes for live activity
   --worker-first-touch-deadline-seconds <n> Fail-fast worker sessions that make no edits after n seconds (default: 180, 0 disables)
   --worker-retry-first-touch-deadline-seconds <n> Retry-session first-touch deadline for no-touch worker retries (default: inherits worker-first-touch-deadline-seconds)
   --worker-no-touch-retry-limit <n> Retry worker pending-without-edits sessions automatically up to n times (default: 1)
@@ -255,6 +270,14 @@ function normalizeTouchScanMode(value, fallback = DEFAULT_TOUCH_SCAN_MODE) {
   return fallback;
 }
 
+function normalizeLiveActivityMode(value, fallback = DEFAULT_LIVE_ACTIVITY_MODE) {
+  const normalized = String(value ?? fallback).trim().toLowerCase();
+  if (normalized === 'off' || normalized === 'best-effort') {
+    return normalized;
+  }
+  return fallback;
+}
+
 function normalizeSessionEvidenceMode(value, fallback = DEFAULT_EVIDENCE_SESSION_CURATION_MODE) {
   const normalized = String(value ?? fallback).trim().toLowerCase();
   if (normalized === 'always' || normalized === 'on-change' || normalized === 'off') {
@@ -269,6 +292,66 @@ function normalizeContactPackCacheMode(value, fallback = DEFAULT_CONTACT_PACK_CA
     return normalized;
   }
   return fallback;
+}
+
+function parseListOption(value, fallback = []) {
+  if (Array.isArray(value)) {
+    const normalized = value
+      .map((entry) => String(entry ?? '').trim())
+      .filter(Boolean);
+    return normalized.length > 0 ? normalized : [...fallback];
+  }
+  const raw = String(value ?? '').trim();
+  if (!raw) {
+    return [...fallback];
+  }
+  const delimiter = raw.includes(';;') ? ';;' : ',';
+  const parsed = raw
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : [...fallback];
+}
+
+function compileRegexList(patterns = []) {
+  const compiled = [];
+  for (const pattern of patterns) {
+    const normalized = String(pattern ?? '').trim();
+    if (!normalized) {
+      continue;
+    }
+    try {
+      compiled.push(new RegExp(normalized, 'gi'));
+    } catch {
+      // Ignore invalid regex patterns and keep the stream resilient.
+    }
+  }
+  return compiled;
+}
+
+function stripAnsiControl(value) {
+  return String(value ?? '').replace(ANSI_ESCAPE_REGEX, '');
+}
+
+function sanitizeLiveActivityLine(line, redactionPatterns, maxChars) {
+  let rendered = stripAnsiControl(line).replace(/\s+/g, ' ').trim();
+  if (!rendered) {
+    return null;
+  }
+
+  for (const pattern of redactionPatterns) {
+    rendered = rendered.replace(pattern, REDACTED_VALUE);
+  }
+
+  if (!/[A-Za-z]/.test(rendered)) {
+    return null;
+  }
+
+  if (rendered.length > maxChars) {
+    rendered = `${rendered.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+  }
+
+  return rendered || null;
 }
 
 function shouldCaptureCommandOutput(options) {
@@ -329,7 +412,16 @@ function supportsLiveStatusLine(options) {
 }
 
 function clearLiveStatusLine() {
-  if (!process.stdout.isTTY || liveStatusLineLength <= 0) {
+  if (!process.stdout.isTTY) {
+    return;
+  }
+  if (typeof process.stdout.clearLine === 'function' && typeof process.stdout.cursorTo === 'function') {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+    liveStatusLineLength = 0;
+    return;
+  }
+  if (liveStatusLineLength <= 0) {
     return;
   }
   process.stdout.write(`\r${' '.repeat(liveStatusLineLength)}\r`);
@@ -344,9 +436,28 @@ function renderLiveStatusLine(options, message) {
   if (!normalized) {
     return;
   }
-  const padded = normalized.padEnd(liveStatusLineLength, ' ');
+
+  const width = Number.isFinite(process.stdout.columns) ? Number(process.stdout.columns) : 0;
+  const visible = stripAnsiControl(normalized);
+  let rendered = normalized;
+  let visibleLength = visible.length;
+  if (width > 3 && visibleLength >= width) {
+    const clipped = visible.slice(0, Math.max(1, width - 2)).trimEnd();
+    rendered = `${clipped}…`;
+    visibleLength = stripAnsiControl(rendered).length;
+  }
+
+  if (typeof process.stdout.clearLine === 'function' && typeof process.stdout.cursorTo === 'function') {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+    process.stdout.write(rendered);
+    liveStatusLineLength = visibleLength;
+    return;
+  }
+
+  const padded = rendered.padEnd(Math.max(liveStatusLineLength, visibleLength), ' ');
   process.stdout.write(`\r${padded}`);
-  liveStatusLineLength = normalized.length;
+  liveStatusLineLength = Math.max(visibleLength, stripAnsiControl(padded).length);
 }
 
 function classifyPrettyLevel(message) {
@@ -765,6 +876,15 @@ function safeDisplayToken(value, fallback = 'n/a') {
   return rendered.length > 0 ? rendered : fallback;
 }
 
+function formatLiveActivityInline(value) {
+  const rendered = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!rendered) {
+    return '';
+  }
+  const escaped = rendered.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return ` agent="${escaped}"`;
+}
+
 function formatCommandHeartbeatLine(options, context, elapsedSeconds, idleSeconds) {
   const stamp = colorize(options, '90', nowIso().slice(11, 19));
   const dots = nextPrettyLiveDots(options);
@@ -773,9 +893,10 @@ function formatCommandHeartbeatLine(options, context, elapsedSeconds, idleSecond
   const planId = safeDisplayToken(context.planId, 'run');
   const role = safeDisplayToken(context.role, 'n/a');
   const activity = safeDisplayToken(context.activity, phase);
+  const liveActivity = formatLiveActivityInline(context.liveActivity);
   const touchSummary = formatTouchSummaryInline(context.touchSummary);
   return (
-    `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity} ` +
+    `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity}${liveActivity} ` +
     `elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${touchSummary}`
   );
 }
@@ -986,6 +1107,25 @@ async function runShellMonitored(
   let warnEmitted = false;
   let timeoutTimer = null;
   let forceKillTimer = null;
+  const liveActivityMode = normalizeLiveActivityMode(options.liveActivityMode, DEFAULT_LIVE_ACTIVITY_MODE);
+  const liveActivityEnabled = capture && liveActivityMode === 'best-effort';
+  const liveActivityMaxChars = Math.max(
+    24,
+    asInteger(options.liveActivityMaxChars, DEFAULT_LIVE_ACTIVITY_MAX_CHARS)
+  );
+  const liveActivitySampleMs = Math.max(
+    0,
+    asInteger(options.liveActivitySampleSeconds, DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS) * 1000
+  );
+  const liveActivityRedactionPatterns = compileRegexList(
+    parseListOption(options.liveActivityRedactPatterns, DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS)
+  );
+  let stdoutRemainder = '';
+  let stderrRemainder = '';
+  let latestProviderActivity = null;
+  let latestProviderActivityAtMs = null;
+  let liveActivityUpdates = 0;
+  let lastLiveActivityAcceptedAtMs = 0;
   const touchSummaryEnabled = asBoolean(options.touchSummary, DEFAULT_TOUCH_SUMMARY);
   const touchScanMode = normalizeTouchScanMode(options.touchScanMode, DEFAULT_TOUCH_SCAN_MODE);
   const touchScanMinHeartbeats = Math.max(
@@ -1039,14 +1179,65 @@ async function runShellMonitored(
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit'
   });
 
+  function maybeRecordLiveActivity(line, source, nowMs = Date.now()) {
+    if (!liveActivityEnabled) {
+      return;
+    }
+    const sanitized = sanitizeLiveActivityLine(line, liveActivityRedactionPatterns, liveActivityMaxChars);
+    if (!sanitized) {
+      return;
+    }
+    if (sanitized === latestProviderActivity) {
+      return;
+    }
+    if (liveActivitySampleMs > 0 && nowMs - lastLiveActivityAcceptedAtMs < liveActivitySampleMs) {
+      return;
+    }
+    latestProviderActivity = sanitized;
+    latestProviderActivityAtMs = nowMs;
+    lastLiveActivityAcceptedAtMs = nowMs;
+    liveActivityUpdates += 1;
+    const callback = context && typeof context.onLiveActivity === 'function' ? context.onLiveActivity : null;
+    if (callback) {
+      callback({
+        source,
+        message: sanitized,
+        timestamp: nowIso()
+      });
+    }
+  }
+
+  function processStreamChunk(source, chunk, nowMs = Date.now()) {
+    const rendered = chunk.toString();
+    if (source === 'stdout') {
+      stdout += rendered;
+    } else {
+      stderr += rendered;
+    }
+    lastOutputAtMs = nowMs;
+    if (!liveActivityEnabled) {
+      return;
+    }
+    const previousRemainder = source === 'stdout' ? stdoutRemainder : stderrRemainder;
+    const combined = `${previousRemainder}${rendered}`;
+    const parts = combined.split(/\r?\n|\r/g);
+    const remainder = parts.pop() ?? '';
+    if (source === 'stdout') {
+      stdoutRemainder = remainder;
+    } else {
+      stderrRemainder = remainder;
+    }
+    for (const line of parts) {
+      maybeRecordLiveActivity(line, source, nowMs);
+    }
+  }
+
   if (capture) {
     child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString();
-      lastOutputAtMs = Date.now();
+      processStreamChunk('stdout', chunk, Date.now());
     });
     child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-      lastOutputAtMs = Date.now();
+      processStreamChunk('stderr', chunk, Date.now());
     });
   }
 
@@ -1135,12 +1326,17 @@ async function runShellMonitored(
     if (supportsLiveStatusLine(options)) {
       renderLiveStatusLine(
         options,
-        formatCommandHeartbeatLine(options, { ...context, touchSummary }, elapsedSeconds, idleSeconds)
+        formatCommandHeartbeatLine(
+          options,
+          { ...context, touchSummary, liveActivity: latestProviderActivity },
+          elapsedSeconds,
+          idleSeconds
+        )
       );
     } else {
       progressLog(
         options,
-        `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`
+        `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))}${formatLiveActivityInline(latestProviderActivity)} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`
       );
     }
 
@@ -1234,6 +1430,8 @@ async function runShellMonitored(
       }
       settled = true;
       cleanupTimers();
+      maybeRecordLiveActivity(stdoutRemainder, 'stdout', Date.now());
+      maybeRecordLiveActivity(stderrRemainder, 'stderr', Date.now());
       maybeRefreshTouchSummary(Date.now(), true);
       const finalTouchSummary = touchSummary;
       resolve({
@@ -1249,6 +1447,14 @@ async function runShellMonitored(
         stdout,
         stderr,
         touchSummary: finalTouchSummary ?? null,
+        liveActivity:
+          latestProviderActivityAtMs != null && latestProviderActivity
+            ? {
+                message: latestProviderActivity,
+                updatedAt: new Date(latestProviderActivityAtMs).toISOString()
+              }
+            : null,
+        liveActivityUpdates,
         touchMonitor: {
           mode: touchBaseline
             ? touchScanMode
@@ -1455,6 +1661,13 @@ async function loadConfig(paths) {
       touchScanMinHeartbeats: DEFAULT_TOUCH_SCAN_MIN_HEARTBEATS,
       touchScanMaxHeartbeats: DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS,
       touchScanBackoffUnchanged: DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED,
+      liveActivity: {
+        mode: DEFAULT_LIVE_ACTIVITY_MODE,
+        maxChars: DEFAULT_LIVE_ACTIVITY_MAX_CHARS,
+        sampleSeconds: DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS,
+        emitEventLines: DEFAULT_LIVE_ACTIVITY_EMIT_EVENT_LINES,
+        redactPatterns: [...DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS]
+      },
       workerFirstTouchDeadlineSeconds: DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS,
       workerRetryFirstTouchDeadlineSeconds: DEFAULT_WORKER_RETRY_FIRST_TOUCH_DEADLINE_SECONDS,
       workerNoTouchRetryLimit: DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT,
@@ -1569,7 +1782,11 @@ async function loadConfig(paths) {
     },
     logging: {
       ...defaultConfig.logging,
-      ...(configured.logging ?? {})
+      ...(configured.logging ?? {}),
+      liveActivity: {
+        ...defaultConfig.logging.liveActivity,
+        ...(configured.logging?.liveActivity ?? {})
+      }
     },
     parallel: {
       ...defaultConfig.parallel,
@@ -1769,6 +1986,39 @@ function resolveRuntimeExecutorOptions(options, config) {
       DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED
     )
   );
+  const liveActivity = config.logging?.liveActivity ?? {};
+  const liveActivityMode = normalizeLiveActivityMode(
+    options.liveActivityMode ?? options['live-activity-mode'] ?? liveActivity.mode,
+    DEFAULT_LIVE_ACTIVITY_MODE
+  );
+  const liveActivityMaxChars = Math.max(
+    24,
+    asInteger(
+      options.liveActivityMaxChars ?? options['live-activity-max-chars'] ?? liveActivity.maxChars,
+      DEFAULT_LIVE_ACTIVITY_MAX_CHARS
+    )
+  );
+  const liveActivitySampleSeconds = Math.max(
+    0,
+    asInteger(
+      options.liveActivitySampleSeconds ??
+        options['live-activity-sample-seconds'] ??
+        liveActivity.sampleSeconds,
+      DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS
+    )
+  );
+  const liveActivityEmitEventLines = asBoolean(
+    options.liveActivityEmitEventLines ??
+      options['live-activity-emit-event-lines'] ??
+      liveActivity.emitEventLines,
+    DEFAULT_LIVE_ACTIVITY_EMIT_EVENT_LINES
+  );
+  const liveActivityRedactPatterns = parseListOption(
+    options.liveActivityRedactPatterns ??
+      options['live-activity-redact-patterns'] ??
+      liveActivity.redactPatterns,
+    DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS
+  );
   const workerFirstTouchDeadlineSeconds = Math.max(
     0,
     asInteger(
@@ -1879,6 +2129,11 @@ function resolveRuntimeExecutorOptions(options, config) {
     touchScanMinHeartbeats,
     touchScanMaxHeartbeats,
     touchScanBackoffUnchanged,
+    liveActivityMode,
+    liveActivityMaxChars,
+    liveActivitySampleSeconds,
+    liveActivityEmitEventLines,
+    liveActivityRedactPatterns,
     workerFirstTouchDeadlineSeconds,
     workerRetryFirstTouchDeadlineSeconds,
     workerNoTouchRetryLimit,
@@ -3852,10 +4107,17 @@ async function runValidationCommands(paths, commands, options, label, state = nu
     }
 
     const captureOutput = shouldCaptureCommandOutput(options);
+    const validationEnv = {
+      ...process.env,
+      ORCH_RUN_ID: state?.runId ?? process.env.ORCH_RUN_ID,
+      ORCH_PLAN_ID: plan?.planId ?? process.env.ORCH_PLAN_ID,
+      ORCH_PLAN_FILE: plan?.rel ?? process.env.ORCH_PLAN_FILE,
+      ORCH_VALIDATION_LANE: label.toLowerCase()
+    };
     const result = await runShellMonitored(
       command,
       paths.rootDir,
-      process.env,
+      validationEnv,
       options.validationTimeoutMs,
       captureOutput ? 'pipe' : 'inherit',
       options,
@@ -5568,8 +5830,22 @@ async function processPlan(plan, paths, state, options, config) {
       touchSamples: sessionResult.touchSummary?.samples ?? [],
       touchScanMode: sessionResult.touchMonitor?.mode ?? null,
       touchScansExecuted: sessionResult.touchMonitor?.scansExecuted ?? 0,
-      touchScansSkipped: sessionResult.touchMonitor?.scansSkipped ?? 0
+      touchScansSkipped: sessionResult.touchMonitor?.scansSkipped ?? 0,
+      liveActivity: sessionResult.liveActivity?.message ?? null,
+      liveActivityUpdatedAt: sessionResult.liveActivity?.updatedAt ?? null,
+      liveActivityUpdates: sessionResult.liveActivityUpdates ?? 0
     }, options.dryRun);
+    if (options.liveActivityEmitEventLines && sessionResult.liveActivity?.message) {
+      await logEvent(paths, state, 'provider_activity', {
+        planId: plan.planId,
+        session,
+        role: currentRole,
+        provider: sessionResult.provider ?? currentRoleProfile.provider,
+        model: sessionResult.model ?? currentRoleProfile.model ?? null,
+        message: sessionResult.liveActivity.message,
+        updatedAt: sessionResult.liveActivity.updatedAt ?? null
+      }, options.dryRun);
+    }
     const workerTouchCount =
       typeof sessionResult.touchSummary?.count === 'number' && Number.isFinite(sessionResult.touchSummary.count)
         ? sessionResult.touchSummary.count
@@ -6688,6 +6964,16 @@ function buildParallelWorkerCommand(plan, state, options, parallelOptions) {
     String(asInteger(options.touchScanMaxHeartbeats, DEFAULT_TOUCH_SCAN_MAX_HEARTBEATS)),
     '--touch-scan-backoff-unchanged',
     String(asInteger(options.touchScanBackoffUnchanged, DEFAULT_TOUCH_SCAN_BACKOFF_UNCHANGED)),
+    '--live-activity-mode',
+    String(normalizeLiveActivityMode(options.liveActivityMode, DEFAULT_LIVE_ACTIVITY_MODE)),
+    '--live-activity-max-chars',
+    String(asInteger(options.liveActivityMaxChars, DEFAULT_LIVE_ACTIVITY_MAX_CHARS)),
+    '--live-activity-sample-seconds',
+    String(asInteger(options.liveActivitySampleSeconds, DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS)),
+    '--live-activity-emit-event-lines',
+    String(asBoolean(options.liveActivityEmitEventLines, DEFAULT_LIVE_ACTIVITY_EMIT_EVENT_LINES)),
+    '--live-activity-redact-patterns',
+    parseListOption(options.liveActivityRedactPatterns, DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS).join(';;'),
     '--worker-first-touch-deadline-seconds',
     String(asInteger(options.workerFirstTouchDeadlineSeconds, DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS)),
     '--worker-retry-first-touch-deadline-seconds',
@@ -7319,6 +7605,12 @@ async function runCommand(paths, options) {
           maxHeartbeats: options.touchScanMaxHeartbeats,
           backoffUnchanged: options.touchScanBackoffUnchanged
         },
+        liveActivity: {
+          mode: options.liveActivityMode,
+          maxChars: options.liveActivityMaxChars,
+          sampleSeconds: options.liveActivitySampleSeconds,
+          emitEventLines: options.liveActivityEmitEventLines
+        },
         workerProgressGuards: {
           firstTouchDeadlineSeconds: options.workerFirstTouchDeadlineSeconds,
           retryFirstTouchDeadlineSeconds: options.workerRetryFirstTouchDeadlineSeconds,
@@ -7438,6 +7730,12 @@ async function resumeCommand(paths, options) {
           minHeartbeats: options.touchScanMinHeartbeats,
           maxHeartbeats: options.touchScanMaxHeartbeats,
           backoffUnchanged: options.touchScanBackoffUnchanged
+        },
+        liveActivity: {
+          mode: options.liveActivityMode,
+          maxChars: options.liveActivityMaxChars,
+          sampleSeconds: options.liveActivitySampleSeconds,
+          emitEventLines: options.liveActivityEmitEventLines
         },
         workerProgressGuards: {
           firstTouchDeadlineSeconds: options.workerFirstTouchDeadlineSeconds,
@@ -7656,6 +7954,14 @@ async function main() {
     stallWarnSeconds: rawOptions['stall-warn-seconds'] ?? rawOptions.stallWarnSeconds,
     touchSummary: rawOptions['touch-summary'] ?? rawOptions.touchSummary,
     touchSampleSize: rawOptions['touch-sample-size'] ?? rawOptions.touchSampleSize,
+    liveActivityMode: rawOptions['live-activity-mode'] ?? rawOptions.liveActivityMode,
+    liveActivityMaxChars: rawOptions['live-activity-max-chars'] ?? rawOptions.liveActivityMaxChars,
+    liveActivitySampleSeconds:
+      rawOptions['live-activity-sample-seconds'] ?? rawOptions.liveActivitySampleSeconds,
+    liveActivityEmitEventLines:
+      rawOptions['live-activity-emit-event-lines'] ?? rawOptions.liveActivityEmitEventLines,
+    liveActivityRedactPatterns:
+      rawOptions['live-activity-redact-patterns'] ?? rawOptions.liveActivityRedactPatterns,
     workerFirstTouchDeadlineSeconds:
       rawOptions['worker-first-touch-deadline-seconds'] ?? rawOptions.workerFirstTouchDeadlineSeconds,
     workerRetryFirstTouchDeadlineSeconds:

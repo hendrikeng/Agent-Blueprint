@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 
+const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function resolvedPlanMetadataCommand() {
+  const planId = String(process.env.ORCH_PLAN_ID ?? '').trim().toLowerCase();
+  if (!planId || !PLAN_ID_REGEX.test(planId)) {
+    return 'node ./scripts/automation/check-plan-metadata.mjs';
+  }
+  return `node ./scripts/automation/check-plan-metadata.mjs --plan-id ${planId}`;
+}
+
 function mandatoryCommands() {
   const ciMode = asBoolean(process.env.CI, false);
   const repairCommand = ciMode
@@ -11,7 +21,7 @@ function mandatoryCommands() {
     'node ./scripts/automation/compile-runtime-context.mjs',
     repairCommand,
     'node ./scripts/docs/check-governance.mjs',
-    'node ./scripts/automation/check-plan-metadata.mjs'
+    resolvedPlanMetadataCommand()
   ];
 }
 
