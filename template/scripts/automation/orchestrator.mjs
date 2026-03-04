@@ -786,7 +786,7 @@ function progressLog(options, message) {
     const level = classifyPrettyLevel(message);
     const spinner = nextPrettySpinner(options);
     const tag = prettyLevelTag(options, level);
-    console.log(`${stamp} ${spinner} ${tag} ${message}`);
+    printIndentedPrettyMessage(`${stamp} ${spinner} ${tag} `, message);
     return;
   }
   console.log(`[orchestrator] ${message}`);
@@ -1494,9 +1494,10 @@ async function runShellMonitored(
       const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
       const stamp = colorize(options, '90', nowIso().slice(11, 19));
       const spinner = nextPrettySpinner(options);
-      const workingLabel = colorize(options, '36', `WORKING (${formatDuration(elapsedSeconds)})`);
+      const workingLabel = colorize(options, '1;36', `WORKING (${formatDuration(elapsedSeconds)})`);
+      const workingMessage = colorize(options, '37', sanitized);
       clearLiveStatusLine();
-      printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, sanitized);
+      printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
     }
   }
 
