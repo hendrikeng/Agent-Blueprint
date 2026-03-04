@@ -6138,6 +6138,27 @@ async function updateProductSpecs(plan, completedPath, paths, state, options) {
       continue;
     }
 
+    let targetStats;
+    try {
+      targetStats = await fs.stat(targetPath);
+    } catch (error) {
+      await logEvent(paths, state, 'spec_update_skipped', {
+        planId: plan.planId,
+        target: targetRel,
+        reason: error instanceof Error ? error.message : String(error)
+      }, options.dryRun);
+      continue;
+    }
+
+    if (!targetStats.isFile()) {
+      await logEvent(paths, state, 'spec_update_skipped', {
+        planId: plan.planId,
+        target: targetRel,
+        reason: 'Spec target is not a regular file'
+      }, options.dryRun);
+      continue;
+    }
+
     if (options.dryRun) {
       continue;
     }
