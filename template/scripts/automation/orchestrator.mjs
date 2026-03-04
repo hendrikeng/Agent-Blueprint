@@ -62,6 +62,27 @@ const DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS = [
   'ghp_[A-Za-z0-9]+',
   'sk-[A-Za-z0-9]+'
 ];
+const LIVE_ACTIVITY_PROVIDER_NAME_TOKENS = new Set(['codex', 'claude']);
+const LIVE_ACTIVITY_JSON_TYPE_HINTS = [
+  'status',
+  'progress',
+  'reasoning',
+  'thinking',
+  'task',
+  'step',
+  'tool',
+  'action',
+  'activity'
+];
+const LIVE_ACTIVITY_JSON_TYPE_DENY = [
+  'output_text',
+  'final',
+  'completed',
+  'result',
+  'usage',
+  'token',
+  'metrics'
+];
 const DEFAULT_CONTACT_PACKS_ENABLED = true;
 const DEFAULT_CONTACT_PACKS_MAX_POLICY_BULLETS = 10;
 const DEFAULT_CONTACT_PACKS_INCLUDE_RECENT_EVIDENCE = true;
@@ -333,6 +354,129 @@ function stripAnsiControl(value) {
   return String(value ?? '').replace(ANSI_ESCAPE_REGEX, '');
 }
 
+function extractStringFromUnknown(value, depth = 0) {
+  if (depth > 3) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const rendered = value.trim();
+    return rendered || null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 8)) {
+      const extracted = extractStringFromUnknown(entry, depth + 1);
+      if (extracted) {
+        return extracted;
+      }
+    }
+    return null;
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const preferred = ['text', 'content', 'message', 'delta', 'summary', 'reason', 'title', 'value'];
+  for (const key of preferred) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const extracted = extractStringFromUnknown(value[key], depth + 1);
+    if (extracted) {
+      return extracted;
+    }
+  }
+  return null;
+}
+
+function normalizeJsonEventType(payload) {
+  const candidates = [
+    payload?.type,
+    payload?.event?.type,
+    payload?.eventType,
+    payload?.name,
+    payload?.event?.name
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') {
+      continue;
+    }
+    const rendered = candidate.trim().toLowerCase();
+    if (rendered) {
+      return rendered;
+    }
+  }
+  return '';
+}
+
+function eventTypeHasLiveActivityHint(eventType) {
+  if (!eventType) {
+    return false;
+  }
+  return LIVE_ACTIVITY_JSON_TYPE_HINTS.some((token) => eventType.includes(token));
+}
+
+function eventTypeDeniedForLiveActivity(eventType) {
+  if (!eventType) {
+    return false;
+  }
+  return LIVE_ACTIVITY_JSON_TYPE_DENY.some((token) => eventType.includes(token));
+}
+
+function extractLiveActivityFromJsonLine(line) {
+  const rendered = String(line ?? '').trim();
+  if (!rendered || !rendered.startsWith('{')) {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rendered);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  const eventType = normalizeJsonEventType(parsed);
+  if (eventTypeDeniedForLiveActivity(eventType)) {
+    return null;
+  }
+
+  const containers = [
+    parsed,
+    parsed.event,
+    parsed.data,
+    parsed.payload,
+    parsed.details,
+    parsed.item,
+    parsed.message
+  ];
+  const keys = ['activity', 'progress', 'status', 'summary', 'reason', 'message', 'text', 'content'];
+  for (const container of containers) {
+    if (!container || typeof container !== 'object') {
+      continue;
+    }
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(container, key)) {
+        continue;
+      }
+      const extracted = extractStringFromUnknown(container[key]);
+      if (extracted) {
+        return extracted;
+      }
+    }
+  }
+
+  if (eventTypeHasLiveActivityHint(eventType)) {
+    const fallback = extractStringFromUnknown(parsed);
+    if (fallback) {
+      return fallback;
+    }
+  }
+
+  return null;
+}
+
 function sanitizeLiveActivityLine(line, redactionPatterns, maxChars) {
   let rendered = stripAnsiControl(line).replace(/\s+/g, ' ').trim();
   if (!rendered) {
@@ -344,6 +488,11 @@ function sanitizeLiveActivityLine(line, redactionPatterns, maxChars) {
   }
 
   if (!/[A-Za-z]/.test(rendered)) {
+    return null;
+  }
+
+  const lower = rendered.toLowerCase();
+  if (LIVE_ACTIVITY_PROVIDER_NAME_TOKENS.has(lower)) {
     return null;
   }
 
@@ -1228,7 +1377,8 @@ async function runShellMonitored(
       stderrRemainder = remainder;
     }
     for (const line of parts) {
-      maybeRecordLiveActivity(line, source, nowMs);
+      const jsonActivity = extractLiveActivityFromJsonLine(line);
+      maybeRecordLiveActivity(jsonActivity ?? line, source, nowMs);
     }
   }
 
@@ -1430,8 +1580,16 @@ async function runShellMonitored(
       }
       settled = true;
       cleanupTimers();
-      maybeRecordLiveActivity(stdoutRemainder, 'stdout', Date.now());
-      maybeRecordLiveActivity(stderrRemainder, 'stderr', Date.now());
+      maybeRecordLiveActivity(
+        extractLiveActivityFromJsonLine(stdoutRemainder) ?? stdoutRemainder,
+        'stdout',
+        Date.now()
+      );
+      maybeRecordLiveActivity(
+        extractLiveActivityFromJsonLine(stderrRemainder) ?? stderrRemainder,
+        'stderr',
+        Date.now()
+      );
       maybeRefreshTouchSummary(Date.now(), true);
       const finalTouchSummary = touchSummary;
       resolve({

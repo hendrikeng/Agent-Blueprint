@@ -103,7 +103,7 @@ Use the manual path when any of these are true:
 - Example (`orchestrator.config.json`):
   - `"command": "node ./scripts/automation/executor-wrapper.mjs --plan-id {plan_id} --plan-file {plan_file} --run-id {run_id} --mode {mode} --session {session} --role {role} --effective-risk-tier {effective_risk_tier} --declared-risk-tier {declared_risk_tier} --stage-index {stage_index} --stage-total {stage_total} --result-path {result_path} --contact-pack-file {contact_pack_file}"`
   - `"provider": "codex"` (override per run with `ORCH_EXECUTOR_PROVIDER=...`)
-  - `"providers.codex.command": "codex exec --full-auto -c model_reasoning_effort={role_reasoning_effort} -m {role_model} {prompt}"` (`{prompt}`, `{role_model}`, and `{role_reasoning_effort}` are required)
+  - `"providers.codex.command": "codex exec --json --full-auto -c model_reasoning_effort={role_reasoning_effort} -m {role_model} {prompt}"` (`{prompt}`, `{role_model}`, and `{role_reasoning_effort}` are required)
   - `"providers.claude.command": "claude -p --model {role_model} {prompt}"` (`{prompt}` and `{role_model}` are required)
   - `"enforceRoleModelSelection": true` requires each role command to include `{role_model}`.
   - `"contextThreshold": 10000`
@@ -179,6 +179,7 @@ Use the manual path when any of these are true:
   - `minimal` output prints high-signal lifecycle lines only (plan/session start-end, role transitions, validation state, blockers).
   - `ticker` output prints compact single-line lifecycle events and a single-line run summary.
   - Live heartbeats can include best-effort provider text as `agent="..."` when available; this stream is informational only and never used for orchestration gating.
+  - When Codex runs with `--json`, orchestrator prefers structured event fields for `agent="..."` updates and falls back to plain line parsing when needed.
   - Live heartbeats include touched-file summaries (`touch=<count>(<category>:<count>,...)`) so long-running sessions still show concrete progress.
   - File-touch detail lines (`file activity ...`) emit category counts and representative file samples when touched-file sets change.
   - `logging.liveActivity.emitEventLines: true` appends optional `provider_activity` events to `run-events.jsonl` (disabled by default to limit noise).

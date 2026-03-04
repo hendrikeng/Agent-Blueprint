@@ -30,7 +30,7 @@ Provider live-progress text is optional and best-effort only; it is not part of 
 
 ## Baseline Command Templates
 
-- Codex: `codex exec --full-auto -c model_reasoning_effort={role_reasoning_effort} -m {role_model} {prompt}`
+- Codex: `codex exec --json --full-auto -c model_reasoning_effort={role_reasoning_effort} -m {role_model} {prompt}`
 - Claude: `claude -p --model {role_model} {prompt}`
 
 These are baseline templates, not universal guarantees across all versions.
@@ -56,6 +56,7 @@ If payload is missing or invalid, orchestration treats the session as incomplete
 ## Live Activity Telemetry (Optional)
 
 - Orchestrator heartbeats may surface provider text as `agent="..."` when available.
+- For Codex, `--json` output is preferred so orchestrator can parse structured progress/status events.
 - This channel is informational only and must not control retries, completion, or policy gates.
 - Missing, delayed, or format-shifted provider text must not fail orchestration.
 - If enabled, `provider_activity` events in `run-events.jsonl` are optional telemetry and may be sparse/rate-limited.
