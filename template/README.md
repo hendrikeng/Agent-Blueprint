@@ -106,6 +106,7 @@ Start with:
 ## Enforcement and Quality Gates
 
 - Runtime context build: `npm run context:compile`
+- Governance checks: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, `npm run eval:verify`, `npm run plans:verify`, `npm run blueprint:verify`
 - Fast iteration profile: `npm run verify:fast`
 - Full merge profile: `npm run verify:full`
 - Canonical command map and policy: `docs/governance/rules.md`
@@ -119,10 +120,13 @@ Start with:
 ## Automation Conveyor Commands
 
 - Start run (guarded, sequential, recovery defaults): `npm run automation:run`
+- Start approved grind loop (medium/high approved): `npm run automation:run:approved`
 - Start parallel run (same defaults, explicit command): `npm run automation:run:parallel`
 - Resume parallel execution (same defaults): `npm run automation:resume:parallel`
 - Resume run: `npm run automation:resume`
-- Audit runs: `npm run automation:audit -- --json true`
+- Resume approved grind loop (medium/high approved): `npm run automation:resume:approved`
+- Resume quick single-plan approved run: `npm run automation:resume:quick`
+- Audit runs: `npm run automation:audit`
 - Outcomes summary (optional): `npm run outcomes:report`
 - GitHub interop export scaffold (optional): `npm run interop:github:export`
 - GitHub interop export write mode (optional): `npm run interop:github:export:write`

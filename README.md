@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: Platform Engineering
-Last Updated: 2026-03-01
+Last Updated: 2026-03-04
 Source of Truth: This directory.
 
 Reusable blueprint for initializing agent-first repositories with docs-as-governance, blast-radius control, and evidence-based delivery.
@@ -103,10 +103,14 @@ Start with `Lite` by default, then scale up only when risk or workload demands i
 
 ## Core Commands
 
-- `context:compile`, `verify:fast`, `verify:full`
-- `automation:run`, `automation:run:parallel`, `automation:resume`, `automation:resume:parallel`, `automation:audit`
+- `context:compile`
+- `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `plans:verify`, `blueprint:verify`
+- `verify:fast`, `verify:full`
 - `perf:baseline`, `perf:after`
 - `outcomes:report`, `interop:github:export`, `interop:github:export:write`
+- `automation:run`, `automation:run:approved`, `automation:run:parallel`
+- `automation:resume`, `automation:resume:parallel`, `automation:resume:approved`, `automation:resume:quick`
+- `automation:audit`
 
 Canonical command contracts and policies:
 - `template/docs/ops/automation/README.md`
@@ -123,7 +127,7 @@ Canonical command contracts and policies:
 
 1. Copy `template/` contents into a new repository root.
 2. Replace placeholders from `PLACEHOLDERS.md`.
-3. Add required scripts to `package.json` (`context:compile`, `verify:fast`, `verify:full`, automation commands).
+3. Add required scripts to `package.json` (`context:compile`, `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `blueprint:verify`, `plans:verify`, `verify:fast`, `verify:full`, `perf:baseline`, `perf:after`, `outcomes:report`, `interop:github:export`, `interop:github:export:write`, `automation:run`, `automation:run:approved`, `automation:run:parallel`, `automation:resume:parallel`, `automation:resume`, `automation:resume:approved`, `automation:resume:quick`, `automation:audit`).
 4. Run `./scripts/check-template-placeholders.sh`.
 5. Run `./scripts/bootstrap-verify.sh`.
 
