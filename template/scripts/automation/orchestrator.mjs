@@ -433,6 +433,17 @@ function eventTypeDeniedForLiveActivity(eventType) {
   return LIVE_ACTIVITY_JSON_TYPE_DENY.some((token) => eventType.includes(token));
 }
 
+function isLikelyTruncatedPreview(value) {
+  const rendered = String(value ?? '').trim();
+  if (!rendered) {
+    return false;
+  }
+  if (rendered.length > 180) {
+    return false;
+  }
+  return rendered.endsWith('…') || rendered.endsWith('...');
+}
+
 function extractLiveActivityFromJsonLine(line) {
   const rendered = String(line ?? '').trim();
   if (!rendered || !rendered.startsWith('{')) {
@@ -491,6 +502,9 @@ function extractLiveActivityFromJsonLine(line) {
       }
       const extracted = extractStringFromUnknown(container[key]);
       if (extracted) {
+        if (eventType !== 'item.completed' && isLikelyTruncatedPreview(extracted)) {
+          continue;
+        }
         return extracted;
       }
     }
@@ -499,6 +513,9 @@ function extractLiveActivityFromJsonLine(line) {
   if (eventTypeHasLiveActivityHint(eventType)) {
     const fallback = extractStringFromUnknown(parsed);
     if (fallback) {
+      if (eventType !== 'item.completed' && isLikelyTruncatedPreview(fallback)) {
+        return null;
+      }
       return fallback;
     }
   }
