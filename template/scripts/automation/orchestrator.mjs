@@ -77,7 +77,6 @@ const LIVE_ACTIVITY_JSON_TYPE_HINTS = [
 const LIVE_ACTIVITY_JSON_TYPE_DENY = [
   'output_text',
   'final',
-  'completed',
   'result',
   'usage',
   'token',
