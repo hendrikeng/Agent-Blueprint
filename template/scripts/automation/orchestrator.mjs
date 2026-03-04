@@ -564,9 +564,6 @@ function sanitizeLiveActivityLine(line, redactionPatterns, maxChars) {
     return null;
   }
 
-  if (maxChars > 0 && rendered.length > maxChars) {
-    rendered = `${rendered.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
-  }
 
   return rendered || null;
 }
@@ -1845,7 +1842,7 @@ async function loadConfig(paths) {
           reasoningEffort: 'high',
           sandboxMode: 'full-access',
           instructions:
-            'You are an execution-focused agent. Implement features, fix bugs, and refactor precisely while following existing patterns. Start with a concrete repository edit as soon as feasible, then continue iteratively. Do not defer implementation work back to planner/explorer when a concrete edit can be made now.'
+            'You are an execution-focused agent. Implement features, fix bugs, and refactor precisely while following existing patterns. Start with a concrete repository edit as soon as feasible, then continue iteratively. Do not defer implementation work back to planner/explorer when a concrete edit can be made now. When sending interim status updates, write complete words and full identifiers; do not shorten with ellipses.'
         },
         planner: {
           model: 'gpt-5.3-codex',
