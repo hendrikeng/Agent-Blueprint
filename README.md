@@ -103,6 +103,22 @@ Start with `Lite` by default, then scale up only when risk or workload demands i
 
 ## Core Commands
 
+## Common Command Matrix
+
+| Command | Use When |
+| --- | --- |
+| `npm run plans:verify` | You want a fast plan-state check only. |
+| `npm run verify:fast` | You want standard local preflight before grind/resume/commit. |
+| `npm run verify:full` | You are preparing merge-level validation. |
+| `npm run automation:run:grind` | You want supervised low-risk grind until queue is stable/drained. |
+| `npm run automation:run:grind:medium` | Same as above, but allow medium risk plans too. |
+| `npm run automation:run:grind:high` | Same as above, but allow medium+high risk plans too. |
+| `npm run automation:resume:grind` | Continue the last run in supervised loop mode. |
+| `npm run automation:resume:quick:non-atomic` | Unblock continuation when atomic commit boundaries are temporarily not feasible. |
+| `npm run automation:audit` | Inspect blocked/failed/pending plans and suggested next steps. |
+
+For full command contracts, flags, and policy behavior, use `template/docs/ops/automation/README.md`.
+
 - `context:compile`
 - `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `plans:verify`, `blueprint:verify`
 - `plans:verify` auto-aligns top-level `Status:` with metadata `- Status` in local runs; disable with `ORCH_PLAN_METADATA_AUTO_HEAL_STATUS=0` (CI defaults to disabled)
