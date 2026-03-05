@@ -203,6 +203,7 @@ Use the manual path when any of these are true:
   - In orchestrator planner/explorer/reviewer sessions (`ORCH_ROLE` non-worker), it automatically switches to read-only behavior (`repair-plan-references --dry-run`, runtime-context output to `/tmp`, and metadata auto-heal disabled) to avoid role-scope policy violations.
 - Full merge profile: `npm run verify:full`
   - Runs all required repository gates.
+  - When run inside orchestration sessions, `verify:full` receives `ORCH_PLAN_ID` and scopes `check-plan-metadata` to the in-flight plan to avoid unrelated plan-metadata auto-heal edits during host validation.
 - Metrics capture:
   - `npm run perf:baseline`
   - `npm run perf:after`

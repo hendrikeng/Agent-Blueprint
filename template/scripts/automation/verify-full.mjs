@@ -1,16 +1,28 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 
-const FULL_COMMANDS = [
-  'node ./scripts/automation/compile-runtime-context.mjs',
-  'node ./scripts/docs/check-governance.mjs',
-  'node ./scripts/check-article-conformance.mjs',
-  'node ./scripts/architecture/check-dependencies.mjs',
-  'node ./scripts/agent-hardening/check-agent-hardening.mjs',
-  'node ./scripts/agent-hardening/check-evals.mjs',
-  'node ./scripts/automation/check-blueprint-alignment.mjs',
-  'node ./scripts/automation/check-plan-metadata.mjs'
-];
+const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function resolvedPlanMetadataCommand() {
+  const planId = String(process.env.ORCH_PLAN_ID ?? '').trim().toLowerCase();
+  if (!planId || !PLAN_ID_REGEX.test(planId)) {
+    return 'node ./scripts/automation/check-plan-metadata.mjs';
+  }
+  return `node ./scripts/automation/check-plan-metadata.mjs --plan-id ${planId}`;
+}
+
+function fullCommands() {
+  return [
+    'node ./scripts/automation/compile-runtime-context.mjs',
+    'node ./scripts/docs/check-governance.mjs',
+    'node ./scripts/check-article-conformance.mjs',
+    'node ./scripts/architecture/check-dependencies.mjs',
+    'node ./scripts/agent-hardening/check-agent-hardening.mjs',
+    'node ./scripts/agent-hardening/check-evals.mjs',
+    'node ./scripts/automation/check-blueprint-alignment.mjs',
+    resolvedPlanMetadataCommand()
+  ];
+}
 
 function parseArgs(argv) {
   const options = {};
@@ -59,9 +71,10 @@ function runCommand(command, dryRun) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const dryRun = asBoolean(options['dry-run'], false);
+  const commands = fullCommands();
 
-  console.log(`[verify-full] running ${FULL_COMMANDS.length} command(s).`);
-  for (const command of FULL_COMMANDS) {
+  console.log(`[verify-full] running ${commands.length} command(s).`);
+  for (const command of commands) {
     const status = runCommand(command, dryRun);
     if (status !== 0) {
       console.error(`[verify-full] failed: ${command}`);
