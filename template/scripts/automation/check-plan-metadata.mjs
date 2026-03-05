@@ -26,9 +26,14 @@ const directories = {
 };
 
 const findings = [];
+const autoHeals = [];
 
 function addFinding(code, message, filePath) {
   findings.push({ code, message, filePath });
+}
+
+function addAutoHeal(filePath, fromStatus, toStatus) {
+  autoHeals.push({ filePath, fromStatus, toStatus });
 }
 
 function parseArgs(argv) {
@@ -48,6 +53,15 @@ function parseArgs(argv) {
     index += 1;
   }
   return options;
+}
+
+function asBoolean(value, fallback = false) {
+  if (value == null) return fallback;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  return fallback;
 }
 
 function normalizePlanId(value) {
@@ -76,8 +90,34 @@ async function scanPhase(phase, directoryPath) {
 
   for (const filePath of files) {
     const rel = path.relative(rootDir, filePath).split(path.sep).join('/');
-    const content = await fs.readFile(filePath, 'utf8');
-    const metadata = parseMetadata(content);
+    let content = await fs.readFile(filePath, 'utf8');
+    let metadata = parseMetadata(content);
+    const rawPlanId = metadataValue(metadata, 'Plan-ID');
+    const parsedPlanId = rawPlanId ? parsePlanId(rawPlanId, null) : null;
+    const inferredPlanId = parsedPlanId ?? inferPlanId(content, filePath);
+    const topLevelStatusMatch = content.match(/^Status:\s*(.+)$/m);
+    const topLevelStatus = normalizeStatus(topLevelStatusMatch?.[1] ?? '');
+    const metadataStatus = normalizeStatus(metadataValue(metadata, 'Status'));
+    const scopedRepairPlanId = scanPhase.scopedRepairPlanId ?? null;
+    const inRepairScope = !scopedRepairPlanId || inferredPlanId === scopedRepairPlanId;
+    const autoHealEnabled = scanPhase.autoHealEnabled === true;
+
+    if (
+      autoHealEnabled &&
+      inRepairScope &&
+      topLevelStatusMatch &&
+      topLevelStatus &&
+      metadataStatus &&
+      topLevelStatus !== metadataStatus
+    ) {
+      const updatedContent = content.replace(/^Status:\s*.+$/m, `Status: ${metadataStatus}`);
+      if (updatedContent !== content) {
+        await fs.writeFile(filePath, updatedContent, 'utf8');
+        addAutoHeal(rel, topLevelStatus, metadataStatus);
+        content = updatedContent;
+        metadata = parseMetadata(content);
+      }
+    }
 
     const requiredFields = REQUIRED_METADATA_FIELDS[phase] ?? [];
     for (const field of requiredFields) {
@@ -101,8 +141,12 @@ async function scanPhase(phase, directoryPath) {
       }
     }
 
-    const topLevelStatus = normalizeStatus(content.match(/^Status:\s*(.+)$/m)?.[1] ?? '');
-    if (phase === 'active' && topLevelStatus === 'completed' && (status === 'blocked' || status === 'failed')) {
+    const normalizedTopLevelStatus = normalizeStatus(content.match(/^Status:\s*(.+)$/m)?.[1] ?? '');
+    if (
+      phase === 'active' &&
+      normalizedTopLevelStatus === 'completed' &&
+      (status === 'blocked' || status === 'failed')
+    ) {
       addFinding(
         'CONTRADICTORY_STATUS',
         `Top-level Status is 'completed' while metadata Status is '${status}'. Resolve status mismatch before orchestration.`,
@@ -172,8 +216,6 @@ async function scanPhase(phase, directoryPath) {
       }
     }
 
-    const rawPlanId = metadataValue(metadata, 'Plan-ID');
-    const parsedPlanId = rawPlanId ? parsePlanId(rawPlanId, null) : null;
     if (rawPlanId && !parsedPlanId) {
       addFinding(
         'INVALID_PLAN_ID',
@@ -218,6 +260,16 @@ async function main() {
     );
     process.exit(1);
   }
+  const ciMode = asBoolean(process.env.CI, false);
+  const autoHealEnabled = asBoolean(
+    options['auto-heal-status'] ??
+    options.autoHealStatus ??
+    process.env.ORCH_PLAN_METADATA_AUTO_HEAL_STATUS,
+    !ciMode
+  );
+
+  scanPhase.autoHealEnabled = autoHealEnabled;
+  scanPhase.scopedRepairPlanId = scopedPlanId;
 
   const [futurePlans, activePlans, completedPlans] = await Promise.all([
     scanPhase('future', directories.future),
@@ -292,6 +344,12 @@ async function main() {
   }
 
   const summary = `plans=${allPlans.length} future=${futurePlans.length} active=${activePlans.length} completed=${completedPlans.length}${scopeSummary}`;
+  if (autoHeals.length > 0) {
+    console.log(`[plans-verify] auto-healed ${autoHeals.length} status drift issue(s).`);
+    for (const heal of autoHeals) {
+      console.log(`- ${heal.filePath}: ${heal.fromStatus} -> ${heal.toStatus}`);
+    }
+  }
 
   if (findings.length > 0) {
     console.error(`[plans-verify] failed (${findings.length} issue(s), ${summary}).`);

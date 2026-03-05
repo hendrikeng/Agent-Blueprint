@@ -105,6 +105,7 @@ Start with `Lite` by default, then scale up only when risk or workload demands i
 
 - `context:compile`
 - `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `plans:verify`, `blueprint:verify`
+- `plans:verify` auto-aligns top-level `Status:` with metadata `- Status` in local runs; disable with `ORCH_PLAN_METADATA_AUTO_HEAL_STATUS=0` (CI defaults to disabled)
 - `verify:fast`, `verify:full`
 - `perf:baseline`, `perf:after`
 - `outcomes:report`, `interop:github:export`, `interop:github:export:write`

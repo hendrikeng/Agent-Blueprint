@@ -107,6 +107,7 @@ Start with:
 
 - Runtime context build: `npm run context:compile`
 - Governance checks: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, `npm run eval:verify`, `npm run plans:verify`, `npm run blueprint:verify`
+- Plan metadata drift self-heal (local default): `plans:verify` auto-aligns top-level `Status:` with metadata `- Status`; disable via `ORCH_PLAN_METADATA_AUTO_HEAL_STATUS=0` (CI defaults to disabled).
 - Fast iteration profile: `npm run verify:fast`
 - Full merge profile: `npm run verify:full`
 - Canonical command map and policy: `docs/governance/rules.md`

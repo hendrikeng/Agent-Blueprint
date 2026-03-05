@@ -199,6 +199,7 @@ Use the manual path when any of these are true:
   - Runs mandatory safety checks plus scope-selected verifiers.
   - When run inside orchestration sessions, `verify:fast` receives `ORCH_PLAN_ID` and scopes `check-plan-metadata` to the in-flight plan to avoid unrelated plan-metadata drift blocking completion.
   - Runs `node ./scripts/docs/repair-plan-references.mjs` before docs governance checks so stale plan-path links are auto-healed while keeping strict governance enabled.
+  - Runs `node ./scripts/automation/check-plan-metadata.mjs`; in local runs it auto-heals top-level `Status:` drift to metadata `- Status` (set `ORCH_PLAN_METADATA_AUTO_HEAL_STATUS=0` to disable; CI defaults to disabled).
 - Full merge profile: `npm run verify:full`
   - Runs all required repository gates.
 - Metrics capture:
