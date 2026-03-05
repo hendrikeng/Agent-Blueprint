@@ -103,6 +103,10 @@ function approximateTokenCount(content) {
   return normalized.split(/\s+/).length;
 }
 
+function normalizeGeneratedAtLine(content) {
+  return String(content ?? '').replace(/^Generated At:\s+.*$/m, 'Generated At: <normalized>');
+}
+
 function ensureManifestShape(manifest) {
   if (!manifest || typeof manifest !== 'object') {
     throw new Error('Policy manifest must be a JSON object.');
@@ -275,8 +279,24 @@ async function main() {
     }
   }
 
+  let existing = null;
+  try {
+    existing = await fs.readFile(outputPath, 'utf8');
+  } catch {
+    existing = null;
+  }
+
+  if (
+    typeof existing === 'string' &&
+    normalizeGeneratedAtLine(existing) === normalizeGeneratedAtLine(rendered)
+  ) {
+    rendered = existing;
+  }
+
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.writeFile(outputPath, rendered, 'utf8');
+  if (existing !== rendered) {
+    await fs.writeFile(outputPath, rendered, 'utf8');
+  }
 
   const rel = toPosix(path.relative(rootDir, outputPath));
   console.log(`[context-compile] wrote ${rel} (${tokenCount} tokens, max ${maxTokens}).`);
