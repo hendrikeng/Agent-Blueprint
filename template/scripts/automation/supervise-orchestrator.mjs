@@ -32,6 +32,7 @@ const allowDirtyRecovery = String(process.env.ORCH_SUPERVISOR_ALLOW_DIRTY_RECOVE
 
 const rootDir = process.cwd();
 const runStatePath = path.join(rootDir, 'docs/ops/automation/run-state.json');
+const runEventsPath = path.join(rootDir, 'docs/ops/automation/run-events.jsonl');
 const activePlansDir = path.join(rootDir, 'docs/exec-plans/active');
 
 let stableCycles = 0;
@@ -143,6 +144,62 @@ function renderSummary(state, unresolvedIds) {
   );
 }
 
+function worktreeIsDirty() {
+  const result = spawnSync('git', ['status', '--porcelain'], {
+    cwd: rootDir,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'ignore']
+  });
+  if (result.status !== 0) {
+    return false;
+  }
+  return String(result.stdout ?? '').trim().length > 0;
+}
+
+function eventContainsAtomicDeadlockText(event) {
+  const haystack = `${event?.type ?? ''} ${JSON.stringify(event?.details ?? {})}`.toLowerCase();
+  return (
+    haystack.includes('atomic commit preflight failed') ||
+    haystack.includes('atomic commit failed') ||
+    haystack.includes('atomic commit refused') ||
+    haystack.includes('refusing --allow-dirty true with --commit true') ||
+    haystack.includes('refusing to start with a dirty git worktree') ||
+    haystack.includes('refusing to resume with a dirty git worktree') ||
+    haystack.includes('refusing parallel execution with dirty git worktree') ||
+    haystack.includes('refusing parallel resume with dirty git worktree')
+  );
+}
+
+function hasAtomicDeadlockSignalInCurrentRun() {
+  if (!existsSync(runEventsPath)) {
+    return false;
+  }
+  const state = readRunState();
+  const runId = state?.runId ? String(state.runId) : '';
+  try {
+    const raw = readFileSync(runEventsPath, 'utf8');
+    const window = raw.length > 512_000 ? raw.slice(-512_000) : raw;
+    const lines = window.split(/\r?\n/).filter(Boolean).reverse();
+    for (const line of lines) {
+      let event = null;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (runId && String(event?.runId ?? '') !== runId) {
+        continue;
+      }
+      if (eventContainsAtomicDeadlockText(event)) {
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function main() {
   let nextCommand = firstCommand;
 
@@ -154,9 +211,9 @@ function main() {
       consecutiveErrors = 0;
     } else {
       if (allowDirtyRecovery && !dirtyRecoveryMode) {
-        const hasRunStateAfter = existsSync(runStatePath);
-        const likelyAtomicStartupDeadlock = command === firstCommand || hadRunStateBefore || hasRunStateAfter;
-        if (likelyAtomicStartupDeadlock) {
+        const startupDirtyDeadlock = command === firstCommand && worktreeIsDirty();
+        const atomicDeadlockSignal = hasAtomicDeadlockSignalInCurrentRun();
+        if (startupDirtyDeadlock || atomicDeadlockSignal) {
           dirtyRecoveryMode = true;
           consecutiveErrors = 0;
           nextCommand = command;
