@@ -105,7 +105,7 @@ const DEFAULT_MAX_FAILED_RETRIES = 2;
 const DEFAULT_PARALLEL_PLANS = 1;
 const DEFAULT_PARALLEL_WORKTREE_ROOT = 'docs/ops/automation/runtime/worktrees';
 const DEFAULT_PARALLEL_BRANCH_PREFIX = 'orch';
-const DEFAULT_PARALLEL_BASE_REF = 'HEAD';
+const DEFAULT_PARALLEL_BASE_REF = 'CURRENT_BRANCH';
 const DEFAULT_PARALLEL_GIT_REMOTE = 'origin';
 const DEFAULT_PARALLEL_WORKER_OUTPUT = 'minimal';
 const DEFAULT_PARALLEL_KEEP_WORKTREES = false;
@@ -202,6 +202,9 @@ Options:
   --mode guarded|full                Autonomy mode (default: guarded)
   --max-plans <n>                    Maximum plans to process in this run
   --parallel-plans <n>               Number of plans to execute in parallel (default: 1)
+  --base-ref <ref>                   Base ref for parallel worktrees/PRs (default: CURRENT_BRANCH)
+  --branch-prefix <value>            Prefix for generated parallel worker branches
+  --git-remote <name>                Remote used for parallel branch push/PR operations
   --context-threshold <n>            Trigger rollover when contextRemaining < n
   --require-result-payload true|false Require ORCH_RESULT_PATH payload with contextRemaining (default: true)
   --handoff-token-budget <n>         Metadata field for handoff budget reporting
@@ -2674,16 +2677,46 @@ function normalizeRelativePrefixList(values) {
   return [...set].sort((a, b) => a.localeCompare(b));
 }
 
-function resolveParallelExecutionOptions(options, config) {
+function currentBranchRefOrNull(rootDir) {
+  if (!gitAvailable(rootDir)) {
+    return null;
+  }
+  const result = runShellCapture('git symbolic-ref --quiet --short HEAD', rootDir);
+  if (result.status !== 0) {
+    return null;
+  }
+  const branch = String(result.stdout ?? '').trim();
+  return branch || null;
+}
+
+function resolveParallelBaseRef(rootDir, requestedBaseRef) {
+  const raw = String(requestedBaseRef ?? '').trim();
+  if (!raw) {
+    return DEFAULT_PARALLEL_BASE_REF;
+  }
+  const token = raw.toUpperCase();
+  if (token === 'CURRENT' || token === 'CURRENT_BRANCH' || token === 'HEAD') {
+    return currentBranchRefOrNull(rootDir) ?? 'HEAD';
+  }
+  return raw;
+}
+
+function resolveParallelExecutionOptions(rootDir, options, config) {
   const configParallel = config?.parallel ?? {};
   const parallelPlans = Math.max(
     1,
     asInteger(options.parallelPlans ?? options['parallel-plans'] ?? configParallel.maxPlans, DEFAULT_PARALLEL_PLANS)
   );
   const worktreeRoot = normalizedRelativePrefix(configParallel.worktreeRoot ?? DEFAULT_PARALLEL_WORKTREE_ROOT);
-  const branchPrefix = String(configParallel.branchPrefix ?? DEFAULT_PARALLEL_BRANCH_PREFIX).trim() || DEFAULT_PARALLEL_BRANCH_PREFIX;
-  const baseRef = String(configParallel.baseRef ?? DEFAULT_PARALLEL_BASE_REF).trim() || DEFAULT_PARALLEL_BASE_REF;
-  const gitRemote = String(configParallel.gitRemote ?? DEFAULT_PARALLEL_GIT_REMOTE).trim() || DEFAULT_PARALLEL_GIT_REMOTE;
+  const branchPrefix =
+    String(options.branchPrefix ?? options['branch-prefix'] ?? configParallel.branchPrefix ?? DEFAULT_PARALLEL_BRANCH_PREFIX)
+      .trim() || DEFAULT_PARALLEL_BRANCH_PREFIX;
+  const requestedBaseRef =
+    options.baseRef ?? options['base-ref'] ?? configParallel.baseRef ?? DEFAULT_PARALLEL_BASE_REF;
+  const baseRef = resolveParallelBaseRef(rootDir, requestedBaseRef);
+  const gitRemote =
+    String(options.gitRemote ?? options['git-remote'] ?? configParallel.gitRemote ?? DEFAULT_PARALLEL_GIT_REMOTE).trim()
+      || DEFAULT_PARALLEL_GIT_REMOTE;
   const parentOutputMode = normalizeOutputMode(options.outputMode, DEFAULT_OUTPUT_MODE);
   const workerOutputMode = normalizeOutputMode(
     configParallel.workerOutputMode ?? parentOutputMode,
@@ -7789,7 +7822,7 @@ async function runParallelWorkerPlan(plan, paths, state, options, config, parall
 async function runParallelCommand(paths, options) {
   const config = await loadConfig(paths);
   Object.assign(options, resolveRuntimeExecutorOptions(options, config));
-  const parallelOptions = resolveParallelExecutionOptions(options, config);
+  const parallelOptions = resolveParallelExecutionOptions(paths.rootDir, options, config);
   const resumeParallel = asBoolean(options.resumeParallel, false);
   if (parallelOptions.parallelPlans <= 1) {
     return resumeParallel ? resumeCommand(paths, options) : runCommand(paths, options);
@@ -8450,6 +8483,9 @@ async function main() {
     mode: rawOptions.mode ?? 'guarded',
     maxPlans: asInteger(rawOptions['max-plans'] ?? rawOptions.maxPlans, Number.MAX_SAFE_INTEGER),
     parallelPlans: asInteger(rawOptions['parallel-plans'] ?? rawOptions.parallelPlans, DEFAULT_PARALLEL_PLANS),
+    baseRef: rawOptions['base-ref'] ?? rawOptions.baseRef,
+    branchPrefix: rawOptions['branch-prefix'] ?? rawOptions.branchPrefix,
+    gitRemote: rawOptions['git-remote'] ?? rawOptions.gitRemote,
     contextThreshold: asInteger(rawOptions['context-threshold'] ?? rawOptions.contextThreshold, null),
     requireResultPayload: rawOptions['require-result-payload'] ?? rawOptions.requireResultPayload,
     handoffTokenBudget: asInteger(rawOptions['handoff-token-budget'] ?? rawOptions.handoffTokenBudget, DEFAULT_HANDOFF_TOKEN_BUDGET),

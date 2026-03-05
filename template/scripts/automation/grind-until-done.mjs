@@ -39,11 +39,35 @@ function hasCliFlag(flag) {
   return passthroughArgs.some((entry) => entry === flag || entry.startsWith(`${flag}=`));
 }
 
+function readCliFlagValue(flag) {
+  const prefix = `${flag}=`;
+  for (let index = 0; index < passthroughArgs.length; index += 1) {
+    const entry = String(passthroughArgs[index] ?? '');
+    if (entry === flag) {
+      const next = passthroughArgs[index + 1];
+      if (typeof next === 'string' && !next.startsWith('--')) {
+        return next;
+      }
+      return 'true';
+    }
+    if (entry.startsWith(prefix)) {
+      return entry.slice(prefix.length);
+    }
+  }
+  return null;
+}
+
+const requestedParallelPlans = Number.parseInt(readCliFlagValue('--parallel-plans') ?? '1', 10);
+const parallelModeRequested = Number.isFinite(requestedParallelPlans) && requestedParallelPlans > 1;
+
 if (!hasCliFlag('--allow-dirty')) {
-  baseArgs.push('--allow-dirty', 'true');
+  baseArgs.push('--allow-dirty', parallelModeRequested ? 'false' : 'true');
 }
 if (!hasCliFlag('--commit')) {
-  baseArgs.push('--commit', 'false');
+  baseArgs.push('--commit', parallelModeRequested ? 'true' : 'false');
+}
+if (parallelModeRequested && !hasCliFlag('--base-ref')) {
+  baseArgs.push('--base-ref', 'CURRENT_BRANCH');
 }
 
 let stableCycles = 0;

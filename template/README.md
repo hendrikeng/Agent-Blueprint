@@ -121,10 +121,12 @@ Start with:
 
 - Start run (guarded, sequential, recovery defaults): `npm run automation:run`
 - Start approved grind loop (medium/high approved): `npm run automation:run:approved`
+- Start approved parallel grind loop (clean + atomic): `npm run automation:run:approved:parallel`
 - Start parallel run (same defaults, explicit command): `npm run automation:run:parallel`
 - Resume parallel execution (same defaults): `npm run automation:resume:parallel`
 - Resume run: `npm run automation:resume`
 - Resume approved grind loop (medium/high approved): `npm run automation:resume:approved`
+- Resume approved parallel grind loop: `npm run automation:resume:approved:parallel`
 - Resume quick single-plan approved run: `npm run automation:resume:quick`
 - Audit runs: `npm run automation:audit`
 - Outcomes summary (optional): `npm run outcomes:report`

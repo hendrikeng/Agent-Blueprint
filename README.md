@@ -109,7 +109,8 @@ Start with `Lite` by default, then scale up only when risk or workload demands i
 - `perf:baseline`, `perf:after`
 - `outcomes:report`, `interop:github:export`, `interop:github:export:write`
 - `automation:run`, `automation:run:approved`, `automation:run:parallel`
-- `automation:resume`, `automation:resume:parallel`, `automation:resume:approved`, `automation:resume:quick`
+- `automation:run:approved:parallel`
+- `automation:resume`, `automation:resume:parallel`, `automation:resume:approved`, `automation:resume:approved:parallel`, `automation:resume:quick`
 - `automation:audit`
 
 Canonical command contracts and policies:
@@ -127,7 +128,7 @@ Canonical command contracts and policies:
 
 1. Copy `template/` contents into a new repository root.
 2. Replace placeholders from `PLACEHOLDERS.md`.
-3. Add required scripts to `package.json` (`context:compile`, `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `blueprint:verify`, `plans:verify`, `verify:fast`, `verify:full`, `perf:baseline`, `perf:after`, `outcomes:report`, `interop:github:export`, `interop:github:export:write`, `automation:run`, `automation:run:approved`, `automation:run:parallel`, `automation:resume:parallel`, `automation:resume`, `automation:resume:approved`, `automation:resume:quick`, `automation:audit`).
+3. Add required scripts to `package.json` (`context:compile`, `docs:verify`, `conformance:verify`, `architecture:verify`, `agent:verify`, `eval:verify`, `blueprint:verify`, `plans:verify`, `verify:fast`, `verify:full`, `perf:baseline`, `perf:after`, `outcomes:report`, `interop:github:export`, `interop:github:export:write`, `automation:run`, `automation:run:approved`, `automation:run:approved:parallel`, `automation:run:parallel`, `automation:resume:parallel`, `automation:resume`, `automation:resume:approved`, `automation:resume:approved:parallel`, `automation:resume:quick`, `automation:audit`).
 4. Run `./scripts/check-template-placeholders.sh`.
 5. Run `./scripts/bootstrap-verify.sh`.
 

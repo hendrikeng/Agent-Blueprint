@@ -233,7 +233,7 @@
     "maxPlans": 1,
     "worktreeRoot": "docs/ops/automation/runtime/worktrees",
     "branchPrefix": "orch",
-    "baseRef": "HEAD",
+    "baseRef": "CURRENT_BRANCH",
     "gitRemote": "origin",
     "workerOutputMode": "minimal",
     "keepWorktrees": false,

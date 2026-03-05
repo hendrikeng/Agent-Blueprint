@@ -100,6 +100,7 @@ Use the manual path when any of these are true:
 - `executor.command` in `docs/ops/automation/orchestrator.config.json` is required for `run`/`resume`.
 - Set this once per repository; default is the portable `executor-wrapper` entrypoint.
 - If empty, `run`/`resume` fail immediately with a clear error.
+- `parallel.baseRef` supports `CURRENT_BRANCH` (recommended default) and resolves to the checked-out branch at run start.
 - Example (`orchestrator.config.json`):
   - `"command": "node ./scripts/automation/executor-wrapper.mjs --plan-id {plan_id} --plan-file {plan_file} --run-id {run_id} --mode {mode} --session {session} --role {role} --effective-risk-tier {effective_risk_tier} --declared-risk-tier {declared_risk_tier} --stage-index {stage_index} --stage-total {stage_total} --result-path {result_path} --contact-pack-file {contact_pack_file}"`
   - `"provider": "codex"` (override per run with `ORCH_EXECUTOR_PROVIDER=...`)
@@ -256,6 +257,7 @@ Start examples:
 - Process up to 5 plans in one run: `npm run automation:run -- --max-plans 5`
 - Faster liveness signal in pretty mode: `npm run automation:run -- --heartbeat-seconds 5 --stall-warn-seconds 45`
 - Compact ticker output: `npm run automation:run -- --output ticker`
+- Approved parallel grind (clean + atomic, anchored to current branch): `npm run automation:run:approved:parallel`
 
 Pretty output example:
 
@@ -272,6 +274,7 @@ Parallelism note:
 - `--max-plans` is a processing cap.
 - `run` is sequential by default.
 - `run --parallel-plans <n>` (or `run-parallel`) dispatches independent plans into isolated git worktrees/branches.
+- `--base-ref CURRENT_BRANCH` anchors parallel workers/PR targets to the branch you started from.
 - `resume-parallel` is available when you want to continue an existing run with parallel workers.
 - npm convenience alias: `npm run automation:resume:parallel` (maps to `resume-parallel` with template defaults).
 - Dependency gating remains strict: plans only start when all `Dependencies` are satisfied.
