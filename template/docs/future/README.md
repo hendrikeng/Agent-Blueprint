@@ -28,6 +28,31 @@ Optional metadata:
 - `Tags` (comma-separated risk hints such as `payments`, `security`, `migration`)
 - `Security-Approval` (`not-required` | `pending` | `approved`)
 
+## Future Intake Gate (Minimal)
+
+Create or update a future blueprint as `Status: draft` only when these checks pass:
+
+- [ ] `Plan-ID` is lowercase kebab-case and unique.
+- [ ] Problem, scope, and non-goals are explicit.
+- [ ] `Acceptance-Criteria` are concrete and testable.
+- [ ] `Dependencies` are complete (`none` when not applicable).
+- [ ] `Risk-Tier` is set correctly (`low` | `medium` | `high`) when applicable.
+- [ ] `Spec-Targets` reference canonical docs/files.
+- [ ] `Done-Evidence` is `pending`.
+- [ ] `npm run plans:verify` passes.
+
+## Promotion Gate (`draft` -> `ready-for-promotion`)
+
+Set `Status: ready-for-promotion` only when these checks pass:
+
+- [ ] At least one executable slice is defined with clear entry and exit criteria.
+- [ ] Open questions/blockers are either resolved or explicitly listed.
+- [ ] Validation path is clear (`verify:fast` during implementation, `verify:full` before completion).
+- [ ] Owner and responsibility are explicit.
+- [ ] `Security-Approval` is set correctly when required.
+- [ ] No placeholder text remains in the blueprint.
+- [ ] `npm run plans:verify` passes.
+
 ## Promotion Rules
 
 1. `draft` stays in `docs/future/`.

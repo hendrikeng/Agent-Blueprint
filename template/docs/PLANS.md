@@ -30,6 +30,7 @@ Examples:
 ## Lifecycle
 
 1. Strategic/non-trivial path: draft in `docs/future/` and set readiness (`draft` -> `ready-for-promotion`), then promote into `docs/exec-plans/active/` (normally via orchestrator).
+   Use the Future Intake Gate and Promotion Gate in `docs/future/README.md` before setting `Status: ready-for-promotion`.
 2. Quick/manual path: create the plan directly in `docs/exec-plans/active/` with complete metadata.
 3. Record decisions and acceptance criteria before implementation.
 4. Implement the smallest safe slice and update tests/docs in the same change.
