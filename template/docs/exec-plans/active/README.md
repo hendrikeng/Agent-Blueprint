@@ -12,6 +12,8 @@ Each active plan must include:
 - `## Metadata` section with required plan fields from `docs/exec-plans/README.md`.
 - `Status` set to one of: `queued`, `in-progress`, `blocked`, `validation`, `completed`, `failed`.
 - Explicit acceptance criteria before implementation begins.
+- `## Must-Land Checklist` with the exact completion contract for the current plan.
+- Scope separation via `## Already-True Baseline` and `## Deferred Follow-Ons` when the plan references broader target state.
 
 ## Session Retention
 

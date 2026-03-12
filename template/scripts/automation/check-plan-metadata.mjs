@@ -27,6 +27,9 @@ const directories = {
 
 const findings = [];
 const autoHeals = [];
+const MUST_LAND_SECTION = 'Must-Land Checklist';
+const DEFERRED_SECTION = 'Deferred Follow-Ons';
+const BASELINE_SECTION = 'Already-True Baseline';
 
 function addFinding(code, message, filePath) {
   findings.push({ code, message, filePath });
@@ -70,6 +73,45 @@ function normalizePlanId(value) {
     return null;
   }
   return PLAN_ID_REGEX.test(rendered) ? rendered : null;
+}
+
+function sectionBounds(content, sectionTitle) {
+  const regex = new RegExp(`^##\\s+${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm');
+  const match = regex.exec(content);
+  if (!match || match.index == null) {
+    return null;
+  }
+
+  const start = match.index;
+  const bodyStart = start + match[0].length;
+  const remainder = content.slice(bodyStart);
+  const nextSectionMatch = /^##\s+/m.exec(remainder);
+  const end = nextSectionMatch && nextSectionMatch.index != null
+    ? bodyStart + nextSectionMatch.index
+    : content.length;
+  return { start, bodyStart, end };
+}
+
+function sectionBody(content, sectionTitle) {
+  const bounds = sectionBounds(content, sectionTitle);
+  if (!bounds) {
+    return '';
+  }
+  return content.slice(bounds.bodyStart, bounds.end).trim();
+}
+
+function checkboxLines(sectionContent) {
+  if (!sectionContent) {
+    return [];
+  }
+  return sectionContent
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^-\s+\[[ xX]\]\s+/.test(line));
+}
+
+function uncheckedCheckboxLines(lines) {
+  return lines.filter((line) => /^-\s+\[\s\]\s+/.test(line));
 }
 
 function candidatePlanScopeIds(plan, targetPlanId) {
@@ -172,6 +214,35 @@ async function scanPhase(phase, directoryPath) {
       addFinding('MISSING_METADATA_SECTION', "Missing '## Metadata' section", rel);
     }
 
+    const mustLandBody = sectionBody(content, MUST_LAND_SECTION);
+    const mustLandItems = checkboxLines(mustLandBody);
+    const incompleteMustLandItems = uncheckedCheckboxLines(mustLandItems);
+
+    const mustLandRequired = phase === 'future' || phase === 'active';
+
+    if (!mustLandBody && mustLandRequired) {
+      addFinding(
+        'MISSING_MUST_LAND_SECTION',
+        `Missing '## ${MUST_LAND_SECTION}' section`,
+        rel
+      );
+    } else if (mustLandBody && mustLandItems.length === 0) {
+      addFinding(
+        'EMPTY_MUST_LAND_CHECKLIST',
+        `'## ${MUST_LAND_SECTION}' must contain markdown checkbox items`,
+        rel
+      );
+    }
+
+    const acceptanceCriteria = metadataValue(metadata, 'Acceptance-Criteria') ?? '';
+    if ((phase === 'future' || phase === 'active') && /\bat minimum\b/i.test(acceptanceCriteria)) {
+      addFinding(
+        'AMBIGUOUS_ACCEPTANCE_CRITERIA',
+        "Acceptance-Criteria must not use 'at minimum'. Move concrete deliverables into '## Must-Land Checklist' and rewrite the metadata to describe full completion.",
+        rel
+      );
+    }
+
     const riskTierRaw = metadataValue(metadata, 'Risk-Tier');
     if (riskTierRaw && !RISK_TIERS.has(riskTierRaw.trim().toLowerCase())) {
       addFinding(
@@ -191,6 +262,13 @@ async function scanPhase(phase, directoryPath) {
     }
 
     if (phase === 'completed') {
+      if (mustLandBody && incompleteMustLandItems.length > 0) {
+        addFinding(
+          'INCOMPLETE_MUST_LAND_CHECKLIST',
+          `Completed plan still has unchecked items in '## ${MUST_LAND_SECTION}'`,
+          rel
+        );
+      }
       if (!/^##\s+Closure\b/m.test(content)) {
         addFinding('MISSING_CLOSURE_SECTION', "Completed plan is missing '## Closure' section", rel);
       }
@@ -228,6 +306,32 @@ async function scanPhase(phase, directoryPath) {
           rel
         );
       }
+    }
+
+    if (phase === 'active' && (status === 'validation' || status === 'completed') && incompleteMustLandItems.length > 0) {
+      addFinding(
+        'VALIDATION_WITH_OPEN_MUST_LAND',
+        `Active plan with Status '${status}' still has unchecked items in '## ${MUST_LAND_SECTION}'`,
+        rel
+      );
+    }
+
+    if (phase === 'future' && status === 'ready-for-promotion' && incompleteMustLandItems.length === 0) {
+      addFinding(
+        'READY_FUTURE_WITHOUT_OPEN_MUST_LAND',
+        `Future blueprint set to 'ready-for-promotion' must keep executable work in '## ${MUST_LAND_SECTION}'`,
+        rel
+      );
+    }
+
+    const mentionsFutureState = /target state|future state|later phase|later phases|logical target|eventual/i.test(content);
+    const hasScopeSeparation = content.includes(`## ${BASELINE_SECTION}`) || content.includes(`## ${DEFERRED_SECTION}`);
+    if ((phase === 'future' || phase === 'active') && mentionsFutureState && !hasScopeSeparation) {
+      addFinding(
+        'MISSING_SCOPE_SEPARATION',
+        `Plan references broader future state but does not separate baseline/deferred scope. Add '## ${BASELINE_SECTION}' and/or '## ${DEFERRED_SECTION}' so executable scope stays auditable.`,
+        rel
+      );
     }
 
     if (rawPlanId && !parsedPlanId) {

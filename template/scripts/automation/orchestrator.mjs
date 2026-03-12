@@ -118,6 +118,7 @@ let prettyLiveDotIndex = 0;
 let liveStatusLineLength = 0;
 const DEFAULT_EVIDENCE_MAX_REFERENCES = 25;
 const DEFAULT_EVIDENCE_TRACK_MODE = 'curated';
+const MUST_LAND_SECTION = 'Must-Land Checklist';
 const DEFAULT_EVIDENCE_DEDUP_MODE = 'strict-upsert';
 const DEFAULT_EVIDENCE_PRUNE_ON_COMPLETE = true;
 const DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER = 1;
@@ -4752,6 +4753,22 @@ function nextStepChecklistLines(content) {
     .filter((line) => /^\d+\.\s+/.test(line) || line.startsWith('- '));
 }
 
+function mustLandChecklistLines(content) {
+  const body = sectionBody(content, MUST_LAND_SECTION);
+  if (!body) {
+    return [];
+  }
+
+  return body
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^-\s+\[[ xX]\]\s+/.test(line));
+}
+
+function mustLandChecklistHasOpenItems(content) {
+  return mustLandChecklistLines(content).some((line) => /^-\s+\[\s\]\s+/.test(line));
+}
+
 function nextStepChecklistIsHostValidationOnly(lines) {
   if (!Array.isArray(lines) || lines.length === 0) {
     return false;
@@ -4868,6 +4885,23 @@ async function evaluateCompletionGate(plan, rootDir) {
   const validationReady = documentValidationReadyValue(content);
 
   if (completionGateReadyForValidation(documentStatus, validationReady)) {
+    const mustLandLines = mustLandChecklistLines(content);
+    if (mustLandLines.length === 0) {
+      return {
+        ready: false,
+        reason:
+          "Plan is missing executable scope. Add '## Must-Land Checklist' with markdown checkbox items before validation/completion."
+      };
+    }
+
+    if (mustLandChecklistHasOpenItems(content)) {
+      return {
+        ready: false,
+        reason:
+          "Plan still has unchecked items in '## Must-Land Checklist'. Keep the plan in-progress until every must-land deliverable is complete."
+      };
+    }
+
     if (requiresImplementationTouch(plan)) {
       const implementationTouches = dirtyImplementationTouchPaths(rootDir, plan);
       if (implementationTouches.length === 0) {

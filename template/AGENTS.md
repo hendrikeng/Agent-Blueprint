@@ -22,6 +22,7 @@ If instructions conflict, this file is the behavioral priority entrypoint.
 - If the session is switched to plan mode, treat it as planning-only unless the user explicitly asks to implement.
 - If a user asks for planning-only work (for example: "plan", "outline", "prepare for promotion", "no implementation yet"), do not modify source or test files.
 - For planning-only requests, work in `docs/future/`, keep metadata complete, and set `Status: ready-for-promotion` when the plan is decision-complete.
+- Planning outputs must separate `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` so executable scope is explicit before promotion.
 - Start implementation only when the user explicitly asks to implement or promote/execute the plan.
 
 ## Core Map

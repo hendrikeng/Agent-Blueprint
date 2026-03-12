@@ -54,6 +54,7 @@ Start with the lowest-overhead path first:
 3. Run `npm run verify:fast` while iterating.
 4. Run `npm run verify:full` before completion/merge.
 5. Move plan to `docs/exec-plans/completed/` with canonical `Done-Evidence`.
+6. Keep executable scope explicit with `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons`.
 
 Reference: `docs/ops/automation/LITE_QUICKSTART.md`.
 

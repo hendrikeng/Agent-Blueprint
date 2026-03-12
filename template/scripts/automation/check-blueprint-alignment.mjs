@@ -114,6 +114,13 @@ function ensureScriptSignatures(orchestratorRaw, wrapperRaw) {
       'scripts/automation/executor-wrapper.mjs'
     );
   }
+  if (!wrapperRaw.includes('Must-Land Checklist')) {
+    addFinding(
+      'MISSING_MUST_LAND_PROMPT_POLICY',
+      "scripts/automation/executor-wrapper.mjs must instruct executors to honor '## Must-Land Checklist' as the completion contract.",
+      'scripts/automation/executor-wrapper.mjs'
+    );
+  }
 }
 
 function gatherPipelineRoles(config) {
@@ -185,6 +192,13 @@ function ensureConfigPolicy(config, configPath) {
     addFinding(
       'MISSING_CONTACT_PACK_PROMPT_PLACEHOLDER',
       "executor.promptTemplate must include '{contact_pack_file}'.",
+      rel(configPath)
+    );
+  }
+  if (!promptTemplate.includes('Must-Land Checklist')) {
+    addFinding(
+      'MISSING_MUST_LAND_PROMPT_TEMPLATE',
+      "executor.promptTemplate must mention '## Must-Land Checklist' completion policy.",
       rel(configPath)
     );
   }

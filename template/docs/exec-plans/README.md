@@ -32,6 +32,12 @@ Optional fields:
 - `Tags` (comma-separated routing hints such as `payments`, `security`, `migration`)
 - `Security-Approval` (`not-required` | `pending` | `approved`)
 
+Every executable plan must also include:
+
+- `## Must-Land Checklist`: markdown checkboxes for the exact deliverables this plan must land before validation/completion.
+- `## Already-True Baseline`: facts that are already true before the plan starts.
+- `## Deferred Follow-Ons`: broader target state or later-phase items that are intentionally not part of this plan's completion gate.
+
 ## Status Conventions
 
 - Active plan statuses: `queued`, `in-progress`, `blocked`, `validation`, `completed`, `failed`.
@@ -45,3 +51,5 @@ Optional fields:
 4. Move completed plans to `completed/` with closure notes and validation evidence.
 5. Point `Done-Evidence` to canonical references under `evidence-index/`.
 6. Keep tech debt references current.
+
+Do not use weak acceptance wording such as `at minimum`. If a plan needs staged delivery, keep the current plan's concrete work in `## Must-Land Checklist` and move everything else into `## Deferred Follow-Ons`.

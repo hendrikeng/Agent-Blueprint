@@ -87,6 +87,8 @@ Recommended baseline:
 ## Operational Notes
 
 - Completion gate opens when the top-level plan `Status` is `completed`, or when `Status: validation` is paired with explicit `Validation-Ready`.
+- `## Must-Land Checklist` is the executable completion contract; validation/completion is blocked until every checkbox item is checked.
+- If a plan also carries broader vision or target-state language, keep that scope in `## Already-True Baseline` and `## Deferred Follow-Ons` instead of treating it as implicitly complete.
 - `Status: validation` is only admission-ready when `Validation-Ready` is explicit (`yes` or `host-required-only`); status alone is not enough for validation fast-path.
 - Plans already in `Status: validation` skip planner/explorer/worker/reviewer sessions and run validation lanes directly on `resume` only when `Validation-Ready` is explicit.
 - Optional metadata `Validation-Ready: host-required-only` (or `yes`) enables deterministic reviewer closeout promotion to validation.

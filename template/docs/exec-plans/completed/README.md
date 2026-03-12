@@ -10,5 +10,6 @@ Move completed plans here with closure notes and validation evidence.
 Each completed plan must include:
 
 - `## Metadata` with `Status: completed`.
+- `## Must-Land Checklist` with every checkbox item checked.
 - `## Validation Evidence` section.
 - `## Closure` section with completion timestamp and run/commit evidence.

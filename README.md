@@ -88,11 +88,13 @@ Start with `Lite` by default, then scale up only when risk or workload demands i
 - Evidence-first delivery:
   - Non-trivial work leaves clear metadata, validation traces, and done-evidence references.
   - Team members can inspect progress, decisions, and status directly in-repo.
+  - Plans separate current facts, executable scope, and deferred target state so completion cannot silently collapse into partial delivery.
 
 ## Daily Workflow
 
 1. Start in plan mode and lock decisions: app scope, stack/runtime/tooling, invariants, and first acceptance slices.
 2. Define futures and active plans: strategic work goes through `future -> active -> completed`; quick/manual work can run `active -> completed`.
+   Every non-trivial plan should separate `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons`.
 3. Execute and close: run manual or orchestrated loops, use `verify:fast` during implementation, run `verify:full` before completion/merge, and keep docs plus `Done-Evidence` current.
 
 ## Why This Model Works
