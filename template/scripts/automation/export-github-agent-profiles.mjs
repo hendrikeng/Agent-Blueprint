@@ -74,9 +74,18 @@ function normalizeRoleProfiles(config) {
     if (!profile || typeof profile !== 'object') {
       continue;
     }
+    const reasoningEffortByRisk =
+      profile.reasoningEffortByRisk && typeof profile.reasoningEffortByRisk === 'object'
+        ? Object.fromEntries(
+            Object.entries(profile.reasoningEffortByRisk)
+              .map(([riskTier, effort]) => [String(riskTier).trim(), String(effort).trim()])
+              .filter(([, effort]) => effort.length > 0)
+          )
+        : {};
     result[role] = {
       model: String(profile.model ?? '').trim(),
       reasoningEffort: String(profile.reasoningEffort ?? '').trim(),
+      reasoningEffortByRisk,
       sandboxMode: String(profile.sandboxMode ?? '').trim(),
       instructions: String(profile.instructions ?? '').trim()
     };
@@ -155,6 +164,12 @@ function renderRoleAgentMarkdown(role, profile, pipelines, mandatoryRules, canon
   lines.push('## Role Contract');
   lines.push(`- Role: \`${role}\``);
   lines.push(`- Reasoning effort: \`${profile.reasoningEffort || 'high'}\``);
+  if (profile.reasoningEffortByRisk && Object.keys(profile.reasoningEffortByRisk).length > 0) {
+    const overrides = Object.entries(profile.reasoningEffortByRisk)
+      .map(([riskTier, effort]) => `${riskTier}=${effort}`)
+      .join(', ');
+    lines.push(`- Reasoning overrides: \`${overrides}\``);
+  }
   lines.push(`- Sandbox mode: \`${profile.sandboxMode || 'read-only'}\``);
   if (profile.instructions) {
     lines.push(`- Intent: ${profile.instructions}`);

@@ -123,14 +123,15 @@ Use the manual path when any of these are true:
   - `"parallel.pullRequest.mergeCommand"` can enqueue or merge generated PRs after creation (for merge queues).
   - `pullRequest.createCommand` token support: `{plan_id}`, `{branch}`, `{base_ref}`, `{git_remote}`, `{run_id}`, `{head_sha}`, `{worktree}`.
   - `executor.promptTemplate` is provider-agnostic and reused across Codex and Claude Code adapters.
+  - Keep the static instruction prefix at the start of `executor.promptTemplate` so repeated sessions get better prompt-cache reuse; push plan-specific identifiers later in the prompt.
 - Role orchestration:
   - `roleOrchestration.enabled: true` enables risk-adaptive role routing.
-  - `roleOrchestration.roleProfiles` defines per-role execution profiles (`model`, `reasoningEffort`, `sandboxMode`, `instructions`).
+  - `roleOrchestration.roleProfiles` defines per-role execution profiles (`model`, `reasoningEffort`, optional `reasoningEffortByRisk`, `sandboxMode`, `instructions`).
   - Default profile policy:
-    - `explorer`: fast model (`gpt-5.3-codex-spark`), `medium`, `read-only`
-    - `reviewer`: high reasoning, `read-only`
-    - `planner`: high reasoning, `read-only`
-    - `worker`: high reasoning, `full-access`
+  - `explorer`: fast model (`gpt-5.3-codex-spark`), `medium`, `read-only`
+  - `reviewer`: high reasoning, `read-only`
+  - `planner`: medium reasoning by default with high-risk override support, `read-only`
+  - `worker`: high reasoning, `full-access`
   - `roleOrchestration.pipelines.low` defaults to `worker`.
   - `roleOrchestration.pipelines.medium` defaults to `planner -> worker -> reviewer`.
   - `roleOrchestration.pipelines.high` defaults to `planner -> explorer -> worker -> reviewer`.
@@ -321,6 +322,7 @@ Executor commands should use these outcomes:
 - Planner/explorer/reviewer sessions are restricted to execution plan/evidence docs (`docs/exec-plans/**`); touching other paths fails fast as a policy violation.
 - Worker `pending` without touched files auto-retries first (bounded by `--worker-no-touch-retry-limit`, with retry timeout controlled by `--worker-retry-first-touch-deadline-seconds`), then fails fast if still no-progress.
 - Worker same-role `pending` streaks fail fast when they exceed `--worker-pending-streak-limit`, forcing narrower implementation slices instead of long in-run loops.
+- Read-only same-role `pending` returns fail fast after a bounded streak so plan-doc churn cannot keep planner/explorer/reviewer sessions alive.
 - Repeated identical `pending` signals for the same role fail fast in-run so orchestration does not spin on no-progress loops.
 - `blocked` / `failed` / `pending` outcomes print concrete `next steps` guidance with a ready-to-run `automation:resume` command.
 - `blocked` remains reserved for external/manual gates; `failed` remains a validation/execution failure signal.

@@ -242,11 +242,19 @@ function eventContainsAtomicDeadlockText(event) {
 }
 
 function eventContainsSessionBudgetExhaustionText(event) {
-  const haystack = `${event?.type ?? ''} ${JSON.stringify(event?.details ?? {})}`.toLowerCase();
+  const eventType = String(event?.type ?? '').trim().toLowerCase();
+  const haystack = `${eventType} ${JSON.stringify(event?.details ?? {})}`.toLowerCase();
   return (
+    eventType === 'session_stage_budget_exceeded' ||
+    eventType === 'session_pending_streak_fail_fast' ||
+    eventType === 'session_pending_fail_fast' ||
     haystack.includes('maximum sessions reached without completion') ||
     haystack.includes('worker pending streak exceeded') ||
     haystack.includes('repeated pending signal without progress') ||
+    haystack.includes('exceeded stage budget') ||
+    haystack.includes('without touching source/tests files') ||
+    haystack.includes('same-role pending too many times') ||
+    haystack.includes('without resolving the role-scoped objective') ||
     haystack.includes('narrow to one implementation slice and resume')
   );
 }

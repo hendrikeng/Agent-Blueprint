@@ -52,6 +52,7 @@ const DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS = 180;
 const DEFAULT_WORKER_RETRY_FIRST_TOUCH_DEADLINE_SECONDS = DEFAULT_WORKER_FIRST_TOUCH_DEADLINE_SECONDS;
 const DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT = 1;
 const DEFAULT_WORKER_PENDING_STREAK_LIMIT = 4;
+const DEFAULT_READ_ONLY_PENDING_STREAK_LIMIT = 1;
 const DEFAULT_WORKER_STALL_FAIL_SECONDS = 900;
 const DEFAULT_LIVE_ACTIVITY_MODE = 'best-effort';
 const DEFAULT_LIVE_ACTIVITY_MAX_CHARS = 0;
@@ -146,6 +147,7 @@ const ROLE_EXPLORER = 'explorer';
 const ROLE_WORKER = 'worker';
 const ROLE_REVIEWER = 'reviewer';
 const ROLE_NAMES = new Set([ROLE_PLANNER, ROLE_EXPLORER, ROLE_WORKER, ROLE_REVIEWER]);
+const REASONING_EFFORT_VALUES = new Set(['low', 'medium', 'high', 'xhigh']);
 const SECURITY_APPROVAL_NOT_REQUIRED = 'not-required';
 const SECURITY_APPROVAL_PENDING = 'pending';
 const SECURITY_APPROVAL_APPROVED = 'approved';
@@ -1047,19 +1049,53 @@ function normalizeRoleProfile(profile = {}, defaults = {}) {
     ...defaults,
     ...(profile && typeof profile === 'object' ? profile : {})
   };
+  const reasoningEffortByRisk = {
+    ...normalizeReasoningEffortByRisk(defaults?.reasoningEffortByRisk),
+    ...normalizeReasoningEffortByRisk(profile?.reasoningEffortByRisk)
+  };
   return {
     model: String(merged.model ?? '').trim(),
-    reasoningEffort: String(merged.reasoningEffort ?? 'medium').trim().toLowerCase(),
+    reasoningEffort: normalizeReasoningEffort(merged.reasoningEffort, 'medium'),
+    reasoningEffortByRisk,
     sandboxMode: String(merged.sandboxMode ?? 'read-only').trim().toLowerCase(),
     instructions: String(merged.instructions ?? '').trim()
   };
+}
+
+function normalizeReasoningEffort(value, fallback = 'medium') {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (REASONING_EFFORT_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function normalizeReasoningEffortByRisk(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalized = {};
+  for (const riskTier of Object.keys(RISK_TIER_ORDER)) {
+    const effort = normalizeReasoningEffort(source[riskTier], '');
+    if (effort) {
+      normalized[riskTier] = effort;
+    }
+  }
+  return normalized;
+}
+
+function resolveReasoningEffortForRisk(profile, riskTier, fallback = 'medium') {
+  const normalizedRiskTier = parseRiskTier(riskTier, 'low');
+  const override = normalizeReasoningEffort(profile?.reasoningEffortByRisk?.[normalizedRiskTier], '');
+  if (override) {
+    return override;
+  }
+  return normalizeReasoningEffort(profile?.reasoningEffort, fallback);
 }
 
 function resolveExecutorProvider(config) {
   return String(process.env.ORCH_EXECUTOR_PROVIDER ?? config?.executor?.provider ?? 'codex').trim().toLowerCase();
 }
 
-function resolveRoleExecutionProfile(config, role) {
+function resolveRoleExecutionProfile(config, role, riskTier = 'low') {
   const normalizedRole = normalizeRoleName(role, ROLE_WORKER);
   const provider = resolveExecutorProvider(config);
   const roleProfiles = config?.roleOrchestration?.roleProfiles ?? {};
@@ -1067,12 +1103,19 @@ function resolveRoleExecutionProfile(config, role) {
   const baseProfile = normalizeRoleProfile(roleProfiles[normalizedRole], {
     model: '',
     reasoningEffort: normalizedRole === ROLE_EXPLORER ? 'medium' : 'high',
+    reasoningEffortByRisk: {},
     sandboxMode: normalizedRole === ROLE_WORKER ? 'full-access' : 'read-only',
     instructions: ''
   });
+  const resolvedProfile = normalizeRoleProfile(providerRoleProfiles[normalizedRole], baseProfile);
   return {
     provider,
-    ...normalizeRoleProfile(providerRoleProfiles[normalizedRole], baseProfile)
+    ...resolvedProfile,
+    reasoningEffort: resolveReasoningEffortForRisk(
+      resolvedProfile,
+      riskTier,
+      normalizedRole === ROLE_EXPLORER ? 'medium' : 'high'
+    )
   };
 }
 
@@ -1331,8 +1374,19 @@ function hasMeaningfulWorkerTouchSummary(summary) {
   return categories.some((entry) => {
     const category = String(entry?.category ?? '').trim().toLowerCase();
     const count = Number(entry?.count ?? 0);
-    return (category === 'source' || category === 'tests') && Number.isFinite(count) && count > 0;
+    return isMeaningfulWorkerTouchCategory(category) && Number.isFinite(count) && count > 0;
   });
+}
+
+function isMeaningfulWorkerTouchCategory(category) {
+  const normalized = String(category ?? '').trim().toLowerCase();
+  return (
+    normalized === 'source' ||
+    normalized === 'tests' ||
+    normalized === 'scripts' ||
+    normalized === 'configs' ||
+    normalized === 'lockfiles'
+  );
 }
 
 function roleActivity(role) {
@@ -1447,6 +1501,55 @@ function classifyTouchedPath(filePath) {
     return 'lockfiles';
   }
   if (
+    baseName === 'package.json' ||
+    baseName === 'tsconfig.json' ||
+    baseName === 'tsconfig.base.json' ||
+    baseName === 'turbo.json' ||
+    baseName === 'components.json' ||
+    baseName === 'biome.json' ||
+    baseName === 'biome.jsonc' ||
+    baseName === 'eslint.config.js' ||
+    baseName === 'eslint.config.mjs' ||
+    baseName === 'eslint.config.cjs' ||
+    baseName === 'eslint.config.ts' ||
+    baseName === 'vitest.config.js' ||
+    baseName === 'vitest.config.mjs' ||
+    baseName === 'vitest.config.cjs' ||
+    baseName === 'vitest.config.ts' ||
+    baseName === 'jest.config.js' ||
+    baseName === 'jest.config.mjs' ||
+    baseName === 'jest.config.cjs' ||
+    baseName === 'jest.config.ts' ||
+    baseName === 'playwright.config.js' ||
+    baseName === 'playwright.config.mjs' ||
+    baseName === 'playwright.config.cjs' ||
+    baseName === 'playwright.config.ts' ||
+    baseName === 'vite.config.js' ||
+    baseName === 'vite.config.mjs' ||
+    baseName === 'vite.config.cjs' ||
+    baseName === 'vite.config.ts' ||
+    baseName === 'next.config.js' ||
+    baseName === 'next.config.mjs' ||
+    baseName === 'next.config.cjs' ||
+    baseName === 'next.config.ts' ||
+    baseName === 'tailwind.config.js' ||
+    baseName === 'tailwind.config.mjs' ||
+    baseName === 'tailwind.config.cjs' ||
+    baseName === 'tailwind.config.ts' ||
+    baseName === 'pnpm-workspace.yaml' ||
+    baseName === 'pnpm-workspace.yml' ||
+    baseName.startsWith('.eslintrc') ||
+    baseName.startsWith('.prettierrc')
+  ) {
+    return 'configs';
+  }
+  if (
+    value.startsWith('config/') ||
+    value.startsWith('configs/') ||
+    value.startsWith('db/') ||
+    value.startsWith('migrations/') ||
+    value.startsWith('prisma/') ||
+    value.startsWith('sql/') ||
     value.startsWith('apps/') ||
     value.startsWith('libs/') ||
     value.startsWith('packages/') ||
@@ -2120,7 +2223,10 @@ async function loadConfig(paths) {
         },
         planner: {
           model: 'gpt-5.4',
-          reasoningEffort: 'high',
+          reasoningEffort: 'medium',
+          reasoningEffortByRisk: {
+            high: 'high'
+          },
           sandboxMode: 'read-only',
           instructions:
             'You are an architect agent. Break down tasks into implementation steps, identify dependencies/risks, and output a structured execution plan. Update plan/evidence docs with concrete next-step checklists, and avoid modifying product/source code.'
@@ -3067,6 +3173,16 @@ function pendingReasonSuggestsImplementationHandoff(reason) {
   return (
     text.includes('implementation') ||
     text.includes('worker') ||
+    text.includes('handoff') ||
+    text.includes('implementation-ready') ||
+    text.includes('implementation ready') ||
+    text.includes('ready for implementation') ||
+    text.includes('ready for worker') ||
+    text.includes('proceed to worker') ||
+    text.includes('apply code changes') ||
+    text.includes('apply source changes') ||
+    text.includes('code edit') ||
+    text.includes('code change') ||
     text.includes('read-only') ||
     text.includes('read only') ||
     text.includes('cannot apply plan doc edits')
@@ -4002,7 +4118,7 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
   assertValidPlanId(plan.planId, plan.rel);
   assertSafeRelativePlanPath(plan.rel);
   const role = normalizeRoleName(sessionContext.role, ROLE_WORKER);
-  const roleProfile = resolveRoleExecutionProfile(config, role);
+  const roleProfile = resolveRoleExecutionProfile(config, role, effectiveRiskTier);
   const effectiveRiskTier = parseRiskTier(sessionContext.effectiveRiskTier, 'low');
   const declaredRiskTier = parseRiskTier(sessionContext.declaredRiskTier, 'low');
   const stageIndex = asInteger(sessionContext.stageIndex, 1);
@@ -6777,6 +6893,7 @@ async function processPlan(plan, paths, state, options, config) {
   let lastPendingSignal = null;
   let workerNoTouchRetryCount = 0;
   let workerPendingStreak = 0;
+  let readOnlyPendingStreak = 0;
   let roleState = ensureRoleState(state, plan, lastAssessment, resolvePipelineStages(lastAssessment, config), config);
   await announceStageReuse(paths, state, plan, roleState, options);
 
@@ -6803,7 +6920,7 @@ async function processPlan(plan, paths, state, options, config) {
     const roleIndex = Math.min(roleState.currentIndex, Math.max(0, stageTotal - 1));
     const stageIndex = roleIndex + 1;
     const currentRole = normalizeRoleName(roleState.stages[roleIndex], ROLE_WORKER);
-    const currentRoleProfile = resolveRoleExecutionProfile(config, currentRole);
+    const currentRoleProfile = resolveRoleExecutionProfile(config, currentRole, lastAssessment.effectiveRiskTier);
     const completionGateBeforeSession = await evaluateCompletionGate(plan.filePath);
     if (completionGateBeforeSession.ready) {
       progressLog(
@@ -6977,8 +7094,8 @@ async function processPlan(plan, paths, state, options, config) {
     }
 
     if (sessionResult.status === 'blocked') {
-      await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
-      await logEvent(paths, state, 'session_blocked_deferred', {
+      await setPlanStatus(plan.filePath, 'blocked', options.dryRun);
+      await logEvent(paths, state, 'session_blocked', {
         planId: plan.planId,
         session,
         role: currentRole,
@@ -6989,7 +7106,7 @@ async function processPlan(plan, paths, state, options, config) {
       }, options.dryRun);
       progressLog(options, `session blocked for ${plan.planId}: ${sessionResult.reason ?? 'executor blocked'}`);
       return {
-        outcome: 'pending',
+        outcome: 'blocked',
         reason: sessionResult.reason ?? 'executor blocked',
         riskTier: lastAssessment.effectiveRiskTier
       };
@@ -7106,7 +7223,7 @@ async function processPlan(plan, paths, state, options, config) {
       const workerHasMeaningfulTouch = pendingTouchCategories.some((entry) => {
         const category = String(entry?.category ?? '').trim().toLowerCase();
         const count = Number(entry?.count ?? 0);
-        return (category === 'source' || category === 'tests') && Number.isFinite(count) && count > 0;
+        return isMeaningfulWorkerTouchCategory(category) && Number.isFinite(count) && count > 0;
       });
       const workerNeedsMeaningfulTouch =
         currentRole === ROLE_WORKER && nextRole === currentRole && !workerHasMeaningfulTouch;
@@ -7122,12 +7239,15 @@ async function processPlan(plan, paths, state, options, config) {
         currentRole !== ROLE_WORKER &&
         nextRole === currentRole &&
         stageBudgetSeconds > 0 &&
-        pendingTouchCount <= 0 &&
         sessionDurationSeconds > stageBudgetSeconds
       ) {
+        const progressSummary =
+          pendingTouchCount > 0
+            ? `Touched ${pendingTouchCount} plan/evidence file(s) but did not finish the ${currentRole} stage.`
+            : 'Returned pending without touching plan/evidence files.';
         const budgetReason =
           `Role '${currentRole}' exceeded stage budget (${Math.round(sessionDurationSeconds)}s > ${stageBudgetSeconds}s) ` +
-          `without meaningful progress. ${pendingReason}`;
+          `without resolving the role-scoped objective. ${progressSummary} ${pendingReason}`;
         await logEvent(paths, state, 'session_stage_budget_exceeded', {
           planId: plan.planId,
           session,
@@ -7177,6 +7297,7 @@ async function processPlan(plan, paths, state, options, config) {
         progressLog(options, `session retry ${plan.planId}: ${retryReason}`);
         lastPendingSignal = null;
         workerPendingStreak = 0;
+        readOnlyPendingStreak = 0;
         continue;
       }
       if (workerNeedsMeaningfulTouch) {
@@ -7213,6 +7334,11 @@ async function processPlan(plan, paths, state, options, config) {
       } else {
         workerPendingStreak = 0;
       }
+      if (currentRole !== ROLE_WORKER && nextRole === currentRole) {
+        readOnlyPendingStreak += 1;
+      } else {
+        readOnlyPendingStreak = 0;
+      }
       if (
         currentRole === ROLE_WORKER &&
         nextRole === currentRole &&
@@ -7230,6 +7356,32 @@ async function processPlan(plan, paths, state, options, config) {
           effectiveRiskTier: lastAssessment.effectiveRiskTier,
           pendingStreak: workerPendingStreak,
           pendingStreakLimit: workerPendingStreakLimit,
+          reason: failFastReason
+        }, options.dryRun);
+        progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
+        return {
+          outcome: 'pending',
+          reason: failFastReason,
+          riskTier: lastAssessment.effectiveRiskTier
+        };
+      }
+      if (
+        currentRole !== ROLE_WORKER &&
+        nextRole === currentRole &&
+        readOnlyPendingStreak > DEFAULT_READ_ONLY_PENDING_STREAK_LIMIT
+      ) {
+        const failFastReason =
+          `Read-only role '${currentRole}' returned same-role pending too many times ` +
+          `(${readOnlyPendingStreak}/${DEFAULT_READ_ONLY_PENDING_STREAK_LIMIT}) without handing off or completing. ` +
+          `${pendingReason} Mark the role stage completed, switch to implementation, or narrow the role scope before resuming.`;
+        await logEvent(paths, state, 'session_pending_fail_fast', {
+          planId: plan.planId,
+          session,
+          role: currentRole,
+          nextRole,
+          effectiveRiskTier: lastAssessment.effectiveRiskTier,
+          pendingStreak: readOnlyPendingStreak,
+          pendingStreakLimit: DEFAULT_READ_ONLY_PENDING_STREAK_LIMIT,
           reason: failFastReason
         }, options.dryRun);
         progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
@@ -7287,6 +7439,7 @@ async function processPlan(plan, paths, state, options, config) {
     lastPendingSignal = null;
     workerNoTouchRetryCount = 0;
     workerPendingStreak = 0;
+    readOnlyPendingStreak = 0;
 
     advanceRoleState(roleState, currentRole);
     state.roleState[plan.planId] = roleState;

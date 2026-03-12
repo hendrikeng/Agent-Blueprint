@@ -103,6 +103,28 @@ function normalizeRoleName(value, fallback = 'worker') {
   return ROLE_NAMES.has(normalized) ? normalized : fallback;
 }
 
+function normalizeReasoningEffort(value, fallback = 'n/a') {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'xhigh'].includes(normalized) ? normalized : fallback;
+}
+
+function resolveRoleReasoningEffort(roleProfile, roleContract, effectiveRiskTier) {
+  const normalizedRiskTier = parseRiskTier(effectiveRiskTier, 'low');
+  const effortByRisk =
+    roleProfile?.reasoningEffortByRisk && typeof roleProfile.reasoningEffortByRisk === 'object'
+      ? roleProfile.reasoningEffortByRisk
+      : {};
+  const riskOverride = normalizeReasoningEffort(effortByRisk[normalizedRiskTier], '');
+  if (riskOverride) {
+    return riskOverride;
+  }
+  const profileEffort = normalizeReasoningEffort(roleProfile?.reasoningEffort, '');
+  if (profileEffort) {
+    return profileEffort;
+  }
+  return normalizeReasoningEffort(roleContract?.reasoningEffort, 'n/a');
+}
+
 function unique(items) {
   return [...new Set(items.map((entry) => String(entry ?? '').trim()).filter(Boolean))];
 }
@@ -225,6 +247,7 @@ export async function compileTaskContactPack(input) {
 
   const roleContract = roleContracts?.[role] ?? {};
   const roleProfile = config?.roleOrchestration?.roleProfiles?.[role] ?? {};
+  const resolvedReasoningEffort = resolveRoleReasoningEffort(roleProfile, roleContract, effectiveRiskTier);
 
   const evidenceCandidates = [
     path.join(rootDir, 'docs', 'exec-plans', 'evidence-index', `${planId}.md`),
@@ -281,7 +304,7 @@ export async function compileTaskContactPack(input) {
   lines.push('## Role Contract');
   lines.push(`- intent: ${summarizeSentence(roleContract?.intent ?? 'No role intent configured.', 22)}`);
   lines.push(`- sandbox: ${String(roleContract?.sandboxMode ?? roleProfile?.sandboxMode ?? 'n/a').trim()}`);
-  lines.push(`- reasoning: ${String(roleContract?.reasoningEffort ?? roleProfile?.reasoningEffort ?? 'n/a').trim()}`);
+  lines.push(`- reasoning: ${resolvedReasoningEffort}`);
   lines.push(`- profile model: ${String(roleProfile?.model ?? 'n/a').trim() || 'n/a'}`);
   lines.push(`- role instructions: ${summarizeSentence(roleProfile?.instructions ?? 'No role instructions configured.', 24)}`);
   lines.push('');

@@ -34,6 +34,10 @@ async function readJson(relPath) {
   return JSON.parse(raw);
 }
 
+function containsTemplatePlaceholder(value) {
+  return /\{\{[^}]+\}\}/.test(String(value ?? ''));
+}
+
 function findBoundaryRule(eslintConfig) {
   for (const override of eslintConfig.overrides ?? []) {
     const rule = override?.rules?.['@nx/enforce-module-boundaries'];
@@ -181,27 +185,44 @@ function runRg(pattern, absDir, globs = ['*.ts', '*.tsx']) {
   return runRegexFallback(pattern, absDir, globs);
 }
 
-async function checkNxDependencyConstraints(check, violations) {
-  const eslintConfig = await readJson(check.eslintConfigPath ?? '.eslintrc.base.json');
+async function checkNxDependencyConstraints(check, violations, info) {
+  const eslintConfigPath = check.eslintConfigPath ?? '.eslintrc.base.json';
+  const unresolvedTemplateConfig =
+    containsTemplatePlaceholder(eslintConfigPath) ||
+    (check.requiredConstraints ?? []).some((constraint) => {
+      if (!constraint || typeof constraint !== 'object') {
+        return false;
+      }
+      return (
+        containsTemplatePlaceholder(constraint.sourceTag) ||
+        (constraint.allow ?? []).some((entry) => containsTemplatePlaceholder(entry))
+      );
+    });
+  if (unresolvedTemplateConfig) {
+    info.push('Skipped nx dependency constraints in template mode (unresolved placeholders).');
+    return;
+  }
+
+  const eslintConfig = await readJson(eslintConfigPath);
   const boundaryRule = findBoundaryRule(eslintConfig);
 
   if (!boundaryRule) {
     violations.push({
       code: 'ARCH_MISSING_NX_BOUNDARY_RULE',
-      message: `Could not find '@nx/enforce-module-boundaries' in ${check.eslintConfigPath ?? '.eslintrc.base.json'}`,
-      file: check.eslintConfigPath ?? '.eslintrc.base.json'
+      message: `Could not find '@nx/enforce-module-boundaries' in ${eslintConfigPath}`,
+      file: eslintConfigPath
     });
     return;
   }
 
   const depConstraints = boundaryRule.depConstraints;
   if (!Array.isArray(depConstraints) || depConstraints.length === 0) {
-    violations.push({
-      code: 'ARCH_EMPTY_NX_DEP_CONSTRAINTS',
-      message: 'No dependency constraints found for @nx/enforce-module-boundaries',
-      file: check.eslintConfigPath ?? '.eslintrc.base.json'
-    });
-    return;
+      violations.push({
+        code: 'ARCH_EMPTY_NX_DEP_CONSTRAINTS',
+        message: 'No dependency constraints found for @nx/enforce-module-boundaries',
+        file: eslintConfigPath
+      });
+      return;
   }
 
   const bySourceTag = new Map();
@@ -215,12 +236,12 @@ async function checkNxDependencyConstraints(check, violations) {
     const sourceTag = required.sourceTag;
     const allowed = bySourceTag.get(sourceTag);
     if (!allowed) {
-      violations.push({
-        code: 'ARCH_MISSING_REQUIRED_CONSTRAINT',
-        message: `Missing dep constraint for source tag '${sourceTag}'`,
-        file: check.eslintConfigPath ?? '.eslintrc.base.json'
-      });
-      continue;
+        violations.push({
+          code: 'ARCH_MISSING_REQUIRED_CONSTRAINT',
+          message: `Missing dep constraint for source tag '${sourceTag}'`,
+          file: eslintConfigPath
+        });
+        continue;
     }
 
     for (const targetTag of required.allow ?? []) {
@@ -228,14 +249,28 @@ async function checkNxDependencyConstraints(check, violations) {
         violations.push({
           code: 'ARCH_MISSING_ALLOWED_TAG',
           message: `Constraint '${sourceTag}' must allow '${targetTag}'`,
-          file: check.eslintConfigPath ?? '.eslintrc.base.json'
+          file: eslintConfigPath
         });
       }
     }
   }
 }
 
-async function checkRequiredProjectTags(check, violations) {
+async function checkRequiredProjectTags(check, violations, info) {
+  const unresolvedTemplateConfig = (check.projects ?? []).some((project) => {
+    if (!project || typeof project !== 'object') {
+      return false;
+    }
+    return (
+      containsTemplatePlaceholder(project.path) ||
+      (project.requiredTags ?? []).some((tag) => containsTemplatePlaceholder(tag))
+    );
+  });
+  if (unresolvedTemplateConfig) {
+    info.push('Skipped required project tag checks in template mode (unresolved placeholders).');
+    return;
+  }
+
   for (const project of check.projects ?? []) {
     const relPath = project.path;
     const absPath = path.join(rootDir, relPath);
@@ -594,12 +629,12 @@ try {
     }
 
     if (check.type === 'nx_dep_constraints') {
-      await checkNxDependencyConstraints(check, violations);
+      await checkNxDependencyConstraints(check, violations, info);
       continue;
     }
 
     if (check.type === 'required_project_tags') {
-      await checkRequiredProjectTags(check, violations);
+      await checkRequiredProjectTags(check, violations, info);
       continue;
     }
 

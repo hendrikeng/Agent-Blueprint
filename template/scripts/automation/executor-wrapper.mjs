@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const DEFAULT_PROMPT_TEMPLATE =
-  'Continue plan {plan_id} in {plan_file}. Current role: {role}. Declared risk tier: {declared_risk_tier}. Effective risk tier: {effective_risk_tier}. Execution profile: model={role_model}, reasoning={role_reasoning_effort}, sandbox={role_sandbox_mode}. Primary task contact pack: {contact_pack_file}. Primary runtime policy reference: {runtime_context_file}. Use the contact pack first and expand scope only when a blocker requires targeted evidence. Role instructions: {role_instructions}. Progress reporting requirement: when sending interim status updates, write complete words and full identifiers; do not shorten with ellipses. Keep interim status updates concise (1-2 short sentences) and plain text; avoid markdown headings, bullet lists, and file links in live updates. Focus edits on {plan_file}, {plan_evidence_file}, and {plan_evidence_index_file}; avoid scanning unrelated docs unless required for this role stage. Apply the next concrete step for this role. Update the plan document with progress and evidence. Keep plan/evidence updates concise and net-new only (avoid large pasted excerpts or repeated unchanged checklists). When session history becomes long, keep only recent session entries in active plan and evidence files (default 8 to 12), move older details to a linked archive file, and avoid duplicating long session narratives in both plan and evidence. If a milestone has explicit quantitative exit criteria and those criteria are satisfied, mark that milestone completed and proceed to the next milestone instead of requesting another same-milestone micro-session. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. Avoid redundant validation reruns: do not repeat the same verification command in consecutive sessions unless relevant files changed or the last run failed. Do not run host-bound validations directly in this executor session (infra/bootstrap, DB migrations, Playwright/E2E/browser tests); treat them as validation.hostRequired work and leave execution to the host-validation lane. ALWAYS write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and numeric contextRemaining. Use status pending (not blocked) only when the same role needs another session in this run after concrete progress. For worker role sessions, do not defer implementation to planner/explorer; if no external blocker exists, apply at least one concrete repository edit before returning pending. For planner/explorer/reviewer role stages, return status completed once role-scoped objectives are done, even when the overall plan stays in-progress for later roles. Planner/explorer must record concrete next implementation steps directly in plan/evidence docs before returning completed. Reserve blocked for external/manual gates orchestration cannot progress automatically. Never exit 0 without writing this payload. If contextRemaining is at/below ORCH_CONTEXT_THRESHOLD and another same-role session is required for concrete progress, return status handoff_required. For planner/explorer/reviewer roles, return status completed when role-scoped objectives are done even when contextRemaining is low. Do not wait for host-required validations to run inside this executor session. If implementation acceptance criteria are complete and the plan is ready for orchestration validation lanes, set top-level Status: validation (preferred) or Status: completed to trigger validation; when only host-required validations remain, set Validation-Ready: host-required-only; otherwise keep top-level Status: in-progress and list remaining concrete implementation/review work.';
+  'Use the task contact pack as the primary context for this session and expand scope only when a blocker requires targeted evidence. Apply the next concrete step for this role. Keep plan/evidence updates concise and net-new only; avoid large pasted excerpts, repeated unchanged checklists, and duplicate long session narratives. When session history grows, keep only the recent entries in the active plan/evidence files and archive older detail. If a milestone has explicit quantitative exit criteria and those criteria are satisfied, mark it complete and move forward instead of asking for another same-milestone micro-session. Reuse existing evidence files when blocker state is unchanged; update canonical evidence index/readme links instead of creating new timestamped evidence files. Avoid redundant validation reruns: do not repeat the same verification command in consecutive sessions unless relevant files changed or the last run failed. Do not run host-bound validations directly in this executor session (infra/bootstrap, DB migrations, Playwright/E2E/browser tests); leave them to the validation.hostRequired lane. ALWAYS write a structured JSON result to ORCH_RESULT_PATH with status (completed|blocked|handoff_required|pending), summary, reason, and numeric contextRemaining. Use status pending only when the same role needs another session in this run after concrete progress. Worker sessions must apply at least one concrete repository edit before returning pending unless an explicit external blocker exists. Planner/explorer/reviewer stages should return completed once role-scoped objectives are done, even when the overall plan remains in progress for later roles. Planner/explorer must record concrete next implementation steps before returning completed. Reserve blocked for external/manual gates orchestration cannot progress automatically. If contextRemaining is at or below ORCH_CONTEXT_THRESHOLD and another same-role session is still required for concrete progress, return status handoff_required. If implementation acceptance criteria are complete and the plan is ready for orchestration validation lanes, set top-level Status: validation (preferred) or Status: completed; when only host-required validations remain, set Validation-Ready: host-required-only. Progress reporting requirement: interim status updates must be concise plain text with complete words and full identifiers, without markdown headings, bullet lists, or file links. Session task: plan={plan_id} file={plan_file} role={role} stage={stage_index}/{stage_total} declared-risk={declared_risk_tier} effective-risk={effective_risk_tier}. Primary task contact pack: {contact_pack_file}. Primary runtime policy reference: {runtime_context_file}. Role contract: sandbox={role_sandbox_mode}, reasoning={role_reasoning_effort}. Role instructions: {role_instructions}. Focus edits on {plan_file}, {plan_evidence_file}, and {plan_evidence_index_file}; avoid scanning unrelated docs unless required for this role stage.';
 const DEFAULT_RUNTIME_CONTEXT_PATH = 'docs/generated/agent-runtime-context.md';
 
 function parseArgs(argv) {
@@ -110,16 +110,49 @@ function normalizeRoleProfile(profile = {}, defaults = {}) {
     ...defaults,
     ...(profile && typeof profile === 'object' ? profile : {})
   };
+  const reasoningEffortByRisk = {
+    ...normalizeReasoningEffortByRisk(defaults?.reasoningEffortByRisk),
+    ...normalizeReasoningEffortByRisk(profile?.reasoningEffortByRisk)
+  };
   const model = String(merged.model ?? '').trim();
-  const reasoningEffort = String(merged.reasoningEffort ?? 'medium').trim().toLowerCase();
+  const reasoningEffort = normalizeReasoningEffort(merged.reasoningEffort, 'medium');
   const sandboxMode = String(merged.sandboxMode ?? 'read-only').trim().toLowerCase();
   const instructions = String(merged.instructions ?? '').trim();
   return {
     model,
     reasoningEffort,
+    reasoningEffortByRisk,
     sandboxMode,
     instructions
   };
+}
+
+function normalizeReasoningEffort(value, fallback = 'medium') {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'xhigh'].includes(normalized) ? normalized : fallback;
+}
+
+function normalizeReasoningEffortByRisk(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  const normalized = {};
+  for (const riskTier of ['low', 'medium', 'high']) {
+    const effort = normalizeReasoningEffort(source[riskTier], '');
+    if (effort) {
+      normalized[riskTier] = effort;
+    }
+  }
+  return normalized;
+}
+
+function resolveReasoningEffortForRisk(profile, riskTier, fallback = 'medium') {
+  const normalizedRiskTier = ['low', 'medium', 'high'].includes(String(riskTier ?? '').trim().toLowerCase())
+    ? String(riskTier).trim().toLowerCase()
+    : 'low';
+  const override = normalizeReasoningEffort(profile?.reasoningEffortByRisk?.[normalizedRiskTier], '');
+  if (override) {
+    return override;
+  }
+  return normalizeReasoningEffort(profile?.reasoningEffort, fallback);
 }
 
 function assertRoleSandboxPolicy(role, roleProfile) {
@@ -190,10 +223,19 @@ async function main() {
   const roleProfile = normalizeRoleProfile(roleProfiles[role], {
     model: '',
     reasoningEffort: role === 'explorer' ? 'medium' : 'high',
+    reasoningEffortByRisk: {},
     sandboxMode: role === 'worker' ? 'full-access' : 'read-only',
     instructions: ''
   });
-  const providerRoleProfile = normalizeRoleProfile(providerRoleProfiles[role], roleProfile);
+  const providerRoleProfileBase = normalizeRoleProfile(providerRoleProfiles[role], roleProfile);
+  const providerRoleProfile = {
+    ...providerRoleProfileBase,
+    reasoningEffort: resolveReasoningEffortForRisk(
+      providerRoleProfileBase,
+      effectiveRiskTier,
+      role === 'explorer' ? 'medium' : 'high'
+    )
+  };
   assertRoleSandboxPolicy(role, providerRoleProfile);
   const providerCommandTemplate = String(executor.providers?.[provider]?.command ?? '').trim();
   const selectedCommandTemplate = roleProviderCommandTemplate || providerCommandTemplate;

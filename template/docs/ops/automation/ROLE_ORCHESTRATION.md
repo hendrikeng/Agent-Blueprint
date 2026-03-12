@@ -22,6 +22,7 @@ Each role has a portable execution profile configured in `roleOrchestration.role
 
 - `model`: preferred model for the role.
 - `reasoningEffort`: expected depth (`low|medium|high`).
+- `reasoningEffortByRisk`: optional per-risk override when one role should stay lighter for routine work but ramp up on high-risk plans.
 - `sandboxMode`: required tool/file access (`read-only` or `full-access`).
 - `instructions`: role-specific operating instructions appended to executor prompt context.
 - `read-only` role stages may still update the active plan/evidence docs, but must not modify product/source code.
@@ -30,7 +31,7 @@ Recommended baseline:
 
 - `explorer`: fast model (`gpt-5.3-codex-spark`), `medium`, `read-only`.
 - `reviewer`: `gpt-5.4`, `high`, `read-only`.
-- `planner`: `gpt-5.4`, `high`, `read-only`.
+- `planner`: `gpt-5.4`, `medium` by default with `high` override for high-risk plans, `read-only`.
 - `worker`: `gpt-5.4`, `high`, `full-access`.
 
 ## Risk Routing
@@ -94,6 +95,7 @@ Recommended baseline:
 - Planner/explorer `pending` entries that clearly indicate implementation handoff (read-only or implementation-incomplete reasons) are auto-advanced to the next stage.
 - Repeated identical `pending` signals for the same role fail fast to prevent no-progress loops.
 - Worker `pending` sessions with no touched files are auto-retried (bounded by `logging.workerNoTouchRetryLimit`, retry timeout controlled by `logging.workerRetryFirstTouchDeadlineSeconds`) before fail-fast pending.
-- Planner/explorer/reviewer `pending` sessions with no touched files fail fast when the role stage budget is exceeded.
+- Planner/explorer/reviewer same-role `pending` sessions fail fast when the role stage budget is exceeded, even if they only touched plan/evidence docs.
+- Read-only roles fail fast after repeated same-role `pending` returns so wording drift cannot keep them in doc-only churn loops.
 - Worker/reviewer sessions should not run host-bound validation commands (infra/bootstrap, DB migrations, Playwright/E2E); those are executed by the host-validation lane from `validation.hostRequired`.
 - Risk and stage decisions are recorded in `run-events.jsonl`.

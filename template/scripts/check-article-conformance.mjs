@@ -10,6 +10,10 @@ const fail = (message) => {
   process.exit(1);
 };
 
+function containsTemplatePlaceholder(value) {
+  return /\{\{[^}]+\}\}/.test(String(value ?? ''));
+}
+
 function isWithinRoot(absPath) {
   const relative = path.relative(rootDir, absPath);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -31,6 +35,23 @@ if (typeof parsed !== 'object' || parsed === null) {
 }
 
 const { generatedAtUtc, source, repositoryProfile, purpose, outOfScope, coreCapabilities } = parsed;
+
+const unresolvedTemplatePlaceholders =
+  containsTemplatePlaceholder(generatedAtUtc) ||
+  containsTemplatePlaceholder(source) ||
+  containsTemplatePlaceholder(repositoryProfile) ||
+  containsTemplatePlaceholder(purpose) ||
+  (Array.isArray(outOfScope) && outOfScope.some((item) => containsTemplatePlaceholder(item))) ||
+  (Array.isArray(coreCapabilities) &&
+    coreCapabilities.some((capability) =>
+      containsTemplatePlaceholder(capability?.id) ||
+      (Array.isArray(capability?.evidence) && capability.evidence.some((entry) => containsTemplatePlaceholder(entry)))
+    ));
+
+if (unresolvedTemplatePlaceholders) {
+  console.log('[conformance-verify] skipped in template mode (unresolved article conformance placeholders).');
+  process.exit(0);
+}
 
 if (typeof generatedAtUtc !== 'string' || generatedAtUtc.length < 20 || Number.isNaN(Date.parse(generatedAtUtc))) {
   fail("'generatedAtUtc' must be an ISO datetime string.");

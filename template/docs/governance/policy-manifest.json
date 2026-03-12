@@ -35,7 +35,7 @@
   "roleContracts": {
     "planner": {
       "sandboxMode": "read-only",
-      "reasoningEffort": "high",
+      "reasoningEffort": "medium",
       "intent": "Break down implementation into decision-complete execution steps."
     },
     "explorer": {

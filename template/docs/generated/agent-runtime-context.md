@@ -1,6 +1,6 @@
 # Agent Runtime Context (Generated)
 
-Generated At: 2026-03-02T12:39:02.268Z
+Generated At: 2026-03-12T16:58:03.547Z
 Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/automation/orchestrator.config.json
 
 ## Mission
@@ -23,7 +23,7 @@ Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/autom
 - high: planner -> explorer -> worker -> reviewer
 
 ## Role Contracts
-- planner: sandbox=read-only, reasoning=high, intent=Break down implementation into decision-complete execution steps.
+- planner: sandbox=read-only, reasoning=medium, intent=Break down implementation into decision-complete execution steps.
 - explorer: sandbox=read-only, reasoning=medium, intent=Trace risky surfaces and dependencies before implementation.
 - worker: sandbox=full-access, reasoning=high, intent=Implement scoped changes and keep docs/evidence aligned.
 - reviewer: sandbox=read-only, reasoning=high, intent=Check correctness, security, race conditions, flaky tests, and regressions.
