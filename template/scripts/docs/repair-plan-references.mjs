@@ -11,7 +11,8 @@ import {
 
 const LINK_REGEX = /\[[^\]]*\]\(([^)]+)\)/g;
 const INLINE_CODE_REGEX = /`([^`]+)`/g;
-const PLAN_PATH_REGEX = /^docs\/exec-plans\/(?:active|completed)\/.+\.md$/;
+const DIRECT_PLAN_PATH_REGEX = /^docs\/exec-plans\/(?:active|completed)\/[^/]+\.md$/;
+const FUTURE_PLAN_PATH_REGEX = /^docs\/future\/[^/]+\.md$/;
 const RUNTIME_CONTACT_PATH_REGEX = /^docs\/ops\/automation\/runtime\/contacts\/run-[^/]+\/.+\.md$/;
 const RUNTIME_ARTIFACT_PATH_REGEX = /^docs\/ops\/automation\/runtime\/run-[^/]+\/.+$/;
 const RUNTIME_CONTACT_FALLBACK_PATH = 'docs/ops/automation/README.md';
@@ -142,15 +143,16 @@ async function walkMarkdownFiles(baseDir) {
   return results;
 }
 
-function inferPlanIdFromPlanPath(planPath) {
+function inferPlanIdFromReferencePath(planPath) {
   let base = path.posix.basename(planPath, '.md');
   base = base.replace(/^\d{4}-\d{2}-\d{2}-/, '');
   base = base.replace(/-\d{11,}$/, '');
+  base = base.replace(/^[^a-z0-9]+/i, '');
   return parsePlanId(base, null);
 }
 
 function classifyRepairableReference(normalizedRef) {
-  if (PLAN_PATH_REGEX.test(normalizedRef)) {
+  if (DIRECT_PLAN_PATH_REGEX.test(normalizedRef) || FUTURE_PLAN_PATH_REGEX.test(normalizedRef)) {
     return 'plan';
   }
   if (RUNTIME_CONTACT_PATH_REGEX.test(normalizedRef)) {
@@ -355,7 +357,7 @@ async function main() {
         }
 
         staleRefsFound += 1;
-        const planId = inferPlanIdFromPlanPath(ref.normalized);
+        const planId = inferPlanIdFromReferencePath(ref.normalized);
         targetRef = planId ? planById.get(planId) : null;
         if (!targetRef || targetRef === ref.normalized) {
           unresolvedRefs += 1;
