@@ -135,6 +135,13 @@ async function main() {
   const runIds = new Set();
   const planIds = new Set();
   const planStats = new Map();
+  let sessionFinishedCount = 0;
+  let continuityDerivedSessions = 0;
+  let contactPackSessions = 0;
+  let contactPackGeneratedSessions = 0;
+  let contactPackCacheHitSessions = 0;
+  const contactPackEvidenceCounts = [];
+  const contactPackCheckpointCounts = [];
 
   let totalLines = 0;
   let parsedEvents = 0;
@@ -249,10 +256,30 @@ async function main() {
         }
       }
       if (typeLower === 'session_finished') {
+        sessionFinishedCount += 1;
         const role = String(details.role ?? '').trim().toLowerCase();
         const durationSeconds = asNumber(details.durationSeconds);
         if (role && Array.isArray(stats.stageDurationsSeconds?.[role]) && durationSeconds != null && durationSeconds >= 0) {
           stats.stageDurationsSeconds[role].push(durationSeconds);
+        }
+        if (details.continuityDerived === true) {
+          continuityDerivedSessions += 1;
+        }
+        if (String(details.contactPackFile ?? '').trim()) {
+          contactPackSessions += 1;
+          if (details.contactPackGenerated === true) {
+            contactPackGeneratedSessions += 1;
+          } else {
+            contactPackCacheHitSessions += 1;
+          }
+        }
+        const contactPackEvidenceCount = asNumber(details.contactPackEvidenceCount);
+        if (contactPackEvidenceCount != null && contactPackEvidenceCount >= 0) {
+          contactPackEvidenceCounts.push(contactPackEvidenceCount);
+        }
+        const contactPackCheckpointCount = asNumber(details.contactPackCheckpointCount);
+        if (contactPackCheckpointCount != null && contactPackCheckpointCount >= 0) {
+          contactPackCheckpointCounts.push(contactPackCheckpointCount);
         }
 
         const touchCount = asNumber(details.touchCount);
@@ -404,6 +431,29 @@ async function main() {
       evidence: {
         curatedEvents: evidenceCurated,
         compactedEvents: evidenceCompacted
+      },
+      memory: {
+        sessions: sessionFinishedCount,
+        derivedContinuitySessions: continuityDerivedSessions,
+        derivedContinuityRate:
+          sessionFinishedCount > 0
+            ? round(continuityDerivedSessions / sessionFinishedCount, 4)
+            : null,
+        contactPacks: {
+          sessions: contactPackSessions,
+          generatedSessions: contactPackGeneratedSessions,
+          cacheHitSessions: contactPackCacheHitSessions,
+          evidenceRefs: {
+            sampleSize: contactPackEvidenceCounts.length,
+            mean: round(mean(contactPackEvidenceCounts)),
+            median: round(median(contactPackEvidenceCounts))
+          },
+          checkpointItems: {
+            sampleSize: contactPackCheckpointCounts.length,
+            mean: round(mean(contactPackCheckpointCounts)),
+            median: round(median(contactPackCheckpointCounts))
+          }
+        }
       },
       rework: {
         handoffOrRolloverEvents: handoffEvents,

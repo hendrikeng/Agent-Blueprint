@@ -8,6 +8,7 @@
     "mandatorySafetyRules",
     "roleContracts",
     "validationPolicy",
+    "memoryPosture",
     "docContract",
     "gitSafetyContract"
   ],
@@ -102,6 +103,55 @@
         "notes": {
           "type": "string",
           "minLength": 8
+        }
+      },
+      "additionalProperties": false
+    },
+    "memoryPosture": {
+      "type": "object",
+      "required": [
+        "whatToDo",
+        "improveBeforeRearchitecture",
+        "doNotAddYet",
+        "escalateWhen",
+        "safeRule"
+      ],
+      "properties": {
+        "whatToDo": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 8
+          }
+        },
+        "improveBeforeRearchitecture": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 8
+          }
+        },
+        "doNotAddYet": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 8
+          }
+        },
+        "escalateWhen": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 8
+          }
+        },
+        "safeRule": {
+          "type": "string",
+          "minLength": 16
         }
       },
       "additionalProperties": false

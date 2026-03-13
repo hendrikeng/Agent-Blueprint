@@ -71,7 +71,7 @@ function codexCommandIncludesRoleReasoning(command) {
   return value.includes('{role_reasoning_effort}');
 }
 
-function ensureScriptSignatures(orchestratorRaw, wrapperRaw) {
+function ensureScriptSignatures(orchestratorRaw, wrapperRaw, contextCompilerRaw, contactPackCompilerRaw) {
   if (!orchestratorRaw.includes("const DEFAULT_OUTPUT_MODE = 'pretty';")) {
     addFinding(
       'MISSING_PRETTY_DEFAULT',
@@ -135,6 +135,27 @@ function ensureScriptSignatures(orchestratorRaw, wrapperRaw) {
       'scripts/automation/executor-wrapper.mjs'
     );
   }
+  if (!contextCompilerRaw.includes('## Memory Posture')) {
+    addFinding(
+      'MISSING_MEMORY_POSTURE_RUNTIME_CONTEXT',
+      'scripts/automation/compile-runtime-context.mjs must emit a Memory Posture section.',
+      'scripts/automation/compile-runtime-context.mjs'
+    );
+  }
+  if (!contextCompilerRaw.includes('docs/agent-hardening/MEMORY_CONTEXT.md')) {
+    addFinding(
+      'MISSING_MEMORY_CONTEXT_SOURCE',
+      'scripts/automation/compile-runtime-context.mjs must cite docs/agent-hardening/MEMORY_CONTEXT.md as a primary source.',
+      'scripts/automation/compile-runtime-context.mjs'
+    );
+  }
+  if (!contactPackCompilerRaw.includes('## Memory Posture')) {
+    addFinding(
+      'MISSING_MEMORY_POSTURE_CONTACT_PACK',
+      'scripts/automation/compile-task-contact-pack.mjs must emit a Memory Posture section.',
+      'scripts/automation/compile-task-contact-pack.mjs'
+    );
+  }
 }
 
 function gatherPipelineRoles(config) {
@@ -150,14 +171,54 @@ function gatherPipelineRoles(config) {
   return [...roles];
 }
 
-function ensureManifestPolicy(configPath) {
-  // Config-independent policy assets are validated by existence checks.
-  // This function intentionally reserves room for future manifest semantic checks.
-  if (!configPath) {
+function ensureManifestPolicy(manifest, manifestRaw, schemaRaw, manifestPath, schemaPath) {
+  if (!manifestPath || !schemaPath) {
     addFinding(
-      'MISSING_CONFIG_PATH',
-      'Could not resolve config path while validating policy-manifest requirements.'
+      'MISSING_MANIFEST_PATH',
+      'Could not resolve policy manifest paths while validating memory posture requirements.'
     );
+    return;
+  }
+  const memoryPosture = manifest?.memoryPosture;
+  if (!memoryPosture || typeof memoryPosture !== 'object') {
+    addFinding(
+      'MISSING_MEMORY_POSTURE_MANIFEST',
+      'docs/governance/policy-manifest.json must define memoryPosture.',
+      rel(manifestPath)
+    );
+    return;
+  }
+  for (const field of ['whatToDo', 'improveBeforeRearchitecture', 'doNotAddYet', 'escalateWhen']) {
+    if (!Array.isArray(memoryPosture[field]) || memoryPosture[field].length === 0) {
+      addFinding(
+        'INVALID_MEMORY_POSTURE_MANIFEST',
+        `docs/governance/policy-manifest.json memoryPosture.${field} must be a non-empty array.`,
+        rel(manifestPath)
+      );
+    }
+  }
+  if (typeof memoryPosture.safeRule !== 'string' || memoryPosture.safeRule.trim().length === 0) {
+    addFinding(
+      'INVALID_MEMORY_POSTURE_SAFE_RULE',
+      'docs/governance/policy-manifest.json memoryPosture.safeRule must be a non-empty string.',
+      rel(manifestPath)
+    );
+  }
+  if (!String(manifestRaw ?? '').includes('"memoryPosture"')) {
+    addFinding(
+      'MISSING_MEMORY_POSTURE_MANIFEST_RAW',
+      'docs/governance/policy-manifest.json must retain the memoryPosture contract in source form.',
+      rel(manifestPath)
+    );
+  }
+  for (const token of ['"memoryPosture"', '"improveBeforeRearchitecture"', '"doNotAddYet"', '"escalateWhen"', '"safeRule"']) {
+    if (!String(schemaRaw ?? '').includes(token)) {
+      addFinding(
+        'MISSING_MEMORY_POSTURE_SCHEMA',
+        `docs/governance/policy-manifest.schema.json must describe ${token}.`,
+        rel(schemaPath)
+      );
+    }
   }
 }
 
@@ -534,14 +595,20 @@ async function main() {
     process.exit(1);
   }
 
-  const [orchestratorRaw, wrapperRaw, config] = await Promise.all([
+  const [orchestratorRaw, wrapperRaw, contextCompilerRaw, contactPackCompilerRaw, config, manifest, manifestRaw, schemaRaw] = await Promise.all([
     fs.readFile(requiredPaths.orchestrator, 'utf8'),
     fs.readFile(requiredPaths.wrapper, 'utf8'),
+    fs.readFile(requiredPaths.contextCompiler, 'utf8'),
+    fs.readFile(requiredPaths.contactPackCompiler, 'utf8'),
     readJsonStrict(requiredPaths.config)
+    ,
+    readJsonStrict(requiredPaths.policyManifest),
+    fs.readFile(requiredPaths.policyManifest, 'utf8'),
+    fs.readFile(requiredPaths.policySchema, 'utf8')
   ]);
 
-  ensureScriptSignatures(orchestratorRaw, wrapperRaw);
-  ensureManifestPolicy(requiredPaths.config);
+  ensureScriptSignatures(orchestratorRaw, wrapperRaw, contextCompilerRaw, contactPackCompilerRaw);
+  ensureManifestPolicy(manifest, manifestRaw, schemaRaw, requiredPaths.policyManifest, requiredPaths.policySchema);
   ensureConfigPolicy(config, requiredPaths.config);
   await ensurePragmaticScaffold();
 

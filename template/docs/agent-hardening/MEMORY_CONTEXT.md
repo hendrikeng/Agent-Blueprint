@@ -7,6 +7,9 @@ Source of Truth: This document.
 
 ## Context Budget Rules
 
+- Treat the repo as the main operating system for long-running agent work.
+- Keep plans, evidence, docs, code, and validation output as the source of truth.
+- Treat `## Must-Land Checklist` as the execution contract and keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` separate so memory does not silently absorb unfinished target state.
 - Prioritize active task requirements and recent authoritative state.
 - Default to task-scoped contact packs per role session; expand beyond the pack only for explicit blockers.
 - Trim low-value context before truncating policy or invariants.
@@ -21,6 +24,7 @@ Source of Truth: This document.
   - reasoning: current subtask, next action, blockers, rationale
   - evidence: accepted facts, artifact references, extracted findings, validation/log references
 - Keep retrieval selective. Load only the latest state, the most recent checkpoint slice, and artifact references relevant to the current role/stage.
+- Persist distilled findings and stable references, not raw session history.
 
 ## Persistence Rules
 
@@ -34,22 +38,22 @@ Source of Truth: This document.
 - Checkpoint at every session end, every stage completion, every `pending` or `handoff_required`, and immediately before validation handoff.
 - Summaries are replaceable, not sacred. Durable state must stay small, versioned, and reconstructable from checkpoints plus external artifacts.
 
-## Retrieval Escalation Rule
+## Improve Before Re-Architecture
 
-### Default Rule
+- better checkpoint contents
+- better contact-pack selection
+- better evidence compaction
+- better validation and observability
+- fix rolling-context and contact-pack implementation gaps before changing architecture
 
-- Use repo-local continuity as the default architecture for long work: structured state, checkpoints, explicit handoffs, selective contact packs, externalized logs/evidence, and resumable orchestration.
-- This design is intended to protect low-context work, safe handoff, nothing important getting lost, and reliable grind/resume without moving important memory outside the repo.
+## Do Not Add Yet
 
-### Do Not Change It Yet
+- Do not add external retrieval just because work is long.
+- Do not add provider-thread persistence just because context is limited.
+- Do not move important working memory outside the repo while repo-local continuity is sufficient.
+- Do not treat extra memory systems as a substitute for better checkpoints and better contact packs.
 
-- Keep this design while all important information already lives in the repo.
-- Keep this design while plans, evidence, docs, and code remain the source of truth.
-- Keep this design while agents can resume from checkpoints and contact packs without losing important context.
-- Keep this design while grind runs are not repeatedly missing important information.
-- Keep this design while no agent needs memory from Slack, Jira, other repos, or other external systems.
-
-### Consider External Retrieval Later
+## Consider Bigger Changes Later
 
 - agents repeatedly miss important context even though it exists
 - repo-local checkpoints/contact packs stop being enough
@@ -57,12 +61,10 @@ Source of Truth: This document.
 - you need one agent to search across many unrelated systems
 - you can point to repeated failures, not just a vague worry
 
-### Prefer Tuning Before Re-Architecture
+## Safe Rule
 
-- better checkpoint contents
-- better contact-pack selection
-- better evidence compaction
-- better validation and observability
+- If repo-local state is enough, keep this design.
+- If important context lives outside the repo and agents keep missing it, then consider external retrieval.
 
 ## Provenance and Redaction
 

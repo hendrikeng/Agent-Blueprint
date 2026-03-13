@@ -1,5 +1,5 @@
 {
-  "generatedAt": "{{LAST_UPDATED_ISO_DATE}}T00:00:00.000Z",
+  "generatedAt": "2026-03-13T22:08:57.455Z",
   "source": {
     "eventsPath": "docs/ops/automation/run-events.jsonl",
     "outputPath": "docs/generated/run-outcomes.json",
@@ -59,6 +59,26 @@
     "evidence": {
       "curatedEvents": 0,
       "compactedEvents": 0
+    },
+    "memory": {
+      "sessions": 0,
+      "derivedContinuitySessions": 0,
+      "derivedContinuityRate": null,
+      "contactPacks": {
+        "sessions": 0,
+        "generatedSessions": 0,
+        "cacheHitSessions": 0,
+        "evidenceRefs": {
+          "sampleSize": 0,
+          "mean": null,
+          "median": null
+        },
+        "checkpointItems": {
+          "sampleSize": 0,
+          "mean": null,
+          "median": null
+        }
+      }
     },
     "rework": {
       "handoffOrRolloverEvents": 0,

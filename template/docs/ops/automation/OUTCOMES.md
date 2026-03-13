@@ -34,6 +34,9 @@ Use this to demonstrate that orchestration reduces blast radius and debugging ov
 - Evidence compactness:
   - Definition: number of evidence lifecycle/compaction events per run.
   - Output: curated vs noisy evidence trend.
+- Memory posture quality:
+  - Definition: continuity payload quality plus contact-pack richness captured from `session_finished` events.
+  - Output: derived-continuity rate, mean/median evidence refs per contact pack, mean/median checkpoint items per contact pack, and cache-hit/generated mix.
 - Rework loops:
   - Definition: count rollover/handoff and repeated non-terminal sessions.
   - Output: handoff totals, handoffs-per-plan distribution, and worker no-touch retry count.
@@ -53,11 +56,13 @@ Use this to demonstrate that orchestration reduces blast radius and debugging ov
   - Stable lead times for similar risk tiers.
   - Validation failures trend down over time.
   - Evidence compaction keeps references concise.
+  - Contact packs stay rich enough to resume work without frequent synthesized continuity.
 - Investigation signal:
   - Time-to-first-edit spikes without corresponding risk increase.
   - Long planner/explorer/reviewer sessions with zero touched files.
   - Spiking handoff/rework counts.
   - Repeated validation failures on same plan group.
+  - High derived-continuity rates or thin contact packs despite repeated handoffs.
   - High event volume with low completion throughput.
 
 ## Notes

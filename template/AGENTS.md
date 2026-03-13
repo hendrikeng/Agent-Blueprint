@@ -15,6 +15,17 @@ If instructions conflict, this file is the behavioral priority entrypoint.
 - Agents execute scoped tasks using repository-local docs, code, and checks.
 - Continuous docs hygiene is required through repository checks.
 
+## Agent Handout
+
+- Treat the repo as the main operating system for agent work.
+- Keep plans, evidence, docs, code, and validation output as the source of truth.
+- Treat `## Must-Land Checklist` as the execution contract and keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` separate.
+- Use repo-local checkpoints, contact packs, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.
+- Keep context selective: load current scope, latest state, recent checkpoints, and relevant evidence; persist distilled findings and stable references, not raw session history.
+- Improve checkpoint contents, contact-pack selection, evidence compaction, validation, and observability before changing memory architecture.
+- Do not add external retrieval, provider-thread persistence, or off-repo working memory just because work is long or context is limited.
+- Consider bigger memory changes only when repeated failures show repo-local continuity is insufficient or important context genuinely lives outside the repo.
+
 ## Intent Precedence
 
 - Explicit user intent is binding.
@@ -42,6 +53,7 @@ Start here, then follow linked source-of-truth docs:
 - Frontend standards: `docs/FRONTEND.md`
 - Backend standards: `docs/BACKEND.md`
 - Agent hardening policy map: `docs/agent-hardening/README.md`
+- Memory and context policy: `docs/agent-hardening/MEMORY_CONTEXT.md`
 - Git safety: `docs/design-docs/git-safety.md`
 - Plan lifecycle (non-trivial changes): `docs/PLANS.md`
 - Product specs index: `docs/product-specs/index.md`

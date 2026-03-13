@@ -6,6 +6,7 @@ const DEFAULT_MAX_TOKENS = 1400;
 const DEFAULT_OUTPUT_PATH = 'docs/generated/agent-runtime-context.md';
 const DEFAULT_POLICY_PATH = 'docs/governance/policy-manifest.json';
 const DEFAULT_AGENTS_PATH = 'AGENTS.md';
+const DEFAULT_MEMORY_CONTEXT_PATH = 'docs/agent-hardening/MEMORY_CONTEXT.md';
 const DEFAULT_CONFIG_PATH = 'docs/ops/automation/orchestrator.config.json';
 
 function parseArgs(argv) {
@@ -95,6 +96,27 @@ function normalizeRuleList(value) {
   return value.filter((entry) => entry && typeof entry === 'object');
 }
 
+function normalizeStringList(value, maxItems = 6) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => String(entry ?? '').trim())
+    .filter(Boolean)
+    .slice(0, Math.max(0, maxItems));
+}
+
+function normalizeMemoryPosture(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    whatToDo: normalizeStringList(source.whatToDo, 5),
+    improveBeforeRearchitecture: normalizeStringList(source.improveBeforeRearchitecture, 5),
+    doNotAddYet: normalizeStringList(source.doNotAddYet, 4),
+    escalateWhen: normalizeStringList(source.escalateWhen, 4),
+    safeRule: String(source.safeRule ?? '').trim()
+  };
+}
+
 function approximateTokenCount(content) {
   const normalized = String(content ?? '').trim();
   if (!normalized) {
@@ -120,6 +142,9 @@ function ensureManifestShape(manifest) {
   if (!manifest.validationPolicy || typeof manifest.validationPolicy !== 'object') {
     throw new Error('policy-manifest.json requires validationPolicy object.');
   }
+  if (!manifest.memoryPosture || typeof manifest.memoryPosture !== 'object') {
+    throw new Error('policy-manifest.json requires memoryPosture object.');
+  }
 }
 
 function pipelineSummary(config) {
@@ -137,6 +162,7 @@ function pipelineSummary(config) {
 function buildRuntimeContext({
   missionBullets,
   mandatoryRules,
+  memoryPosture,
   roleContracts,
   pipelines,
   validationPolicy,
@@ -149,7 +175,7 @@ function buildRuntimeContext({
   lines.push('# Agent Runtime Context (Generated)');
   lines.push('');
   lines.push(`Generated At: ${new Date().toISOString()}`);
-  lines.push('Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/automation/orchestrator.config.json');
+  lines.push('Primary Sources: AGENTS.md, docs/agent-hardening/MEMORY_CONTEXT.md, docs/governance/policy-manifest.json, docs/ops/automation/orchestrator.config.json');
   lines.push('');
   lines.push('## Mission');
   for (const bullet of missionBullets) {
@@ -182,6 +208,23 @@ function buildRuntimeContext({
   lines.push('## Verification Profiles');
   lines.push(`- fast: ${validationPolicy.fastIteration.join(' ; ')}`);
   lines.push(`- full: ${validationPolicy.fullGate.join(' ; ')}`);
+  lines.push('');
+  lines.push('## Memory Posture');
+  for (const bullet of memoryPosture.whatToDo) {
+    lines.push(`- do: ${bullet}`);
+  }
+  if (memoryPosture.improveBeforeRearchitecture.length > 0) {
+    lines.push(`- improve first: ${memoryPosture.improveBeforeRearchitecture.join(' ; ')}`);
+  }
+  if (memoryPosture.doNotAddYet.length > 0) {
+    lines.push(`- not yet: ${memoryPosture.doNotAddYet.join(' ; ')}`);
+  }
+  if (memoryPosture.escalateWhen.length > 0) {
+    lines.push(`- escalate when: ${memoryPosture.escalateWhen.join(' ; ')}`);
+  }
+  if (memoryPosture.safeRule) {
+    lines.push(`- safe rule: ${memoryPosture.safeRule}`);
+  }
   lines.push('');
   lines.push('## Git Safety');
   for (const entry of gitSafetyContract.forbiddenWithoutExplicitInstruction ?? []) {
@@ -216,11 +259,13 @@ async function main() {
   const outputPath = path.resolve(rootDir, String(options.output ?? DEFAULT_OUTPUT_PATH));
   const policyPath = path.resolve(rootDir, String(options.policy ?? DEFAULT_POLICY_PATH));
   const agentsPath = path.resolve(rootDir, String(options.agents ?? DEFAULT_AGENTS_PATH));
+  const memoryContextPath = path.resolve(rootDir, DEFAULT_MEMORY_CONTEXT_PATH);
   const configPath = path.resolve(rootDir, String(options.config ?? DEFAULT_CONFIG_PATH));
 
-  const [manifest, agentsRaw, orchestratorConfig] = await Promise.all([
+  const [manifest, agentsRaw, _memoryContextRaw, orchestratorConfig] = await Promise.all([
     readJson(policyPath),
     fs.readFile(agentsPath, 'utf8'),
+    fs.readFile(memoryContextPath, 'utf8'),
     readJson(configPath)
   ]);
   ensureManifestShape(manifest);
@@ -236,6 +281,7 @@ async function main() {
   ];
   const missionBullets = missionBulletsRaw.length > 0 ? missionBulletsRaw : fallbackMission;
   const mandatoryRules = normalizeRuleList(manifest.mandatorySafetyRules);
+  const memoryPosture = normalizeMemoryPosture(manifest.memoryPosture);
   const roleContracts = manifest.roleContracts ?? {};
   const validationPolicy = manifest.validationPolicy ?? { fastIteration: [], fullGate: [] };
   const docContract = manifest.docContract ?? {};
@@ -254,6 +300,7 @@ async function main() {
     rendered = buildRuntimeContext({
       missionBullets: variant.missionBullets,
       mandatoryRules,
+      memoryPosture,
       roleContracts,
       pipelines,
       validationPolicy,

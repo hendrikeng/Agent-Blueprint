@@ -179,7 +179,8 @@ function parseJsonLines(raw, maxItems) {
     .map((line) => line.trim())
     .filter(Boolean);
   const items = [];
-  for (const line of lines.slice(-Math.max(0, maxItems))) {
+  const limit = Number.isFinite(maxItems) ? Math.max(0, maxItems) : lines.length;
+  for (const line of lines.slice(-limit)) {
     try {
       const parsed = JSON.parse(line);
       if (parsed && typeof parsed === 'object') {
@@ -222,6 +223,86 @@ function normalizeContinuityPayload(raw) {
       validationRefs: summarizeList(evidence.validationRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12)
     }
   };
+}
+
+function normalizeMemoryPosture(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return {
+    whatToDo: unique(Array.isArray(source.whatToDo) ? source.whatToDo : []).slice(0, 5),
+    improveBeforeRearchitecture: unique(Array.isArray(source.improveBeforeRearchitecture) ? source.improveBeforeRearchitecture : []).slice(0, 5),
+    doNotAddYet: unique(Array.isArray(source.doNotAddYet) ? source.doNotAddYet : []).slice(0, 4),
+    escalateWhen: unique(Array.isArray(source.escalateWhen) ? source.escalateWhen : []).slice(0, 4),
+    safeRule: String(source.safeRule ?? '').trim()
+  };
+}
+
+function checkpointKey(checkpoint) {
+  return [
+    String(checkpoint?.role ?? '').trim(),
+    String(checkpoint?.status ?? '').trim(),
+    String(checkpoint?.currentSubtask ?? checkpoint?.summary ?? '').trim(),
+    String(checkpoint?.nextAction ?? checkpoint?.reasoning?.nextAction ?? '').trim(),
+    String(checkpoint?.session ?? '').trim(),
+    String(checkpoint?.stageIndex ?? '').trim()
+  ].join('|');
+}
+
+function selectRelevantCheckpoints(checkpoints, role, maxItems) {
+  if (maxItems <= 0) {
+    return [];
+  }
+  const source = Array.isArray(checkpoints) ? checkpoints.filter((entry) => entry && typeof entry === 'object') : [];
+  if (source.length === 0) {
+    return [];
+  }
+  const selected = [];
+  const seen = new Set();
+  const reversed = [...source].reverse();
+  const pick = (predicate) => {
+    const match = reversed.find((entry) => !seen.has(checkpointKey(entry)) && predicate(entry));
+    if (!match) {
+      return;
+    }
+    selected.push(match);
+    seen.add(checkpointKey(match));
+  };
+
+  pick(() => true);
+  pick((entry) => String(entry?.role ?? '').trim().toLowerCase() === role);
+
+  const latest = selected[0] ?? null;
+  pick((entry) => {
+    const entryRole = String(entry?.role ?? '').trim().toLowerCase();
+    const entryStageIndex = asInteger(entry?.stageIndex, -1);
+    const latestStageIndex = asInteger(latest?.stageIndex, -1);
+    return entryRole !== role || (latest && entryStageIndex !== latestStageIndex);
+  });
+
+  for (const entry of reversed) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    const key = checkpointKey(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    selected.push(entry);
+    seen.add(key);
+  }
+
+  return selected.slice(0, maxItems).map((entry) => normalizeContinuityPayload(entry));
+}
+
+function preferredEvidenceReferences(latestState) {
+  if (!latestState) {
+    return [];
+  }
+  return unique([
+    ...(Array.isArray(latestState.evidence?.validationRefs) ? latestState.evidence.validationRefs : []),
+    ...(Array.isArray(latestState.evidence?.artifactRefs) ? latestState.evidence.artifactRefs : []),
+    ...(Array.isArray(latestState.evidence?.logRefs) ? latestState.evidence.logRefs : []),
+    ...(Array.isArray(latestState.artifacts) ? latestState.artifacts : [])
+  ]);
 }
 
 function renderSummaryBullet(label, values) {
@@ -295,6 +376,7 @@ export async function compileTaskContactPack(input) {
 
   const roleContracts = policyManifest?.roleContracts ?? {};
   const validationPolicy = policyManifest?.validationPolicy ?? {};
+  const memoryPosture = normalizeMemoryPosture(policyManifest?.memoryPosture);
   const mandatoryRules = Array.isArray(policyManifest?.mandatorySafetyRules)
     ? policyManifest.mandatorySafetyRules.filter((entry) => entry && typeof entry === 'object')
     : [];
@@ -353,35 +435,48 @@ export async function compileTaskContactPack(input) {
   const continuityDir = path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'state', planId);
   const latestStatePath = path.join(continuityDir, 'latest.json');
   const checkpointsPath = path.join(continuityDir, 'checkpoints.jsonl');
-  const evidenceReferences = [];
-  if (includeRecentEvidence && maxRecentEvidenceItems > 0) {
-    for (const evidencePath of evidenceCandidates) {
-      const evidenceRaw = await readUtf8IfExists(evidencePath);
-      if (!evidenceRaw) {
-        continue;
-      }
-      const evidenceRel = toPosix(path.relative(rootDir, evidencePath));
-      const parsed = parseEvidenceReferences(evidenceRaw, maxRecentEvidenceItems, evidenceRel);
-      for (const entry of parsed) {
-        evidenceReferences.push(entry);
-        if (evidenceReferences.length >= maxRecentEvidenceItems) {
-          break;
-        }
-      }
-      if (evidenceReferences.length >= maxRecentEvidenceItems) {
-        break;
-      }
-    }
-  }
-
   let latestState = null;
   let recentCheckpoints = [];
   if (includeLatestState) {
     latestState = normalizeContinuityPayload(await readJsonStrict(latestStatePath).catch(() => null));
     const checkpointsRaw = await readUtf8IfExists(checkpointsPath);
-    recentCheckpoints = parseJsonLines(checkpointsRaw, maxRecentCheckpointItems).map((entry) =>
-      normalizeContinuityPayload(entry)
+    recentCheckpoints = selectRelevantCheckpoints(
+      parseJsonLines(checkpointsRaw, Number.POSITIVE_INFINITY),
+      role,
+      maxRecentCheckpointItems
     );
+  }
+
+  const evidenceReferences = [];
+  if (includeRecentEvidence && maxRecentEvidenceItems > 0) {
+    for (const entry of preferredEvidenceReferences(latestState)) {
+      evidenceReferences.push(entry);
+      if (evidenceReferences.length >= maxRecentEvidenceItems) {
+        break;
+      }
+    }
+    if (evidenceReferences.length < maxRecentEvidenceItems) {
+      for (const evidencePath of evidenceCandidates) {
+        const evidenceRaw = await readUtf8IfExists(evidencePath);
+        if (!evidenceRaw) {
+          continue;
+        }
+        const evidenceRel = toPosix(path.relative(rootDir, evidencePath));
+        const parsed = parseEvidenceReferences(evidenceRaw, maxRecentEvidenceItems, evidenceRel);
+        for (const entry of parsed) {
+          if (evidenceReferences.includes(entry)) {
+            continue;
+          }
+          evidenceReferences.push(entry);
+          if (evidenceReferences.length >= maxRecentEvidenceItems) {
+            break;
+          }
+        }
+        if (evidenceReferences.length >= maxRecentEvidenceItems) {
+          break;
+        }
+      }
+    }
   }
 
   const renderedRules = ruleSource.slice(0, maxPolicyBullets);
@@ -409,6 +504,23 @@ export async function compileTaskContactPack(input) {
     for (const rule of renderedRules) {
       lines.push(`- [${rule.id}] ${rule.statement}`);
     }
+  }
+  lines.push('');
+  lines.push('## Memory Posture');
+  for (const bullet of memoryPosture.whatToDo) {
+    lines.push(`- do: ${summarizeSentence(bullet, 22)}`);
+  }
+  if (memoryPosture.improveBeforeRearchitecture.length > 0) {
+    lines.push(`- improve first: ${memoryPosture.improveBeforeRearchitecture.join(' ; ')}`);
+  }
+  if (memoryPosture.doNotAddYet.length > 0) {
+    lines.push(`- not yet: ${memoryPosture.doNotAddYet.join(' ; ')}`);
+  }
+  if (memoryPosture.escalateWhen.length > 0) {
+    lines.push(`- escalate when: ${memoryPosture.escalateWhen.join(' ; ')}`);
+  }
+  if (memoryPosture.safeRule) {
+    lines.push(`- safe rule: ${memoryPosture.safeRule}`);
   }
   lines.push('');
   lines.push('## Role Contract');
@@ -445,7 +557,7 @@ export async function compileTaskContactPack(input) {
     lines.push(renderSummaryBullet('artifacts', currentArtifacts));
   }
   lines.push('');
-  lines.push('## Recent Checkpoints');
+  lines.push('## Selected Checkpoints');
   if (!includeLatestState) {
     lines.push('- skipped (includeLatestState=false)');
   } else if (recentCheckpoints.length === 0) {
@@ -462,7 +574,7 @@ export async function compileTaskContactPack(input) {
   lines.push(`- fast: ${fastCommands.length > 0 ? fastCommands.join(' ; ') : 'none configured'}`);
   lines.push(`- full: ${fullCommands.length > 0 ? fullCommands.join(' ; ') : 'none configured'}`);
   lines.push('');
-  lines.push('## Recent Evidence');
+  lines.push('## Selected Evidence');
   if (!includeRecentEvidence) {
     lines.push('- skipped (includeRecentEvidence=false)');
   } else if (evidenceReferences.length === 0) {
@@ -476,6 +588,7 @@ export async function compileTaskContactPack(input) {
   lines.push('## Contact Boundaries');
   lines.push('- Use this pack as the primary context for this role session.');
   lines.push('- Expand beyond this pack only for explicit blockers tied to current scope.');
+  lines.push(`- Selected continuity inputs: checkpoints=${recentCheckpoints.length}, evidence=${evidenceReferences.length}.`);
   lines.push('- Keep edits scoped to the active plan, canonical evidence, and required implementation files.');
   lines.push('');
 
@@ -489,7 +602,8 @@ export async function compileTaskContactPack(input) {
     bytes: Buffer.byteLength(rendered, 'utf8'),
     lineCount: lines.length,
     policyRuleCount: renderedRules.length,
-    evidenceCount: evidenceReferences.length
+    evidenceCount: evidenceReferences.length,
+    checkpointCount: recentCheckpoints.length
   };
 }
 
@@ -516,7 +630,7 @@ async function main() {
     maxStateListItems: options['max-state-list-items']
   });
   console.log(
-    `[contact-pack] wrote ${result.outputPath} (rules=${result.policyRuleCount}, evidence=${result.evidenceCount}, bytes=${result.bytes}).`
+    `[contact-pack] wrote ${result.outputPath} (rules=${result.policyRuleCount}, checkpoints=${result.checkpointCount}, evidence=${result.evidenceCount}, bytes=${result.bytes}).`
   );
 }
 

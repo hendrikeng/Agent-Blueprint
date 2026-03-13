@@ -11,6 +11,8 @@ Source of Truth: This document.
 - Model identifier and version.
 - Tool invocation events with input/decision metadata.
 - Approval events for gated actions.
+- Contact-pack selection metadata: generated/cache-hit state plus policy-rule, checkpoint, and evidence counts.
+- Continuity quality metadata: whether continuity was model-provided or synthesized plus compact pending/decision/artifact counters.
 - Final outcome classification and termination reason.
 
 ## Error Classification

@@ -5,6 +5,7 @@ import path from 'node:path';
 const rootDir = process.cwd();
 
 const requiredMarkdownFiles = [
+  'AGENTS.md',
   'docs/agent-hardening/README.md',
   'docs/agent-hardening/EVALS.md',
   'docs/agent-hardening/OBSERVABILITY.md',
@@ -19,6 +20,7 @@ const requiredJsonFiles = [
 const requiredMetadataFields = ['Status', 'Owner', 'Last Updated', 'Source of Truth'];
 
 const requiredHeadings = {
+  'AGENTS.md': ['Operating Model', 'Agent Handout', 'Core Map'],
   'docs/agent-hardening/README.md': ['Why This Exists', 'Canonical Documents', 'Enforcement'],
   'docs/agent-hardening/EVALS.md': [
     'Eval Lifecycle',
@@ -28,7 +30,15 @@ const requiredHeadings = {
   ],
   'docs/agent-hardening/OBSERVABILITY.md': ['Required Run Trace Fields', 'Error Classification', 'Retention and Redaction'],
   'docs/agent-hardening/TOOL_POLICY.md': ['Risk Tiers', 'Approval Requirements', 'Execution Safety Rules'],
-  'docs/agent-hardening/MEMORY_CONTEXT.md': ['Context Budget Rules', 'Persistence Rules', 'Provenance and Redaction']
+  'docs/agent-hardening/MEMORY_CONTEXT.md': [
+    'Context Budget Rules',
+    'Persistence Rules',
+    'Improve Before Re-Architecture',
+    'Do Not Add Yet',
+    'Consider Bigger Changes Later',
+    'Safe Rule',
+    'Provenance and Redaction'
+  ]
 };
 
 const findings = [];

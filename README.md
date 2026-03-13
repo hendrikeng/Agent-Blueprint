@@ -69,14 +69,16 @@ Start with `Lite` by default, then scale up only when risk or workload demands i
 
 ## Session Safety and Context Continuity
 
+- Default memory posture is repo-local: treat the repo as the operating system, keep plans/evidence/docs/code/validation as source of truth, and widen scope only when a blocker requires it.
 - Sessions follow context guardrails: `contextSoftUsedRatio` is the point to stop widening scope, while `contextHardUsedRatio` and `contextAbsoluteFloor` force safe same-role rollover/handoff.
 - Every session must write a structured result payload (`ORCH_RESULT_PATH`) including numeric `contextRemaining`.
 - Non-terminal sessions must also emit structured continuity fields (`currentSubtask`, `nextAction`, `stateDelta`) so orchestration can checkpoint resumable machine state instead of relying on raw transcript history.
 - Continuity is persisted as repo-local runtime state under `docs/ops/automation/runtime/state/<plan-id>/latest.json` and `checkpoints.jsonl`.
 - Handoffs are written as both markdown notes and structured JSON packets, then reused by later same-run rollovers and `resume` runs.
 - Runtime context is recompiled from canonical docs (`docs/generated/agent-runtime-context.md`) to reduce drift and hallucination risk.
-- Contact packs now carry runtime policy, task scope, latest continuity state, recent checkpoints, and capped evidence references.
-- Repo-local checkpoints and contact packs are the default memory architecture; see `template/docs/agent-hardening/MEMORY_CONTEXT.md` for when to keep repo-local state and when to consider external retrieval.
+- Contact packs now carry runtime policy, the memory posture, task scope, latest continuity state, selected checkpoints, and capped evidence references.
+- Improve checkpoint contents, contact-pack selection, evidence compaction, and observability before considering external retrieval or off-repo memory.
+- Repo-local checkpoints and contact packs remain the default memory architecture; see `template/docs/agent-hardening/MEMORY_CONTEXT.md` for the detailed rule set and escalation triggers.
 
 ## How It Works
 

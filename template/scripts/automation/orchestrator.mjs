@@ -1429,6 +1429,22 @@ function normalizeContinuityDelta(raw) {
   };
 }
 
+function continuityMetrics(raw) {
+  const delta = normalizeContinuityDelta(raw);
+  return {
+    pendingActionCount: delta.pendingActions.length,
+    completedWorkCount: delta.completedWork.length,
+    decisionCount: delta.decisions.length,
+    openQuestionCount: delta.openQuestions.length,
+    artifactCount:
+      delta.artifacts.length +
+      delta.evidence.artifactRefs.length +
+      delta.evidence.logRefs.length +
+      delta.evidence.validationRefs.length,
+    blockerCount: delta.reasoning.blockers.length
+  };
+}
+
 function continuityStateFromRecord(plan, checkpoint, existingState = null) {
   const prior = existingState && typeof existingState === 'object' ? existingState : {};
   const delta = normalizeContinuityDelta(checkpoint?.stateDelta);
@@ -4347,7 +4363,8 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
       enabled: true,
       contactPackFile: contactPackRel,
       generated: false,
-      reason: 'dry-run'
+      reason: 'dry-run',
+      checkpointCount: 0
     };
   }
 
@@ -4385,7 +4402,8 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
         bytes: cached.bytes,
         lineCount: cached.lineCount,
         policyRuleCount: cached.policyRuleCount,
-        evidenceCount: cached.evidenceCount
+        evidenceCount: cached.evidenceCount,
+        checkpointCount: cached.checkpointCount
       };
     }
   }
@@ -4415,7 +4433,8 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
       bytes: result.bytes,
       lineCount: result.lineCount,
       policyRuleCount: result.policyRuleCount,
-      evidenceCount: result.evidenceCount
+      evidenceCount: result.evidenceCount,
+      checkpointCount: result.checkpointCount
     });
   }
 
@@ -4426,7 +4445,8 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     bytes: result.bytes,
     lineCount: result.lineCount,
     policyRuleCount: result.policyRuleCount,
-    evidenceCount: result.evidenceCount
+    evidenceCount: result.evidenceCount,
+    checkpointCount: result.checkpointCount
   };
 }
 
@@ -4621,6 +4641,7 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     contactPackGenerated: contactPack?.generated ?? false,
     contactPackPolicyRuleCount: contactPack?.policyRuleCount ?? 0,
     contactPackEvidenceCount: contactPack?.evidenceCount ?? 0,
+    contactPackCheckpointCount: contactPack?.checkpointCount ?? 0,
     executorCommandConfigured: true,
     commandLogPath: sessionLogPath
   }, options.dryRun);
@@ -4635,6 +4656,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       model: roleProfile.model || null,
       sessionLogPath,
       contactPackFile,
+      contactPackGenerated: contactPack?.generated ?? false,
+      contactPackPolicyRuleCount: contactPack?.policyRuleCount ?? 0,
+      contactPackEvidenceCount: contactPack?.evidenceCount ?? 0,
+      contactPackCheckpointCount: contactPack?.checkpointCount ?? 0,
       durationSeconds: 0
     };
   }
@@ -4714,6 +4739,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     touchSummary: sessionTouchSummary,
     touchMonitor: sessionTouchMonitor,
     contactPackFile,
+    contactPackGenerated: contactPack?.generated ?? false,
+    contactPackPolicyRuleCount: contactPack?.policyRuleCount ?? 0,
+    contactPackEvidenceCount: contactPack?.evidenceCount ?? 0,
+    contactPackCheckpointCount: contactPack?.checkpointCount ?? 0,
     durationSeconds
   });
   if (captureOutput) {
@@ -7711,6 +7740,7 @@ async function processPlan(plan, paths, state, options, config) {
       workerNoTouchRetryCount: currentRole === ROLE_WORKER ? workerNoTouchRetryCount : 0,
       workerNoTouchRetryLimit: asInteger(options.workerNoTouchRetryLimit, DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT)
     });
+    const sessionContinuityMetrics = continuityMetrics(sessionResult?.stateDelta);
     await logEvent(paths, state, 'session_finished', {
       planId: plan.planId,
       session,
@@ -7728,6 +7758,17 @@ async function processPlan(plan, paths, state, options, config) {
       model: sessionResult.model ?? currentRoleProfile.model ?? null,
       commandLogPath: sessionResult.sessionLogPath ?? null,
       contactPackFile: sessionResult.contactPackFile ?? null,
+      contactPackGenerated: sessionResult.contactPackGenerated ?? false,
+      contactPackPolicyRuleCount: sessionResult.contactPackPolicyRuleCount ?? 0,
+      contactPackEvidenceCount: sessionResult.contactPackEvidenceCount ?? 0,
+      contactPackCheckpointCount: sessionResult.contactPackCheckpointCount ?? 0,
+      continuityDerived: sessionResult.continuityDerived ?? false,
+      continuityPendingActionCount: sessionContinuityMetrics.pendingActionCount,
+      continuityCompletedWorkCount: sessionContinuityMetrics.completedWorkCount,
+      continuityDecisionCount: sessionContinuityMetrics.decisionCount,
+      continuityOpenQuestionCount: sessionContinuityMetrics.openQuestionCount,
+      continuityArtifactCount: sessionContinuityMetrics.artifactCount,
+      continuityBlockerCount: sessionContinuityMetrics.blockerCount,
       durationSeconds:
         typeof sessionResult.durationSeconds === 'number' && Number.isFinite(sessionResult.durationSeconds)
           ? Math.round(sessionResult.durationSeconds * 100) / 100

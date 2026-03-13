@@ -119,6 +119,7 @@ Use the manual path when any of these are true:
   - `"context.runtimeContextPath"` points to compiled runtime instructions (`docs/generated/agent-runtime-context.md` by default).
   - `"context.maxTokens"` sets a hard budget for compiled runtime context size.
   - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`, `includeLatestState`, `maxRecentCheckpointItems`, `maxStateListItems`, `cacheMode`).
+  - Contact packs include the shared memory posture and select continuity inputs in priority order: latest continuity state, latest same-role checkpoint, latest cross-role or stage-transition checkpoint, then capped evidence refs.
   - `With "context.contactPacks.cacheMode": "run-memory", cache keys include an evidence freshness token (state signature when available, otherwise evidence-index file stat) to avoid stale recent-evidence payloads.`
   - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 120`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.touchScanMode": "adaptive"`, `"logging.touchScanMinHeartbeats": 1`, `"logging.touchScanMaxHeartbeats": 8`, `"logging.touchScanBackoffUnchanged": 2`, `"logging.liveActivity": {"mode": "best-effort", "maxChars": 0, "sampleSeconds": 2, "emitEventLines": false, "redactPatterns": [...]}`, `"logging.workerFirstTouchDeadlineSeconds": 180`, `"logging.workerRetryFirstTouchDeadlineSeconds": 180`, `"logging.workerNoTouchRetryLimit": 1`, and `"logging.workerPendingStreakLimit": 4` tune operator-facing output noise, liveness, live file-touch visibility, provider live-message surfacing, touch-scan cadence, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast; retry sessions inherit the base deadline unless overridden; `workerPendingStreakLimit: 0` disables worker same-role pending streak fail-fast).
   - `"recovery.retryFailed": true`, `"recovery.autoUnblock": true`, and `"recovery.maxFailedRetries": 2` control automatic retry/unblock behavior for resumable plans.
@@ -219,7 +220,7 @@ Use the manual path when any of these are true:
   - Generates `docs/generated/perf-comparison.json` with before/after deltas.
 - Outcomes capture (optional):
   - `npm run outcomes:report`
-  - Generates `docs/generated/run-outcomes.json` from `run-events.jsonl`.
+  - Generates `docs/generated/run-outcomes.json` from `run-events.jsonl`, including `summary.memory` continuity and contact-pack metrics.
 - GitHub interop export scaffold (optional):
   - `npm run interop:github:export`
   - Generates `docs/generated/github-agent-export.json` and can emit `.agent.md` plus JSON scaffolds under `.github/agents/`.
@@ -322,7 +323,7 @@ Executor commands should use these outcomes:
 - If the top-level `Status:` is `validation` (or `completed`), orchestration skips role sessions and runs validation lanes directly.
 - If the top-level `Status:` is neither `validation` nor `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
 - Session boundaries are strict: each planner/explorer/worker/reviewer stage starts a new executor process and can use a role-specific model profile.
-- Each session gets a task-scoped contact pack (`{contact_pack_file}`) built from runtime policy, task scope, latest continuity state, recent checkpoints, and capped evidence references. Executors should use it as primary context before expanding scope.
+- Each session gets a task-scoped contact pack (`{contact_pack_file}`) built from runtime policy, shared memory posture, task scope, latest continuity state, selected checkpoints, and capped evidence references. Executors should use it as primary context before expanding scope.
 - Executor sessions must always emit a structured result payload (`ORCH_RESULT_PATH`) with a numeric `contextRemaining`; include numeric `contextWindow` and `contextUsedRatio` whenever the provider/runtime can estimate them reliably.
 - Non-terminal executor payloads must also include `currentSubtask`, `nextAction`, and `stateDelta` so orchestration can checkpoint resumable state instead of relying on raw session history.
 - Default context rollover policy is hybrid and proactive: use `contextSoftUsedRatio` to stop widening scope, `contextHardUsedRatio` to force same-role handoff when more work remains, and `contextAbsoluteFloor` as the hard remaining-context backstop (override with `--context-soft-used-ratio`, `--context-hard-used-ratio`, or `--context-absolute-floor`; `--context-threshold` remains a legacy alias for the floor).
