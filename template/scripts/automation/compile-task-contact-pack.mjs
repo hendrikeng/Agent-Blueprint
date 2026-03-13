@@ -15,6 +15,8 @@ const DEFAULT_RUNTIME_CONTEXT_PATH = 'docs/generated/agent-runtime-context.md';
 const DEFAULT_OUTPUT_PATH = 'docs/ops/automation/runtime/contacts/manual/contact-pack.md';
 const DEFAULT_MAX_POLICY_BULLETS = 10;
 const DEFAULT_MAX_RECENT_EVIDENCE_ITEMS = 6;
+const DEFAULT_MAX_RECENT_CHECKPOINT_ITEMS = 2;
+const DEFAULT_MAX_STATE_LIST_ITEMS = 6;
 
 const ROLE_NAMES = new Set(['planner', 'explorer', 'worker', 'reviewer']);
 
@@ -129,6 +131,13 @@ function unique(items) {
   return [...new Set(items.map((entry) => String(entry ?? '').trim()).filter(Boolean))];
 }
 
+function summarizeList(items, maxItems, maxWords = 10) {
+  const source = Array.isArray(items) ? items : [items];
+  return unique(source)
+    .slice(0, Math.max(0, maxItems))
+    .map((entry) => summarizeSentence(entry, maxWords));
+}
+
 function summarizeSentence(value, maxWords = 24) {
   const words = String(value ?? '')
     .trim()
@@ -162,6 +171,73 @@ function parseEvidenceReferences(raw, maxItems, sourceFile) {
     }
   }
   return unique(matches).slice(0, Math.max(0, maxItems));
+}
+
+function parseJsonLines(raw, maxItems) {
+  const lines = String(raw ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const items = [];
+  for (const line of lines.slice(-Math.max(0, maxItems))) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === 'object') {
+        items.push(parsed);
+      }
+    } catch {
+      // Ignore malformed historical lines; keep the pack compiler resilient.
+    }
+  }
+  return items;
+}
+
+function normalizeContinuityPayload(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const reasoning = source.reasoning && typeof source.reasoning === 'object' ? source.reasoning : {};
+  const evidence = source.evidence && typeof source.evidence === 'object' ? source.evidence : {};
+  return {
+    role: String(source.role ?? '').trim(),
+    summary: String(source.summary ?? '').trim(),
+    goal: String(source.goal ?? '').trim(),
+    currentSubtask: String(source.currentSubtask ?? '').trim(),
+    status: String(source.status ?? '').trim(),
+    acceptedFacts: summarizeList(source.acceptedFacts, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    decisions: summarizeList(source.decisions, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    openQuestions: summarizeList(source.openQuestions, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    pendingActions: summarizeList(source.pendingActions, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    completedWork: summarizeList(source.completedWork, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    recentResults: summarizeList(source.recentResults, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    artifacts: summarizeList(source.artifacts, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    risks: summarizeList(source.risks, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+    reasoning: {
+      nextAction: String(reasoning.nextAction ?? '').trim(),
+      blockers: summarizeList(reasoning.blockers, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+      rationale: summarizeList(reasoning.rationale, DEFAULT_MAX_STATE_LIST_ITEMS, 12)
+    },
+    evidence: {
+      extractedFacts: summarizeList(evidence.extractedFacts, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+      artifactRefs: summarizeList(evidence.artifactRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+      logRefs: summarizeList(evidence.logRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+      validationRefs: summarizeList(evidence.validationRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12)
+    }
+  };
+}
+
+function renderSummaryBullet(label, values) {
+  const entries = Array.isArray(values) ? values.filter(Boolean) : [values].filter(Boolean);
+  if (entries.length === 0) {
+    return `- ${label}: none`;
+  }
+  return `- ${label}: ${entries.join(' ; ')}`;
+}
+
+function summarizeCheckpoint(checkpoint) {
+  const role = String(checkpoint?.role ?? 'worker').trim();
+  const status = String(checkpoint?.status ?? 'unknown').trim();
+  const subtask = summarizeSentence(checkpoint?.currentSubtask ?? checkpoint?.summary ?? 'n/a', 12);
+  const nextAction = summarizeSentence(checkpoint?.reasoning?.nextAction ?? checkpoint?.nextAction ?? 'n/a', 12);
+  return `role=${role} status=${status} subtask=${subtask} next=${nextAction}`;
 }
 
 async function readJsonStrict(filePath) {
@@ -241,6 +317,27 @@ export async function compileTaskContactPack(input) {
     input.includeRecentEvidence,
     asBoolean(configuredContactPacks.includeRecentEvidence, true)
   );
+  const includeLatestState = asBoolean(
+    input.includeLatestState,
+    asBoolean(configuredContactPacks.includeLatestState, true)
+  );
+  const maxRecentCheckpointItems = Math.max(
+    0,
+    asInteger(
+      input.maxRecentCheckpointItems,
+      asInteger(
+        configuredContactPacks.maxRecentCheckpointItems,
+        DEFAULT_MAX_RECENT_CHECKPOINT_ITEMS
+      )
+    )
+  );
+  const maxStateListItems = Math.max(
+    1,
+    asInteger(
+      input.maxStateListItems,
+      asInteger(configuredContactPacks.maxStateListItems, DEFAULT_MAX_STATE_LIST_ITEMS)
+    )
+  );
   const runtimeContextPath =
     String(input.runtimeContextPath ?? config?.context?.runtimeContextPath ?? DEFAULT_RUNTIME_CONTEXT_PATH).trim() ||
     DEFAULT_RUNTIME_CONTEXT_PATH;
@@ -253,6 +350,9 @@ export async function compileTaskContactPack(input) {
     path.join(rootDir, 'docs', 'exec-plans', 'evidence-index', `${planId}.md`),
     path.join(rootDir, 'docs', 'exec-plans', 'active', 'evidence', `${planId}.md`)
   ];
+  const continuityDir = path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'state', planId);
+  const latestStatePath = path.join(continuityDir, 'latest.json');
+  const checkpointsPath = path.join(continuityDir, 'checkpoints.jsonl');
   const evidenceReferences = [];
   if (includeRecentEvidence && maxRecentEvidenceItems > 0) {
     for (const evidencePath of evidenceCandidates) {
@@ -272,6 +372,16 @@ export async function compileTaskContactPack(input) {
         break;
       }
     }
+  }
+
+  let latestState = null;
+  let recentCheckpoints = [];
+  if (includeLatestState) {
+    latestState = normalizeContinuityPayload(await readJsonStrict(latestStatePath).catch(() => null));
+    const checkpointsRaw = await readUtf8IfExists(checkpointsPath);
+    recentCheckpoints = parseJsonLines(checkpointsRaw, maxRecentCheckpointItems).map((entry) =>
+      normalizeContinuityPayload(entry)
+    );
   }
 
   const renderedRules = ruleSource.slice(0, maxPolicyBullets);
@@ -307,6 +417,44 @@ export async function compileTaskContactPack(input) {
   lines.push(`- reasoning: ${resolvedReasoningEffort}`);
   lines.push(`- profile model: ${String(roleProfile?.model ?? 'n/a').trim() || 'n/a'}`);
   lines.push(`- role instructions: ${summarizeSentence(roleProfile?.instructions ?? 'No role instructions configured.', 24)}`);
+  lines.push('');
+  lines.push('## Current State');
+  if (!includeLatestState) {
+    lines.push('- skipped (includeLatestState=false)');
+  } else if (!latestState) {
+    lines.push('- none');
+  } else {
+    lines.push(`- status: ${latestState.status || 'none'}`);
+    lines.push(`- current subtask: ${latestState.currentSubtask || 'none'}`);
+    lines.push(`- next action: ${latestState.reasoning.nextAction || 'none'}`);
+    lines.push(renderSummaryBullet('pending actions', summarizeList(latestState.pendingActions, maxStateListItems, 12)));
+    lines.push(renderSummaryBullet('open questions', summarizeList(latestState.openQuestions, maxStateListItems, 12)));
+    lines.push(renderSummaryBullet('risks', summarizeList(latestState.risks, maxStateListItems, 12)));
+    lines.push(renderSummaryBullet('completed work', summarizeList(latestState.completedWork, maxStateListItems, 12)));
+    lines.push(renderSummaryBullet('accepted facts', summarizeList(latestState.acceptedFacts, maxStateListItems, 12)));
+    const currentArtifacts = summarizeList(
+      [
+        ...latestState.artifacts,
+        ...latestState.evidence.artifactRefs,
+        ...latestState.evidence.logRefs,
+        ...latestState.evidence.validationRefs
+      ],
+      maxStateListItems,
+      12
+    );
+    lines.push(renderSummaryBullet('artifacts', currentArtifacts));
+  }
+  lines.push('');
+  lines.push('## Recent Checkpoints');
+  if (!includeLatestState) {
+    lines.push('- skipped (includeLatestState=false)');
+  } else if (recentCheckpoints.length === 0) {
+    lines.push('- none');
+  } else {
+    for (const checkpoint of recentCheckpoints) {
+      lines.push(`- ${summarizeCheckpoint(checkpoint)}`);
+    }
+  }
   lines.push('');
   lines.push('## Verification Expectations');
   const fastCommands = Array.isArray(validationPolicy.fastIteration) ? validationPolicy.fastIteration : [];
@@ -362,7 +510,10 @@ async function main() {
     runtimeContextPath: options['runtime-context-path'],
     maxPolicyBullets: options['max-policy-bullets'],
     includeRecentEvidence: options['include-recent-evidence'],
-    maxRecentEvidenceItems: options['max-recent-evidence-items']
+    maxRecentEvidenceItems: options['max-recent-evidence-items'],
+    includeLatestState: options['include-latest-state'],
+    maxRecentCheckpointItems: options['max-recent-checkpoint-items'],
+    maxStateListItems: options['max-state-list-items']
   });
   console.log(
     `[contact-pack] wrote ${result.outputPath} (rules=${result.policyRuleCount}, evidence=${result.evidenceCount}, bytes=${result.bytes}).`

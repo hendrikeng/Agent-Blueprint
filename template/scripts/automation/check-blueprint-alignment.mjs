@@ -128,6 +128,13 @@ function ensureScriptSignatures(orchestratorRaw, wrapperRaw) {
       'scripts/automation/executor-wrapper.mjs'
     );
   }
+  if (!wrapperRaw.includes('currentSubtask') || !wrapperRaw.includes('stateDelta')) {
+    addFinding(
+      'MISSING_STRUCTURED_CONTINUITY_PROMPT_POLICY',
+      'scripts/automation/executor-wrapper.mjs must require structured continuity fields in ORCH_RESULT_PATH payloads.',
+      'scripts/automation/executor-wrapper.mjs'
+    );
+  }
 }
 
 function gatherPipelineRoles(config) {
@@ -216,6 +223,13 @@ function ensureConfigPolicy(config, configPath) {
       rel(configPath)
     );
   }
+  if (!promptTemplate.includes('currentSubtask') || !promptTemplate.includes('stateDelta')) {
+    addFinding(
+      'MISSING_STRUCTURED_CONTINUITY_PROMPT_TEMPLATE',
+      "executor.promptTemplate must require structured continuity fields (`currentSubtask`, `nextAction`, `stateDelta`).",
+      rel(configPath)
+    );
+  }
   const contactPacks = config?.context?.contactPacks ?? {};
   if (typeof contactPacks.enabled !== 'boolean') {
     addFinding(
@@ -244,6 +258,29 @@ function ensureConfigPolicy(config, configPath) {
     addFinding(
       'INVALID_CONTACT_PACK_MAX_RECENT_EVIDENCE_ITEMS',
       'context.contactPacks.maxRecentEvidenceItems must be an integer >= 0.',
+      rel(configPath)
+    );
+  }
+  if (typeof contactPacks.includeLatestState !== 'boolean') {
+    addFinding(
+      'INVALID_CONTACT_PACK_INCLUDE_LATEST_STATE',
+      'context.contactPacks.includeLatestState must be a boolean.',
+      rel(configPath)
+    );
+  }
+  const maxRecentCheckpointItems = Number.parseInt(String(contactPacks.maxRecentCheckpointItems ?? ''), 10);
+  if (!Number.isFinite(maxRecentCheckpointItems) || maxRecentCheckpointItems < 0) {
+    addFinding(
+      'INVALID_CONTACT_PACK_MAX_RECENT_CHECKPOINT_ITEMS',
+      'context.contactPacks.maxRecentCheckpointItems must be an integer >= 0.',
+      rel(configPath)
+    );
+  }
+  const maxStateListItems = Number.parseInt(String(contactPacks.maxStateListItems ?? ''), 10);
+  if (!Number.isFinite(maxStateListItems) || maxStateListItems <= 0) {
+    addFinding(
+      'INVALID_CONTACT_PACK_MAX_STATE_LIST_ITEMS',
+      'context.contactPacks.maxStateListItems must be a positive integer.',
       rel(configPath)
     );
   }

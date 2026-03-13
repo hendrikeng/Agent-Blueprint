@@ -36,8 +36,10 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `docs/exec-plans/evidence-index/`: canonical compact evidence indexes by plan ID.
 - `run-state.json`, `run-events.jsonl`, `runtime/`, and `handoffs/` are transient runtime artifacts; they are ignored by dirty preflight.
 - `docs/ops/automation/handoffs/`: per-plan rollover handoff notes.
-- `docs/ops/automation/runtime/`: per-run executor result payloads and the transient active-run lock file (`orchestrator.lock.json`).
+- `docs/ops/automation/runtime/`: per-run executor result payloads, per-plan rolling-context state, and the transient active-run lock file (`orchestrator.lock.json`).
 - `docs/ops/automation/runtime/contacts/<run-id>/<plan-id>/<role>.md`: generated task-scoped contact packs for each role session.
+- `docs/ops/automation/runtime/state/<plan-id>/latest.json`: machine-readable current continuity state for the plan.
+- `docs/ops/automation/runtime/state/<plan-id>/checkpoints.jsonl`: append-only checkpoint log for resumable episodic memory.
 
 ## Source Of Truth
 
@@ -116,7 +118,7 @@ Use the manual path when any of these are true:
   - `"requireResultPayload": true`
   - `"context.runtimeContextPath"` points to compiled runtime instructions (`docs/generated/agent-runtime-context.md` by default).
   - `"context.maxTokens"` sets a hard budget for compiled runtime context size.
-  - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`, `cacheMode`).
+  - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`, `includeLatestState`, `maxRecentCheckpointItems`, `maxStateListItems`, `cacheMode`).
   - `With "context.contactPacks.cacheMode": "run-memory", cache keys include an evidence freshness token (state signature when available, otherwise evidence-index file stat) to avoid stale recent-evidence payloads.`
   - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 120`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.touchScanMode": "adaptive"`, `"logging.touchScanMinHeartbeats": 1`, `"logging.touchScanMaxHeartbeats": 8`, `"logging.touchScanBackoffUnchanged": 2`, `"logging.liveActivity": {"mode": "best-effort", "maxChars": 0, "sampleSeconds": 2, "emitEventLines": false, "redactPatterns": [...]}`, `"logging.workerFirstTouchDeadlineSeconds": 180`, `"logging.workerRetryFirstTouchDeadlineSeconds": 180`, `"logging.workerNoTouchRetryLimit": 1`, and `"logging.workerPendingStreakLimit": 4` tune operator-facing output noise, liveness, live file-touch visibility, provider live-message surfacing, touch-scan cadence, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast; retry sessions inherit the base deadline unless overridden; `workerPendingStreakLimit: 0` disables worker same-role pending streak fail-fast).
   - `"recovery.retryFailed": true`, `"recovery.autoUnblock": true`, and `"recovery.maxFailedRetries": 2` control automatic retry/unblock behavior for resumable plans.
@@ -320,10 +322,12 @@ Executor commands should use these outcomes:
 - If the top-level `Status:` is `validation` (or `completed`), orchestration skips role sessions and runs validation lanes directly.
 - If the top-level `Status:` is neither `validation` nor `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
 - Session boundaries are strict: each planner/explorer/worker/reviewer stage starts a new executor process and can use a role-specific model profile.
-- Each session gets a task-scoped contact pack (`{contact_pack_file}`) and should use it as primary context before expanding scope.
+- Each session gets a task-scoped contact pack (`{contact_pack_file}`) built from runtime policy, task scope, latest continuity state, recent checkpoints, and capped evidence references. Executors should use it as primary context before expanding scope.
 - Executor sessions must always emit a structured result payload (`ORCH_RESULT_PATH`) with a numeric `contextRemaining`; include numeric `contextWindow` and `contextUsedRatio` whenever the provider/runtime can estimate them reliably.
+- Non-terminal executor payloads must also include `currentSubtask`, `nextAction`, and `stateDelta` so orchestration can checkpoint resumable state instead of relying on raw session history.
 - Default context rollover policy is hybrid and proactive: use `contextSoftUsedRatio` to stop widening scope, `contextHardUsedRatio` to force same-role handoff when more work remains, and `contextAbsoluteFloor` as the hard remaining-context backstop (override with `--context-soft-used-ratio`, `--context-hard-used-ratio`, or `--context-absolute-floor`; `--context-threshold` remains a legacy alias for the floor).
 - If an executor exits `0` without payload (or without numeric `contextRemaining` for `completed`/`pending`), orchestrator forces an immediate handoff/rollover to protect coding accuracy.
+- Handoff markdown is now paired with a structured JSON handoff packet; same-run rollovers and later `resume` runs rebuild continuity from the durable checkpoint state, not from the raw transcript.
 - If host-required validations cannot run in the current environment, orchestration keeps the plan `validation`, records a host-validation pending reason, and continues with other executable plans.
 - If validation lanes are required but unconfigured, `run`/`resume` fail immediately (fail-closed).
 - Failed plans are automatically re-queued on `resume` when policy/security/dependency gates are now satisfied (up to `--max-failed-retries`).
@@ -382,6 +386,43 @@ Required result payload (path from `ORCH_RESULT_PATH`):
 {
   "status": "completed",
   "summary": "Implemented acceptance criteria 1 and 2",
+  "currentSubtask": "Finish reviewer closeout and validation handoff",
+  "nextAction": "Set Validation-Ready and hand off to validation lane",
+  "stateDelta": {
+    "completedWork": [
+      "Implemented acceptance criteria 1 and 2"
+    ],
+    "acceptedFacts": [
+      "verify:fast passed after worker edits"
+    ],
+    "decisions": [
+      "Kept public API unchanged"
+    ],
+    "openQuestions": [],
+    "pendingActions": [
+      "Run host-required validation"
+    ],
+    "recentResults": [
+      "Worker stage completed"
+    ],
+    "artifacts": [
+      "docs/ops/automation/runtime/state/example-plan/latest.json"
+    ],
+    "risks": [],
+    "reasoning": {
+      "nextAction": "Run host-required validation",
+      "blockers": [],
+      "rationale": [
+        "Implementation scope is complete"
+      ]
+    },
+    "evidence": {
+      "artifactRefs": [],
+      "extractedFacts": [],
+      "logRefs": [],
+      "validationRefs": []
+    }
+  },
   "contextRemaining": 2100,
   "contextWindow": 128000,
   "contextUsedRatio": 0.9836,

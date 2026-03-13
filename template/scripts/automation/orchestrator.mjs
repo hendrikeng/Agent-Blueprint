@@ -102,6 +102,9 @@ const DEFAULT_CONTACT_PACKS_ENABLED = true;
 const DEFAULT_CONTACT_PACKS_MAX_POLICY_BULLETS = 10;
 const DEFAULT_CONTACT_PACKS_INCLUDE_RECENT_EVIDENCE = true;
 const DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS = 6;
+const DEFAULT_CONTACT_PACKS_INCLUDE_LATEST_STATE = true;
+const DEFAULT_CONTACT_PACKS_MAX_RECENT_CHECKPOINT_ITEMS = 2;
+const DEFAULT_CONTACT_PACKS_MAX_STATE_LIST_ITEMS = 6;
 const DEFAULT_RETRY_FAILED_PLANS = true;
 const DEFAULT_AUTO_UNBLOCK_PLANS = true;
 const DEFAULT_MAX_FAILED_RETRIES = 2;
@@ -193,6 +196,7 @@ const SENSITIVE_KEY_REGEX = /(token|secret|password|passphrase|api[-_]?key|autho
 const ANSI_ESCAPE_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const RUN_MEMORY_PLAN_RECORD_CACHE = new Map();
 const RUN_MEMORY_CONTACT_PACK_CACHE = new Map();
+const ROLLING_CONTEXT_SCHEMA_VERSION = 1;
 
 function usage() {
   console.log(`Usage:
@@ -1291,6 +1295,7 @@ function buildPaths(rootDir) {
     opsAutomationDir,
     handoffDir: path.join(opsAutomationDir, 'handoffs'),
     runtimeDir: path.join(opsAutomationDir, 'runtime'),
+    runtimeStateDir: path.join(opsAutomationDir, 'runtime', 'state'),
     contactPackDir: path.join(opsAutomationDir, 'runtime', 'contacts'),
     parallelWorktreesDir: path.join(opsAutomationDir, 'runtime', 'worktrees'),
     runLockPath: path.join(opsAutomationDir, 'runtime', 'orchestrator.lock.json'),
@@ -1308,6 +1313,7 @@ async function ensureDirectories(paths, dryRun) {
   await fs.mkdir(paths.opsAutomationDir, { recursive: true });
   await fs.mkdir(paths.handoffDir, { recursive: true });
   await fs.mkdir(paths.runtimeDir, { recursive: true });
+  await fs.mkdir(paths.runtimeStateDir, { recursive: true });
   await fs.mkdir(paths.contactPackDir, { recursive: true });
   await fs.mkdir(paths.parallelWorktreesDir, { recursive: true });
   await fs.mkdir(paths.evidenceIndexDir, { recursive: true });
@@ -1353,6 +1359,152 @@ async function appendJsonLine(filePath, payload, dryRun) {
     return;
   }
   await fs.appendFile(filePath, `${JSON.stringify(payload)}\n`, 'utf8');
+}
+
+function trimmedString(value, fallback = '') {
+  const normalized = String(value ?? '').trim();
+  return normalized || fallback;
+}
+
+function stringList(value, maxItems = 8) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.map((entry) => trimmedString(entry)).filter(Boolean))].slice(0, Math.max(0, maxItems));
+}
+
+function renderSummaryBullet(label, values) {
+  const items = Array.isArray(values) ? values.filter(Boolean) : [values].filter(Boolean);
+  return `- ${label}: ${items.length > 0 ? items.join(' ; ') : 'none'}`;
+}
+
+function continuityStateDirForPlan(paths, planId) {
+  return path.join(paths.runtimeStateDir, planId);
+}
+
+function continuityLatestStatePath(paths, planId) {
+  return path.join(continuityStateDirForPlan(paths, planId), 'latest.json');
+}
+
+function continuityCheckpointLogPath(paths, planId) {
+  return path.join(continuityStateDirForPlan(paths, planId), 'checkpoints.jsonl');
+}
+
+function continuityStateArtifactRel(planId) {
+  return toPosix(path.join('docs', 'ops', 'automation', 'runtime', 'state', planId, 'latest.json'));
+}
+
+function continuityCheckpointArtifactRel(planId) {
+  return toPosix(path.join('docs', 'ops', 'automation', 'runtime', 'state', planId, 'checkpoints.jsonl'));
+}
+
+function normalizeContinuitySection(value) {
+  return value && typeof value === 'object' ? value : {};
+}
+
+function normalizeContinuityDelta(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const reasoning = normalizeContinuitySection(source.reasoning);
+  const evidence = normalizeContinuitySection(source.evidence);
+  return {
+    completedWork: stringList(source.completedWork, 10),
+    acceptedFacts: stringList(source.acceptedFacts, 10),
+    decisions: stringList(source.decisions, 10),
+    openQuestions: stringList(source.openQuestions, 10),
+    pendingActions: stringList(source.pendingActions, 10),
+    recentResults: stringList(source.recentResults, 10),
+    artifacts: stringList(source.artifacts, 12),
+    risks: stringList(source.risks, 10),
+    reasoning: {
+      nextAction: trimmedString(source.nextAction ?? reasoning.nextAction),
+      blockers: stringList(reasoning.blockers, 8),
+      rationale: stringList(reasoning.rationale, 8)
+    },
+    evidence: {
+      artifactRefs: stringList(evidence.artifactRefs, 12),
+      extractedFacts: stringList(evidence.extractedFacts, 10),
+      logRefs: stringList(evidence.logRefs, 8),
+      validationRefs: stringList(evidence.validationRefs, 8)
+    }
+  };
+}
+
+function continuityStateFromRecord(plan, checkpoint, existingState = null) {
+  const prior = existingState && typeof existingState === 'object' ? existingState : {};
+  const delta = normalizeContinuityDelta(checkpoint?.stateDelta);
+  const nextAction = trimmedString(
+    checkpoint?.nextAction ??
+      delta.reasoning.nextAction ??
+      checkpoint?.reasoning?.nextAction ??
+      prior?.reasoning?.nextAction
+  );
+  return {
+    schemaVersion: ROLLING_CONTEXT_SCHEMA_VERSION,
+    planId: plan.planId,
+    goal: trimmedString(prior.goal ?? plan.acceptanceCriteria ?? plan.planId, plan.planId),
+    currentSubtask: trimmedString(checkpoint?.currentSubtask ?? prior.currentSubtask),
+    status: trimmedString(checkpoint?.status ?? prior.status),
+    roleCursor: {
+      role: trimmedString(checkpoint?.role ?? prior?.roleCursor?.role, ROLE_WORKER),
+      stageIndex: Math.max(1, asInteger(checkpoint?.stageIndex, asInteger(prior?.roleCursor?.stageIndex, 1))),
+      stageTotal: Math.max(
+        1,
+        asInteger(checkpoint?.stageTotal, asInteger(prior?.roleCursor?.stageTotal, 1))
+      ),
+      session: Math.max(1, asInteger(checkpoint?.session, asInteger(prior?.roleCursor?.session, 1)))
+    },
+    acceptedFacts: stringList([...(prior.acceptedFacts ?? []), ...delta.acceptedFacts], 12),
+    decisions: stringList([...(prior.decisions ?? []), ...delta.decisions], 12),
+    openQuestions: stringList(
+      checkpoint?.status === 'completed'
+        ? delta.openQuestions
+        : [...(prior.openQuestions ?? []), ...delta.openQuestions],
+      12
+    ),
+    pendingActions: stringList(delta.pendingActions.length > 0 ? delta.pendingActions : prior.pendingActions, 12),
+    completedWork: stringList([...(prior.completedWork ?? []), ...delta.completedWork], 12),
+    recentResults: stringList([...(prior.recentResults ?? []), ...delta.recentResults], 12),
+    artifacts: stringList([...(prior.artifacts ?? []), ...delta.artifacts], 16),
+    risks: stringList([...(prior.risks ?? []), ...delta.risks], 12),
+    reasoning: {
+      nextAction,
+      blockers: stringList(delta.reasoning.blockers.length > 0 ? delta.reasoning.blockers : prior?.reasoning?.blockers, 10),
+      rationale: stringList([...(prior?.reasoning?.rationale ?? []), ...delta.reasoning.rationale], 10)
+    },
+    evidence: {
+      artifactRefs: stringList([...(prior?.evidence?.artifactRefs ?? []), ...delta.evidence.artifactRefs], 16),
+      extractedFacts: stringList([...(prior?.evidence?.extractedFacts ?? []), ...delta.evidence.extractedFacts], 12),
+      logRefs: stringList([...(prior?.evidence?.logRefs ?? []), ...delta.evidence.logRefs], 10),
+      validationRefs: stringList(
+        [...(prior?.evidence?.validationRefs ?? []), ...delta.evidence.validationRefs],
+        10
+      )
+    },
+    updatedAt: nowIso()
+  };
+}
+
+async function readLatestContinuityState(paths, planId) {
+  return readJsonIfExists(continuityLatestStatePath(paths, planId), null);
+}
+
+async function persistContinuityCheckpoint(paths, plan, checkpoint, options) {
+  if (options.dryRun) {
+    return null;
+  }
+  const stateDir = continuityStateDirForPlan(paths, plan.planId);
+  await fs.mkdir(stateDir, { recursive: true });
+  const latestPath = continuityLatestStatePath(paths, plan.planId);
+  const checkpointsPath = continuityCheckpointLogPath(paths, plan.planId);
+  const existing = await readLatestContinuityState(paths, plan.planId);
+  const latest = continuityStateFromRecord(plan, checkpoint, existing);
+  await writeJson(latestPath, latest, false);
+  await appendJsonLine(checkpointsPath, checkpoint, false);
+  return {
+    latestPath,
+    checkpointsPath,
+    latest
+  };
 }
 
 function timeoutMsFromSeconds(seconds) {
@@ -2744,6 +2896,21 @@ function resolveRuntimeExecutorOptions(options, config) {
     0,
     asInteger(contactPacks.maxRecentEvidenceItems, DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS)
   );
+  const contactPackIncludeLatestState = asBoolean(
+    contactPacks.includeLatestState,
+    DEFAULT_CONTACT_PACKS_INCLUDE_LATEST_STATE
+  );
+  const contactPackMaxRecentCheckpointItems = Math.max(
+    0,
+    asInteger(
+      contactPacks.maxRecentCheckpointItems,
+      DEFAULT_CONTACT_PACKS_MAX_RECENT_CHECKPOINT_ITEMS
+    )
+  );
+  const contactPackMaxStateListItems = Math.max(
+    1,
+    asInteger(contactPacks.maxStateListItems, DEFAULT_CONTACT_PACKS_MAX_STATE_LIST_ITEMS)
+  );
   const contactPackCacheMode = normalizeContactPackCacheMode(
     contactPacks.cacheMode,
     DEFAULT_CONTACT_PACK_CACHE_MODE
@@ -2808,6 +2975,9 @@ function resolveRuntimeExecutorOptions(options, config) {
     contactPackMaxPolicyBullets,
     contactPackIncludeRecentEvidence,
     contactPackMaxRecentEvidenceItems,
+    contactPackIncludeLatestState,
+    contactPackMaxRecentCheckpointItems,
+    contactPackMaxStateListItems,
     contactPackCacheMode,
     evidenceSessionCurationMode,
     evidenceSessionIndexRefreshMode,
@@ -3445,6 +3615,7 @@ function createInitialState(runId, requestedMode, effectiveMode) {
     },
     validationState: {},
     recoveryState: {},
+    continuationState: {},
     evidenceState: {},
     roleState: {},
     parallelState: {
@@ -3471,6 +3642,10 @@ function normalizePersistedState(state) {
     normalized.validationState && typeof normalized.validationState === 'object' ? normalized.validationState : {};
   normalized.recoveryState =
     normalized.recoveryState && typeof normalized.recoveryState === 'object' ? normalized.recoveryState : {};
+  normalized.continuationState =
+    normalized.continuationState && typeof normalized.continuationState === 'object'
+      ? normalized.continuationState
+      : {};
   normalized.evidenceState =
     normalized.evidenceState && typeof normalized.evidenceState === 'object' ? normalized.evidenceState : {};
   normalized.roleState =
@@ -3630,6 +3805,30 @@ function clearPlanRecoveryState(state, planId) {
     return;
   }
   delete state.recoveryState[planId];
+}
+
+function ensurePlanContinuationState(state, planId) {
+  if (!state.continuationState || typeof state.continuationState !== 'object') {
+    state.continuationState = {};
+  }
+  if (!state.continuationState[planId] || typeof state.continuationState[planId] !== 'object') {
+    state.continuationState[planId] = {
+      rollovers: 0,
+      workerNoTouchRetryCount: 0,
+      workerPendingStreak: 0,
+      readOnlyPendingStreak: 0,
+      lastPendingSignal: null,
+      updatedAt: null
+    };
+  }
+  return state.continuationState[planId];
+}
+
+function clearPlanContinuationState(state, planId) {
+  if (!state.continuationState || typeof state.continuationState !== 'object') {
+    return;
+  }
+  delete state.continuationState[planId];
 }
 
 function ensureEvidenceState(state, planId) {
@@ -4167,7 +4366,13 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     configPath: toPosix(path.relative(paths.rootDir, paths.orchestratorConfigPath)),
     maxPolicyBullets: asInteger(options.contactPackMaxPolicyBullets, DEFAULT_CONTACT_PACKS_MAX_POLICY_BULLETS),
     includeRecentEvidence: asBoolean(options.contactPackIncludeRecentEvidence, DEFAULT_CONTACT_PACKS_INCLUDE_RECENT_EVIDENCE),
-    maxRecentEvidenceItems: asInteger(options.contactPackMaxRecentEvidenceItems, DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS)
+    maxRecentEvidenceItems: asInteger(options.contactPackMaxRecentEvidenceItems, DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS),
+    includeLatestState: asBoolean(options.contactPackIncludeLatestState, DEFAULT_CONTACT_PACKS_INCLUDE_LATEST_STATE),
+    maxRecentCheckpointItems: asInteger(
+      options.contactPackMaxRecentCheckpointItems,
+      DEFAULT_CONTACT_PACKS_MAX_RECENT_CHECKPOINT_ITEMS
+    ),
+    maxStateListItems: asInteger(options.contactPackMaxStateListItems, DEFAULT_CONTACT_PACKS_MAX_STATE_LIST_ITEMS)
   })).digest('hex');
   if (contactPackCacheMode === 'run-memory') {
     const cached = RUN_MEMORY_CONTACT_PACK_CACHE.get(cacheKey);
@@ -4198,7 +4403,10 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     configPath: toPosix(path.relative(paths.rootDir, paths.orchestratorConfigPath)),
     maxPolicyBullets: options.contactPackMaxPolicyBullets,
     includeRecentEvidence: options.contactPackIncludeRecentEvidence,
-    maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems
+    maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems,
+    includeLatestState: options.contactPackIncludeLatestState,
+    maxRecentCheckpointItems: options.contactPackMaxRecentCheckpointItems,
+    maxStateListItems: options.contactPackMaxStateListItems
   });
 
   if (contactPackCacheMode === 'run-memory') {
@@ -4219,6 +4427,93 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
     lineCount: result.lineCount,
     policyRuleCount: result.policyRuleCount,
     evidenceCount: result.evidenceCount
+  };
+}
+
+function meaningfulTouchSamples(touchSummary) {
+  return stringList(Array.isArray(touchSummary?.samples) ? touchSummary.samples : [], 6);
+}
+
+function synthesizeContinuityDelta(plan, sessionContext, summary, reason, sessionLogPath, contactPackFile, touchSummary) {
+  const currentSubtask = trimmedString(
+    summary ?? reason,
+    `Continue ${sessionContext.role ?? ROLE_WORKER} work for ${plan.planId}.`
+  );
+  const nextAction = trimmedString(
+    reason ?? summary,
+    `Load ${contactPackFile} and continue the current ${sessionContext.role ?? ROLE_WORKER} stage.`
+  );
+  const touched = meaningfulTouchSamples(touchSummary);
+  const artifacts = stringList(
+    [
+      contactPackFile,
+      continuityStateArtifactRel(plan.planId),
+      continuityCheckpointArtifactRel(plan.planId),
+      sessionLogPath,
+      ...touched
+    ],
+    10
+  );
+  return {
+    currentSubtask,
+    nextAction,
+    stateDelta: {
+      completedWork: [],
+      acceptedFacts: [],
+      decisions: [],
+      openQuestions: [],
+      pendingActions: [nextAction],
+      recentResults: stringList([summary, reason], 4),
+      artifacts,
+      risks: reason ? [reason] : [],
+      reasoning: {
+        nextAction,
+        blockers: [],
+        rationale: []
+      },
+      evidence: {
+        artifactRefs: touched,
+        extractedFacts: stringList([summary], 4),
+        logRefs: stringList([sessionLogPath], 4),
+        validationRefs: []
+      }
+    }
+  };
+}
+
+function normalizeSessionContinuity(plan, sessionContext, resultPayload, sessionLogPath, contactPackFile, touchSummary) {
+  const currentSubtask = trimmedString(resultPayload?.currentSubtask);
+  const nextAction = trimmedString(resultPayload?.nextAction);
+  const stateDelta = normalizeContinuityDelta(resultPayload?.stateDelta);
+  const hasStructured =
+    Boolean(currentSubtask) &&
+    Boolean(nextAction) &&
+    (
+      stateDelta.pendingActions.length > 0 ||
+      stateDelta.completedWork.length > 0 ||
+      stateDelta.recentResults.length > 0 ||
+      stateDelta.artifacts.length > 0 ||
+      stateDelta.reasoning.nextAction
+    );
+  if (hasStructured) {
+    return {
+      derived: false,
+      currentSubtask,
+      nextAction,
+      stateDelta
+    };
+  }
+  return {
+    derived: true,
+    ...synthesizeContinuityDelta(
+    plan,
+    sessionContext,
+    resultPayload?.summary,
+    resultPayload?.reason,
+    sessionLogPath,
+    contactPackFile,
+    touchSummary
+    )
   };
 }
 
@@ -4595,6 +4890,14 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     contextUsedRatio >= options.contextHardUsedRatio;
 
   if (normalizedStatus === 'pending' && (belowContextFloor || aboveHardContextLimit)) {
+    const continuity = normalizeSessionContinuity(
+      plan,
+      sessionContext,
+      resultPayload,
+      sessionLogPath,
+      contactPackFile,
+      sessionTouchSummary
+    );
     const reasonParts = [];
     if (belowContextFloor) {
       reasonParts.push(
@@ -4613,6 +4916,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       contextRemaining,
       contextWindow,
       contextUsedRatio,
+      currentSubtask: continuity.currentSubtask,
+      nextAction: continuity.nextAction,
+      stateDelta: continuity.stateDelta,
+      continuityDerived: continuity.derived,
       resultPayloadFound: true,
       role,
       provider: roleProfile.provider,
@@ -4621,13 +4928,33 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     });
   }
 
+  const continuity = normalizeSessionContinuity(
+    plan,
+    sessionContext,
+    resultPayload,
+    sessionLogPath,
+    contactPackFile,
+    sessionTouchSummary
+  );
+  const missingStructuredContinuity =
+    (normalizedStatus === 'pending' || normalizedStatus === 'handoff_required') &&
+    continuity.derived;
+  const finalStatus = missingStructuredContinuity ? 'handoff_required' : normalizedStatus;
+  const finalReason = missingStructuredContinuity
+    ? `Executor returned ${normalizedStatus} without structured continuity fields. Rolling over immediately to preserve safe resume state.`
+    : resultPayload.reason ?? null;
+
   return withSessionTouchSummary({
-    status: normalizedStatus,
-    reason: resultPayload.reason ?? null,
+    status: finalStatus,
+    reason: finalReason,
     summary: resultPayload.summary ?? null,
     contextRemaining,
     contextWindow,
     contextUsedRatio,
+    currentSubtask: continuity.currentSubtask,
+    nextAction: continuity.nextAction,
+    stateDelta: continuity.stateDelta,
+    continuityDerived: continuity.derived,
     resultPayloadFound: true,
     role,
     provider: roleProfile.provider,
@@ -6773,14 +7100,49 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
   const stageIndex = asInteger(sessionContext.stageIndex, 1);
   const stageTotal = asInteger(sessionContext.stageTotal, 1);
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const fileName = `${stamp}-session-${sessionNumber}.md`;
-  const targetPath = path.join(paths.handoffDir, plan.planId, fileName);
+  const markdownName = `${stamp}-session-${sessionNumber}.md`;
+  const jsonName = `${stamp}-session-${sessionNumber}.json`;
+  const targetPath = path.join(paths.handoffDir, plan.planId, markdownName);
+  const jsonPath = path.join(paths.handoffDir, plan.planId, jsonName);
+  const stateDelta = normalizeContinuityDelta(sessionContext.stateDelta);
+  const handoffPacket = {
+    schemaVersion: ROLLING_CONTEXT_SCHEMA_VERSION,
+    planId: plan.planId,
+    runId: state.runId,
+    session: sessionNumber,
+    role,
+    stageIndex,
+    stageTotal,
+    mode: state.effectiveMode,
+    createdAt: nowIso(),
+    status: trimmedString(sessionContext.status, 'handoff_required'),
+    reason: reason || 'unspecified',
+    summary: summary || 'Executor requested rollover without additional summary.',
+    currentSubtask: trimmedString(sessionContext.currentSubtask),
+    nextAction: trimmedString(sessionContext.nextAction ?? stateDelta.reasoning.nextAction),
+    contextRemaining:
+      typeof sessionContext.contextRemaining === 'number' && Number.isFinite(sessionContext.contextRemaining)
+        ? sessionContext.contextRemaining
+        : null,
+    contextWindow:
+      typeof sessionContext.contextWindow === 'number' && Number.isFinite(sessionContext.contextWindow)
+        ? sessionContext.contextWindow
+        : null,
+    contextUsedRatio:
+      typeof sessionContext.contextUsedRatio === 'number' && Number.isFinite(sessionContext.contextUsedRatio)
+        ? sessionContext.contextUsedRatio
+        : null,
+    contactPackFile: trimmedString(sessionContext.contactPackFile),
+    sessionLogPath: trimmedString(sessionContext.sessionLogPath),
+    stateDelta
+  };
 
   if (options.dryRun) {
-    return targetPath;
+    return { markdownPath: targetPath, jsonPath, packet: handoffPacket };
   }
 
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  await writeJson(jsonPath, handoffPacket, false);
 
   const content = [
     `# Handoff ${plan.planId}`,
@@ -6795,10 +7157,26 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
     `- Mode: ${state.effectiveMode}`,
     `- Created At: ${nowIso()}`,
     `- Reason: ${reason || 'unspecified'}`,
+    `- Current Subtask: ${handoffPacket.currentSubtask || 'none'}`,
+    `- Next Action: ${handoffPacket.nextAction || 'none'}`,
+    `- Contact Pack: ${handoffPacket.contactPackFile || 'none'}`,
+    `- Session Log: ${handoffPacket.sessionLogPath || 'none'}`,
     '',
     '## Summary',
     '',
     summary || 'Executor requested rollover without additional summary.',
+    '',
+    '## Structured State',
+    '',
+    renderSummaryBullet('pending actions', stateDelta.pendingActions),
+    renderSummaryBullet('open questions', stateDelta.openQuestions),
+    renderSummaryBullet('risks', stateDelta.risks),
+    renderSummaryBullet('artifacts', stringList([
+      ...stateDelta.artifacts,
+      ...stateDelta.evidence.artifactRefs,
+      ...stateDelta.evidence.logRefs,
+      ...stateDelta.evidence.validationRefs
+    ], 8)),
     '',
     '## Next Session Checklist',
     '',
@@ -6810,7 +7188,58 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
   ].join('\n');
 
   await fs.writeFile(targetPath, content, 'utf8');
-  return targetPath;
+  return { markdownPath: targetPath, jsonPath, packet: handoffPacket };
+}
+
+function buildSessionCheckpointRecord(plan, state, sessionNumber, sessionResult, sessionContext = {}) {
+  const role = normalizeRoleName(sessionContext.role, ROLE_WORKER);
+  const stageIndex = asInteger(sessionContext.stageIndex, 1);
+  const stageTotal = asInteger(sessionContext.stageTotal, 1);
+  const synthesized = synthesizeContinuityDelta(
+    plan,
+    { role },
+    sessionResult?.summary,
+    sessionResult?.reason,
+    sessionResult?.sessionLogPath,
+    sessionResult?.contactPackFile,
+    sessionResult?.touchSummary
+  );
+  const normalized = {
+    currentSubtask: trimmedString(sessionResult?.currentSubtask ?? synthesized.currentSubtask),
+    nextAction: trimmedString(sessionResult?.nextAction ?? synthesized.nextAction),
+    stateDelta: normalizeContinuityDelta(sessionResult?.stateDelta ?? synthesized.stateDelta)
+  };
+  return {
+    schemaVersion: ROLLING_CONTEXT_SCHEMA_VERSION,
+    createdAt: nowIso(),
+    planId: plan.planId,
+    runId: state.runId,
+    session: sessionNumber,
+    role,
+    stageIndex,
+    stageTotal,
+    status: trimmedString(sessionResult?.status, 'completed'),
+    summary: trimmedString(sessionResult?.summary),
+    reason: trimmedString(sessionResult?.reason),
+    currentSubtask: normalized.currentSubtask,
+    nextAction: normalized.nextAction,
+    contextRemaining:
+      typeof sessionResult?.contextRemaining === 'number' && Number.isFinite(sessionResult.contextRemaining)
+        ? sessionResult.contextRemaining
+        : null,
+    contextWindow:
+      typeof sessionResult?.contextWindow === 'number' && Number.isFinite(sessionResult.contextWindow)
+        ? sessionResult.contextWindow
+        : null,
+    contextUsedRatio:
+      typeof sessionResult?.contextUsedRatio === 'number' && Number.isFinite(sessionResult.contextUsedRatio)
+        ? sessionResult.contextUsedRatio
+        : null,
+    contactPackFile: trimmedString(sessionResult?.contactPackFile),
+    sessionLogPath: trimmedString(sessionResult?.sessionLogPath),
+    touchSamples: meaningfulTouchSamples(sessionResult?.touchSummary),
+    stateDelta: normalized.stateDelta
+  };
 }
 
 async function announceStageReuse(paths, state, plan, roleState, options) {
@@ -7156,6 +7585,7 @@ async function runValidationAndFinalize(plan, paths, state, options, config, ass
     }
   }
 
+  clearPlanContinuationState(state, plan.planId);
   return {
     outcome: 'completed',
     reason: 'completed',
@@ -7194,12 +7624,24 @@ async function processPlan(plan, paths, state, options, config) {
   const roleConfig = resolveRoleOrchestration(config);
   const planStartedAt = nowIso();
   const planStartedAtMs = Date.now();
+  const continuationState = ensurePlanContinuationState(state, plan.planId);
   let firstWorkerEditSeconds = null;
-  let rollovers = 0;
-  let lastPendingSignal = null;
-  let workerNoTouchRetryCount = 0;
-  let workerPendingStreak = 0;
-  let readOnlyPendingStreak = 0;
+  let rollovers = Math.max(0, asInteger(continuationState.rollovers, 0));
+  let lastPendingSignal = trimmedString(continuationState.lastPendingSignal, null);
+  let workerNoTouchRetryCount = Math.max(0, asInteger(continuationState.workerNoTouchRetryCount, 0));
+  let workerPendingStreak = Math.max(0, asInteger(continuationState.workerPendingStreak, 0));
+  let readOnlyPendingStreak = Math.max(0, asInteger(continuationState.readOnlyPendingStreak, 0));
+  const storeContinuationState = () => {
+    state.continuationState[plan.planId] = {
+      ...continuationState,
+      rollovers,
+      workerNoTouchRetryCount,
+      workerPendingStreak,
+      readOnlyPendingStreak,
+      lastPendingSignal,
+      updatedAt: nowIso()
+    };
+  };
   let roleState = ensureRoleState(state, plan, lastAssessment, resolvePipelineStages(lastAssessment, config), config);
   await announceStageReuse(paths, state, plan, roleState, options);
 
@@ -7363,9 +7805,17 @@ async function processPlan(plan, paths, state, options, config) {
         }
       }
     }
+    const checkpointRecord = buildSessionCheckpointRecord(
+      plan,
+      state,
+      session,
+      sessionResult,
+      { role: currentRole, stageIndex, stageTotal }
+    );
+    await persistContinuityCheckpoint(paths, plan, checkpointRecord, options);
 
     if (sessionResult.status === 'handoff_required') {
-      const handoffPath = await writeHandoff(
+      const handoffPaths = await writeHandoff(
         paths,
         state,
         plan,
@@ -7373,7 +7823,20 @@ async function processPlan(plan, paths, state, options, config) {
         sessionResult.reason,
         sessionResult.summary,
         options,
-        { role: currentRole, stageIndex, stageTotal }
+        {
+          role: currentRole,
+          stageIndex,
+          stageTotal,
+          status: sessionResult.status,
+          currentSubtask: checkpointRecord.currentSubtask,
+          nextAction: checkpointRecord.nextAction,
+          stateDelta: checkpointRecord.stateDelta,
+          sessionLogPath: sessionResult.sessionLogPath,
+          contactPackFile: sessionResult.contactPackFile,
+          contextRemaining: sessionResult.contextRemaining,
+          contextWindow: sessionResult.contextWindow,
+          contextUsedRatio: sessionResult.contextUsedRatio
+        }
       );
       state.stats.handoffs += 1;
       await logEvent(paths, state, 'handoff_created', {
@@ -7382,14 +7845,21 @@ async function processPlan(plan, paths, state, options, config) {
         role: currentRole,
         stageIndex,
         stageTotal,
-        handoffPath: toPosix(path.relative(paths.rootDir, handoffPath)),
+        handoffPath: toPosix(path.relative(paths.rootDir, handoffPaths.markdownPath)),
+        handoffJsonPath: toPosix(path.relative(paths.rootDir, handoffPaths.jsonPath)),
         reason: sessionResult.reason ?? 'executor-requested'
       }, options.dryRun);
-      progressLog(options, `handoff created for ${plan.planId}: ${toPosix(path.relative(paths.rootDir, handoffPath))}`);
+      progressLog(
+        options,
+        `handoff created for ${plan.planId}: ${toPosix(path.relative(paths.rootDir, handoffPaths.markdownPath))}`
+      );
 
       rollovers += 1;
+      storeContinuationState();
+      await saveState(paths, state, options.dryRun);
       if (rollovers > maxRollovers) {
         await setPlanStatus(plan.filePath, 'failed', options.dryRun);
+        clearPlanContinuationState(state, plan.planId);
         return {
           outcome: 'failed',
           reason: `Maximum rollovers exceeded (${maxRollovers})`
@@ -7401,6 +7871,7 @@ async function processPlan(plan, paths, state, options, config) {
 
     if (sessionResult.status === 'blocked') {
       await setPlanStatus(plan.filePath, 'blocked', options.dryRun);
+      clearPlanContinuationState(state, plan.planId);
       await logEvent(paths, state, 'session_blocked', {
         planId: plan.planId,
         session,
@@ -7420,6 +7891,7 @@ async function processPlan(plan, paths, state, options, config) {
 
     if (sessionResult.status === 'failed') {
       await setPlanStatus(plan.filePath, 'failed', options.dryRun);
+      clearPlanContinuationState(state, plan.planId);
       progressLog(options, `session failed for ${plan.planId}: ${sessionResult.reason ?? 'executor failed'}`);
       return {
         outcome: 'failed',
@@ -7465,6 +7937,7 @@ async function processPlan(plan, paths, state, options, config) {
           }
         }
 
+        clearPlanContinuationState(state, plan.planId);
         return {
           outcome: 'completed',
           reason: 'completed',
@@ -7566,6 +8039,8 @@ async function processPlan(plan, paths, state, options, config) {
           reason: budgetReason
         }, options.dryRun);
         progressLog(options, `session stage-budget fail-fast ${plan.planId}: ${budgetReason}`);
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: budgetReason,
@@ -7604,6 +8079,8 @@ async function processPlan(plan, paths, state, options, config) {
         lastPendingSignal = null;
         workerPendingStreak = 0;
         readOnlyPendingStreak = 0;
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         continue;
       }
       if (workerNeedsMeaningfulTouch) {
@@ -7624,6 +8101,8 @@ async function processPlan(plan, paths, state, options, config) {
           reason: failFastReason
         }, options.dryRun);
         progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: failFastReason,
@@ -7665,6 +8144,8 @@ async function processPlan(plan, paths, state, options, config) {
           reason: failFastReason
         }, options.dryRun);
         progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: failFastReason,
@@ -7691,6 +8172,8 @@ async function processPlan(plan, paths, state, options, config) {
           reason: failFastReason
         }, options.dryRun);
         progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: failFastReason,
@@ -7709,6 +8192,8 @@ async function processPlan(plan, paths, state, options, config) {
           reason: failFastReason
         }, options.dryRun);
         progressLog(options, `session fail-fast ${plan.planId}: ${failFastReason}`);
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: failFastReason,
@@ -7718,8 +8203,11 @@ async function processPlan(plan, paths, state, options, config) {
       lastPendingSignal = nextRole === currentRole ? signal : null;
       setRoleStateToRole(roleState, nextRole);
       state.roleState[plan.planId] = roleState;
+      storeContinuationState();
       await saveState(paths, state, options.dryRun);
       if (session >= maxSessionsPerPlan) {
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: `Maximum sessions reached without completion (${maxSessionsPerPlan}). ${pendingReason}`,
@@ -7746,6 +8234,7 @@ async function processPlan(plan, paths, state, options, config) {
     workerNoTouchRetryCount = 0;
     workerPendingStreak = 0;
     readOnlyPendingStreak = 0;
+    storeContinuationState();
 
     advanceRoleState(roleState, currentRole);
     state.roleState[plan.planId] = roleState;
@@ -7800,6 +8289,8 @@ async function processPlan(plan, paths, state, options, config) {
       });
 
       if (sessionResult.resultPayloadFound === false) {
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: 'Executor produced no structured result payload. Deferring to next run to prevent repeated no-signal loops.',
@@ -7808,6 +8299,8 @@ async function processPlan(plan, paths, state, options, config) {
       }
 
       if (session >= maxSessionsPerPlan) {
+        storeContinuationState();
+        await saveState(paths, state, options.dryRun);
         return {
           outcome: 'pending',
           reason: `Maximum sessions reached without completion (${maxSessionsPerPlan}). ${completionGate.reason}`,
@@ -7817,6 +8310,8 @@ async function processPlan(plan, paths, state, options, config) {
 
       resetRoleStateToImplementation(roleState);
       state.roleState[plan.planId] = roleState;
+      storeContinuationState();
+      await saveState(paths, state, options.dryRun);
 
       await logEvent(paths, state, 'session_continued', {
         planId: plan.planId,
@@ -7843,6 +8338,8 @@ async function processPlan(plan, paths, state, options, config) {
     });
   }
 
+  storeContinuationState();
+  await saveState(paths, state, options.dryRun);
   return {
     outcome: 'pending',
     reason: `Maximum sessions reached without completion (${maxSessionsPerPlan}).`,
@@ -7998,6 +8495,7 @@ async function runLoop(paths, state, options, config, runMode) {
     if (outcome.outcome === 'completed') {
       delete state.roleState[nextPlan.planId];
       clearPlanRecoveryState(state, nextPlan.planId);
+      clearPlanContinuationState(state, nextPlan.planId);
       if (!state.completedPlanIds.includes(nextPlan.planId)) {
         state.completedPlanIds.push(nextPlan.planId);
       }
@@ -8009,6 +8507,7 @@ async function runLoop(paths, state, options, config, runMode) {
       }, options.dryRun);
       progressLog(options, `plan completed ${nextPlan.planId}`);
     } else if (outcome.outcome === 'blocked') {
+      clearPlanContinuationState(state, nextPlan.planId);
       const nextSteps = deriveOutcomeNextSteps(
         nextPlan,
         outcome,
@@ -8057,6 +8556,7 @@ async function runLoop(paths, state, options, config, runMode) {
         outcome.riskTier ?? nextPlanRisk.effectiveRiskTier
       );
       delete state.roleState[nextPlan.planId];
+      clearPlanContinuationState(state, nextPlan.planId);
       registerPlanFailureAttempt(state, nextPlan.planId, outcome.reason ?? 'unknown failure');
       if (!state.failedPlanIds.includes(nextPlan.planId)) {
         state.failedPlanIds.push(nextPlan.planId);
@@ -8854,6 +9354,9 @@ async function runCommand(paths, options) {
           maxPolicyBullets: options.contactPackMaxPolicyBullets,
           includeRecentEvidence: options.contactPackIncludeRecentEvidence,
           maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems,
+          includeLatestState: options.contactPackIncludeLatestState,
+          maxRecentCheckpointItems: options.contactPackMaxRecentCheckpointItems,
+          maxStateListItems: options.contactPackMaxStateListItems,
           cacheMode: options.contactPackCacheMode
         }
       },
@@ -8983,6 +9486,9 @@ async function resumeCommand(paths, options) {
           maxPolicyBullets: options.contactPackMaxPolicyBullets,
           includeRecentEvidence: options.contactPackIncludeRecentEvidence,
           maxRecentEvidenceItems: options.contactPackMaxRecentEvidenceItems,
+          includeLatestState: options.contactPackIncludeLatestState,
+          maxRecentCheckpointItems: options.contactPackMaxRecentCheckpointItems,
+          maxStateListItems: options.contactPackMaxStateListItems,
           cacheMode: options.contactPackCacheMode
         }
       },
