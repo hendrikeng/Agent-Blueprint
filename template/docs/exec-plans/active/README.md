@@ -14,6 +14,7 @@ Each active plan must include:
 - Explicit acceptance criteria before implementation begins.
 - `## Must-Land Checklist` with the exact completion contract for the current plan.
 - Scope separation via `## Already-True Baseline` and `## Deferred Follow-Ons` when the plan references broader target state.
+- `## Prior Completed Plan Reconciliation` when the active plan is a strategic phase or other major current-state reset that overlaps earlier completed plans.
 
 ## Session Retention
 

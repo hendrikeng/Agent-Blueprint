@@ -27,6 +27,7 @@ Each future blueprint must also include these scoped execution sections:
 - `## Must-Land Checklist`
 - `## Deferred Follow-Ons`
 - `## Master Plan Coverage` or `## Capability Coverage Matrix`
+- `## Prior Completed Plan Reconciliation`
 - `## Promotion Blockers`
 
 Optional metadata:
@@ -51,6 +52,7 @@ Create or update a future blueprint as `Status: draft` only when these checks pa
 - [ ] `## Must-Land Checklist` exists and every checkbox item is executable within one promoted plan.
 - [ ] `## Already-True Baseline` and `## Deferred Follow-Ons` keep non-plan scope out of the must-land checklist.
 - [ ] `## Master Plan Coverage` or `## Capability Coverage Matrix` explicitly maps upstream strategy/capabilities into `shipped now`, `this phase`, `later phase`, or `non-goal`.
+- [ ] `## Prior Completed Plan Reconciliation` classifies relevant completed plans as `kept-as-baseline`, `kept-but-refactored`, `superseded`, `obsolete`, or `reopened`.
 - [ ] `## Promotion Blockers` lists the unresolved decisions, approvals, or external gates that still block safe promotion.
 - [ ] `npm run plans:verify` passes.
 
@@ -61,6 +63,7 @@ Set `Status: ready-for-promotion` only when these checks pass:
 - [ ] At least one executable slice is defined with clear entry and exit criteria.
 - [ ] `## Must-Land Checklist` is the exact completion contract for the promoted plan.
 - [ ] `## Master Plan Coverage` or `## Capability Coverage Matrix` proves nothing from upstream strategy is silently omitted.
+- [ ] `## Prior Completed Plan Reconciliation` proves older completed work in the same area is either preserved, refactored, superseded, or intentionally retired.
 - [ ] `## Promotion Blockers` makes the remaining gating decisions explicit.
 - [ ] Open questions/blockers are either resolved or explicitly listed.
 - [ ] Validation path is clear (`verify:fast` during implementation, `verify:full` before completion).
@@ -74,3 +77,20 @@ Set `Status: ready-for-promotion` only when these checks pass:
 1. `draft` stays in `docs/future/`.
 2. `ready-for-promotion` is eligible for automation promotion into `docs/exec-plans/active/`.
 3. Once promoted, the blueprint file is moved from `docs/future/` into `docs/exec-plans/active/`.
+
+## Reconciliation Guidance
+
+Use `## Prior Completed Plan Reconciliation` to prevent two failure modes:
+
+- shipped behavior disappearing because a future blueprint forgot to mention it
+- obsolete behavior returning because an old completed plan was treated as still-current by default
+
+List only the relevant completed plans, not every historical plan. Classify each one with a short rationale:
+
+- `kept-as-baseline`
+- `kept-but-refactored`
+- `superseded`
+- `obsolete`
+- `reopened`
+
+Use `node ./scripts/automation/suggest-plan-reconciliation.mjs --plan-file <path>` to generate a metadata-overlap candidate list before reviewer signoff.

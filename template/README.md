@@ -139,7 +139,7 @@ Start with:
 
 Future blueprint promotion rule:
 
-- Before setting `Status: ready-for-promotion`, add `## Master Plan Coverage` or `## Capability Coverage Matrix`, add `## Promotion Blockers`, and run `npm run plans:verify`.
+- Before setting `Status: ready-for-promotion`, add `## Master Plan Coverage` or `## Capability Coverage Matrix`, add `## Prior Completed Plan Reconciliation`, add `## Promotion Blockers`, and run `npm run plans:verify`.
 - Resume supervised run loop: `npm run automation:resume:grind`
 - Resume supervised run loop with medium enabled: `npm run automation:resume:grind:medium`
 - Resume supervised run loop with medium+high enabled: `npm run automation:resume:grind:high`

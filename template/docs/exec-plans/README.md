@@ -37,6 +37,7 @@ Every executable plan must also include:
 - `## Must-Land Checklist`: markdown checkboxes for the exact deliverables this plan must land before validation/completion.
 - `## Already-True Baseline`: facts that are already true before the plan starts.
 - `## Deferred Follow-Ons`: broader target state or later-phase items that are intentionally not part of this plan's completion gate.
+- `## Prior Completed Plan Reconciliation`: required for future blueprints and strategic active phase plans so overlapping completed plans are classified instead of silently assumed.
 
 ## Status Conventions
 
@@ -52,4 +53,4 @@ Every executable plan must also include:
 5. Point `Done-Evidence` to canonical references under `evidence-index/`.
 6. Keep tech debt references current.
 
-Do not use weak acceptance wording such as `at minimum`. If a plan needs staged delivery, keep the current plan's concrete work in `## Must-Land Checklist` and move everything else into `## Deferred Follow-Ons`.
+Do not use weak acceptance wording such as `at minimum`. If a plan needs staged delivery, keep the current plan's concrete work in `## Must-Land Checklist` and move everything else into `## Deferred Follow-Ons`. For future blueprints and strategic phase plans, classify relevant historical completed plans in `## Prior Completed Plan Reconciliation` before promotion or validation.

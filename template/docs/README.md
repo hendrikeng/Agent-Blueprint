@@ -35,3 +35,4 @@ Source of Truth: This document.
 - Keep docs concise, canonical, and linked from `AGENTS.md`/`README.md`/`docs/index.md`.
 - Update docs in the same change as behavior or boundary changes.
 - Prefer canonical docs over ad-hoc notes.
+- When updating strategic plans, keep upstream capability coverage and prior completed-plan reconciliation explicit instead of relying on implicit history.

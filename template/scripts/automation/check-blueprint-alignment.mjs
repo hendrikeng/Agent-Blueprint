@@ -121,6 +121,13 @@ function ensureScriptSignatures(orchestratorRaw, wrapperRaw) {
       'scripts/automation/executor-wrapper.mjs'
     );
   }
+  if (!wrapperRaw.includes('Prior Completed Plan Reconciliation')) {
+    addFinding(
+      'MISSING_RECONCILIATION_PROMPT_POLICY',
+      "scripts/automation/executor-wrapper.mjs must instruct executors to honor '## Prior Completed Plan Reconciliation' for future blueprints and strategic phase plans.",
+      'scripts/automation/executor-wrapper.mjs'
+    );
+  }
 }
 
 function gatherPipelineRoles(config) {
@@ -199,6 +206,13 @@ function ensureConfigPolicy(config, configPath) {
     addFinding(
       'MISSING_MUST_LAND_PROMPT_TEMPLATE',
       "executor.promptTemplate must mention '## Must-Land Checklist' completion policy.",
+      rel(configPath)
+    );
+  }
+  if (!promptTemplate.includes('Prior Completed Plan Reconciliation')) {
+    addFinding(
+      'MISSING_RECONCILIATION_PROMPT_TEMPLATE',
+      "executor.promptTemplate must mention '## Prior Completed Plan Reconciliation' policy.",
       rel(configPath)
     );
   }

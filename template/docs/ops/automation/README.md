@@ -47,6 +47,7 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `docs/exec-plans/evidence-index/`: canonical compact evidence references by plan ID.
 - `docs/product-specs/current-state.md`: product-facing delivery timeline via `Automated Delivery Log`.
 - `## Must-Land Checklist` inside each plan is the executable completion contract; broader vision belongs in `## Deferred Follow-Ons`, not in completion gating.
+- Future blueprints and strategic active phase plans must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
 
 ## Orchestrated vs Manual Execution
 
@@ -274,7 +275,7 @@ Start examples:
 
 Future blueprint promotion quick rule:
 
-- Before setting `Status: ready-for-promotion`, require `## Master Plan Coverage` or `## Capability Coverage Matrix`, require `## Promotion Blockers`, and run `npm run plans:verify`.
+- Before setting `Status: ready-for-promotion`, require `## Master Plan Coverage` or `## Capability Coverage Matrix`, require `## Prior Completed Plan Reconciliation`, require `## Promotion Blockers`, and run `npm run plans:verify`.
 
 Pretty output example:
 
@@ -346,6 +347,7 @@ Executor commands should use these outcomes:
 - `Status: validation` on its own is not enough for validation fast-path; reviewer closeout should set `Validation-Ready` and `Status: validation` together.
 - Validation/completion is blocked when any `## Must-Land Checklist` checkbox remains unchecked.
 - Plans that discuss broader target state must separate current facts into `## Already-True Baseline` and later work into `## Deferred Follow-Ons`; only `## Must-Land Checklist` is executable scope.
+- Future blueprints and active phase plans fail plan verification when `## Prior Completed Plan Reconciliation` is missing.
 - If final completion criteria are not yet met after reviewer/worker, orchestrator resets stage progression to `worker` and continues until completion gates pass.
 - Reviewer sessions that clearly indicate host validation is the only remaining gate are auto-promoted to `Status: validation` to avoid worker/reviewer churn.
 - The active role is passed to executors via `ORCH_ROLE` and `--role {role}`.

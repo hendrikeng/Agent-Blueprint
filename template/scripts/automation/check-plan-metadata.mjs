@@ -31,6 +31,7 @@ const MUST_LAND_SECTION = 'Must-Land Checklist';
 const DEFERRED_SECTION = 'Deferred Follow-Ons';
 const BASELINE_SECTION = 'Already-True Baseline';
 const PROMOTION_BLOCKERS_SECTION = 'Promotion Blockers';
+const RECONCILIATION_SECTION = 'Prior Completed Plan Reconciliation';
 const COVERAGE_SECTION_TITLES = ['Master Plan Coverage', 'Capability Coverage Matrix'];
 
 function addFinding(code, message, filePath) {
@@ -231,6 +232,9 @@ async function scanPhase(phase, directoryPath) {
     const incompleteMustLandItems = uncheckedCheckboxLines(mustLandItems);
     const promotionBlockersBody = sectionBody(content, PROMOTION_BLOCKERS_SECTION);
     const coverageSection = firstSectionBody(content, COVERAGE_SECTION_TITLES);
+    const reconciliationBody = sectionBody(content, RECONCILIATION_SECTION);
+    const reconciliationRequired = phase === 'future'
+      || (phase === 'active' && /^phase-\d+(?:-|$)/.test(inferredPlanId ?? ''));
 
     const mustLandRequired = phase === 'future' || phase === 'active';
 
@@ -260,6 +264,14 @@ async function scanPhase(phase, directoryPath) {
       addFinding(
         'MISSING_PROMOTION_BLOCKERS_SECTION',
         `Future blueprint must include '## ${PROMOTION_BLOCKERS_SECTION}' so promotion readiness and unresolved gates are explicit.`,
+        rel
+      );
+    }
+
+    if (reconciliationRequired && !reconciliationBody) {
+      addFinding(
+        'MISSING_RECONCILIATION_SECTION',
+        `Plan must include '## ${RECONCILIATION_SECTION}' so relevant completed plans are explicitly classified as kept, refactored, superseded, obsolete, or reopened.`,
         rel
       );
     }
@@ -366,6 +378,14 @@ async function scanPhase(phase, directoryPath) {
       addFinding(
         'READY_FUTURE_WITHOUT_PROMOTION_BLOCKERS',
         `Future blueprint set to 'ready-for-promotion' must include '## ${PROMOTION_BLOCKERS_SECTION}'`,
+        rel
+      );
+    }
+
+    if (phase === 'future' && status === 'ready-for-promotion' && !reconciliationBody) {
+      addFinding(
+        'READY_FUTURE_WITHOUT_RECONCILIATION',
+        `Future blueprint set to 'ready-for-promotion' must include '## ${RECONCILIATION_SECTION}'`,
         rel
       );
     }
