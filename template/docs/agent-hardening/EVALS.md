@@ -8,6 +8,7 @@ Source of Truth: This document.
 ## Eval Lifecycle
 
 - Define a stable set of golden tasks that represent high-risk and high-value workflows.
+- Maintain a dedicated continuity suite that interrupts work mid-task and scores resume quality from checkpoint/contact-pack state only.
 - Track pass/fail outcomes per model/runtime change.
 - Treat eval regressions as defects, not documentation-only issues.
 
@@ -23,12 +24,15 @@ Source of Truth: This document.
 - No known high-severity regressions in golden tasks.
 - New high-severity failure classes block release until mitigated or explicitly accepted in writing.
 - Changes to critical flows require updated eval coverage in the same change.
+- Continuity fixture suite must pass before merge; continuity dogfood runs are reported when configured but are not required for local template verification.
 
 ## Generated Artifact Contract
 
 - Config source of truth: `docs/agent-hardening/evals.config.json`.
 - Generated report artifact: `docs/generated/evals-report.json`.
+- Continuity detail artifact: `docs/generated/continuity-evals-report.json`.
 - Verifier command: `npm run eval:verify`.
+- Continuity runner command: `npm run eval:continuity`.
 - Required report fields:
   - `generatedAtUtc`
   - `summary.total`, `summary.passed`, `summary.failed`, `summary.passRate`
@@ -40,3 +44,8 @@ Source of Truth: This document.
   - Pass-rate must satisfy `minimumPassRate`.
   - Open critical/high regressions must be at or below configured maximums.
   - Required suite IDs/statuses must be present and valid.
+- Continuity gate policy:
+  - Fixture scenarios score correctness, context carryover, duplicate-work avoidance, and handoff quality.
+  - Continuity report freshness must satisfy `maxAgeDays`.
+  - Continuity pass-rate must satisfy `continuityMinimumPassRate`.
+  - Required continuity suite IDs/statuses must be present and valid.

@@ -159,7 +159,8 @@ function buildCommandSet(changedFiles) {
   const changedHardening = anyMatch(changedFiles, (file) => (
     file.startsWith('docs/agent-hardening/') ||
     file.startsWith('scripts/agent-hardening/') ||
-    file === 'docs/generated/evals-report.json'
+    file === 'docs/generated/evals-report.json' ||
+    file === 'docs/generated/continuity-evals-report.json'
   ));
   if (changedHardening) {
     selected.add('node ./scripts/agent-hardening/check-agent-hardening.mjs');
@@ -170,10 +171,12 @@ function buildCommandSet(changedFiles) {
     file.startsWith('docs/ops/automation/') ||
     file.startsWith('scripts/automation/') ||
     file === 'package.scripts.fragment.json' ||
-    file === 'package.json'
+    file === 'package.json' ||
+    file === 'docs/generated/run-outcomes.json'
   ));
   if (changedAutomation) {
     selected.add('node ./scripts/automation/check-blueprint-alignment.mjs');
+    selected.add('node ./scripts/automation/check-outcomes-thresholds.mjs --warn-only');
   }
 
   const changedPlanContracts = anyMatch(changedFiles, (file) => (

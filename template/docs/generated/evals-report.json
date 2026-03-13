@@ -3,10 +3,10 @@
   "provider": "{{EVAL_PROVIDER}}",
   "model": "{{EVAL_MODEL_ID}}",
   "summary": {
-    "total": 20,
-    "passed": 19,
+    "total": 24,
+    "passed": 23,
     "failed": 1,
-    "passRate": 0.95
+    "passRate": 0.9583
   },
   "regressions": {
     "criticalOpen": 0,
@@ -26,10 +26,18 @@
       "total": 8,
       "passed": 7,
       "failed": 1
+    },
+    {
+      "id": "continuity-resume",
+      "status": "pass",
+      "total": 4,
+      "passed": 4,
+      "failed": 0
     }
   ],
   "evidence": [
     "docs/agent-hardening/EVALS.md",
+    "docs/generated/continuity-evals-report.json",
     "{{EVAL_EVIDENCE_PATH_1}}"
   ]
 }

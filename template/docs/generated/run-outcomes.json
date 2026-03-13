@@ -1,9 +1,11 @@
 {
-  "generatedAt": "2026-03-13T22:08:57.455Z",
+  "generatedAt": "2026-03-13T22:43:31.852Z",
   "source": {
     "eventsPath": "docs/ops/automation/run-events.jsonl",
     "outputPath": "docs/generated/run-outcomes.json",
+    "analyticsPath": "docs/ops/automation/runtime/continuity-analytics.json",
     "eventsFileExists": false,
+    "analyticsFileExists": false,
     "totalLines": 0,
     "parsedEvents": 0,
     "malformedLines": 0
@@ -64,10 +66,16 @@
       "sessions": 0,
       "derivedContinuitySessions": 0,
       "derivedContinuityRate": null,
+      "degradedSessions": 0,
+      "continuityDegradedRate": null,
+      "resumeSafeCheckpointSessions": 0,
+      "resumeSafeCheckpointRate": null,
       "contactPacks": {
         "sessions": 0,
         "generatedSessions": 0,
         "cacheHitSessions": 0,
+        "thinSessions": 0,
+        "thinRate": null,
         "evidenceRefs": {
           "sampleSize": 0,
           "mean": null,
@@ -77,7 +85,18 @@
           "sampleSize": 0,
           "mean": null,
           "median": null
+        },
+        "selectedInputs": {
+          "sampleSize": 0,
+          "mean": null,
+          "median": null
         }
+      },
+      "usefulness": {
+        "trackedItems": 0,
+        "helpfulItems": 0,
+        "helpfulItemRate": null,
+        "artifactReuseCount": 0
       }
     },
     "rework": {
@@ -87,7 +106,8 @@
         "mean": null,
         "median": null
       },
-      "workerNoTouchRetries": 0
+      "workerNoTouchRetries": 0,
+      "repeatedHandoffLoopPlans": 0
     }
   },
   "eventTypeCounts": []

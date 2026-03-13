@@ -14,7 +14,9 @@ const requiredMarkdownFiles = [
 ];
 const requiredJsonFiles = [
   'docs/agent-hardening/evals.config.json',
-  'docs/generated/evals-report.json'
+  'docs/generated/evals-report.json',
+  'docs/generated/continuity-evals-report.json',
+  'docs/agent-hardening/continuity-fixtures.json'
 ];
 
 const requiredMetadataFields = ['Status', 'Owner', 'Last Updated', 'Source of Truth'];

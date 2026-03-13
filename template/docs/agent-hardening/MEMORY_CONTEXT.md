@@ -35,7 +35,10 @@ Source of Truth: This document.
   - `latest.json` for machine-readable current state
   - `checkpoints.jsonl` for append-only episodic memory
   - structured JSON handoff packets plus operator-facing markdown handoff notes
+  - contact-pack JSON manifests with scored selected inputs and thin-pack classification
+  - incident replay bundles for failed or continuity-degraded sessions
 - Checkpoint at every session end, every stage completion, every `pending` or `handoff_required`, and immediately before validation handoff.
+- Score each checkpoint for resume safety before treating it as durable continuity.
 - Summaries are replaceable, not sacred. Durable state must stay small, versioned, and reconstructable from checkpoints plus external artifacts.
 
 ## Improve Before Re-Architecture

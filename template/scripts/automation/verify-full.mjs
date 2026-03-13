@@ -20,6 +20,8 @@ function fullCommands() {
     'node ./scripts/agent-hardening/check-agent-hardening.mjs',
     'node ./scripts/agent-hardening/check-evals.mjs',
     'node ./scripts/automation/check-blueprint-alignment.mjs',
+    'node ./scripts/automation/summarize-run-outcomes.mjs',
+    'node ./scripts/automation/check-outcomes-thresholds.mjs',
     resolvedPlanMetadataCommand()
   ];
 }

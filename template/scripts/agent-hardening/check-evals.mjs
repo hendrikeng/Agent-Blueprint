@@ -81,6 +81,36 @@ function suiteRequirementEntry(raw) {
   fail('Each requiredSuites entry must be a string or object with an id.');
 }
 
+function validateSuites(report, requiredSuites, label) {
+  if (!Array.isArray(report.suites) || report.suites.length === 0) {
+    fail(`${label} report field 'suites' must be a non-empty array.`);
+  }
+  const suitesById = new Map();
+  for (const suite of report.suites) {
+    if (!isObject(suite)) {
+      fail(`Each ${label} report suite entry must be an object.`);
+    }
+    const id = String(suite.id ?? '').trim();
+    const status = String(suite.status ?? '').trim().toLowerCase();
+    if (!id || !status) {
+      fail(`Each ${label} report suite must include id and status.`);
+    }
+    suitesById.set(id, status);
+  }
+  for (const rawRequirement of requiredSuites) {
+    const requirement = suiteRequirementEntry(rawRequirement);
+    const observed = suitesById.get(requirement.id);
+    if (!observed) {
+      fail(`Required ${label} suite is missing from report: '${requirement.id}'.`);
+    }
+    if (observed !== requirement.status) {
+      fail(
+        `${label} suite '${requirement.id}' status '${observed}' does not satisfy required status '${requirement.status}'.`
+      );
+    }
+  }
+}
+
 async function main() {
   const templateMode = await isTemplateMode();
   if (!(await exists(configPath))) {
@@ -260,6 +290,42 @@ async function main() {
         fail(`Eval evidence path does not exist: ${evidenceRel}`);
       }
     }
+  }
+
+  const continuityReportRel = String(config.continuityReportPath ?? '').trim();
+  if (continuityReportRel) {
+    const continuityReportAbs = path.join(rootDir, continuityReportRel);
+    if (!(await exists(continuityReportAbs))) {
+      fail(`Missing continuity eval report file: ${continuityReportRel}`);
+    }
+    const continuityReport = parseJson(await fs.readFile(continuityReportAbs, 'utf8'), continuityReportAbs);
+    if (!isObject(continuityReport)) {
+      fail('Continuity eval report must be a JSON object.');
+    }
+    const continuityGeneratedAt = toIsoDate(continuityReport.generatedAtUtc);
+    if (!continuityGeneratedAt) {
+      fail(`Continuity eval report generatedAtUtc is invalid: ${String(continuityReport.generatedAtUtc)}`);
+    }
+    const continuityAgeDays = daysBetween(continuityGeneratedAt, new Date());
+    if (continuityAgeDays > maxAgeDays) {
+      fail(`Continuity eval report is stale (${continuityAgeDays} days old, max ${maxAgeDays}).`);
+    }
+    const continuitySummary = continuityReport.summary;
+    if (!isObject(continuitySummary)) {
+      fail("Continuity eval report field 'summary' must be an object.");
+    }
+    const continuityPassRate = Number(continuitySummary.passRate);
+    const continuityMinimumPassRate = Number(config.continuityMinimumPassRate ?? minimumPassRate);
+    if (!Number.isFinite(continuityPassRate) || continuityPassRate < continuityMinimumPassRate) {
+      fail(
+        `Continuity eval passRate ${continuityPassRate.toFixed(3)} is below minimum ${continuityMinimumPassRate.toFixed(3)}.`
+      );
+    }
+    validateSuites(
+      continuityReport,
+      Array.isArray(config.requiredContinuitySuites) ? config.requiredContinuitySuites : [],
+      'continuity eval'
+    );
   }
 
   console.log(

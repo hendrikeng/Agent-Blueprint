@@ -38,8 +38,10 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `docs/ops/automation/handoffs/`: per-plan rollover handoff notes.
 - `docs/ops/automation/runtime/`: per-run executor result payloads, per-plan rolling-context state, and the transient active-run lock file (`orchestrator.lock.json`).
 - `docs/ops/automation/runtime/contacts/<run-id>/<plan-id>/<role>.md`: generated task-scoped contact packs for each role session.
+- `docs/ops/automation/runtime/contacts/<run-id>/<plan-id>/<role>.json`: scored contact-pack manifest with selected inputs and thin-pack classification.
 - `docs/ops/automation/runtime/state/<plan-id>/latest.json`: machine-readable current continuity state for the plan.
 - `docs/ops/automation/runtime/state/<plan-id>/checkpoints.jsonl`: append-only checkpoint log for resumable episodic memory.
+- `docs/ops/automation/runtime/incidents/<run-id>/<plan-id>/`: failed/degraded continuity replay bundles.
 
 ## Source Of Truth
 
@@ -221,6 +223,8 @@ Use the manual path when any of these are true:
 - Outcomes capture (optional):
   - `npm run outcomes:report`
   - Generates `docs/generated/run-outcomes.json` from `run-events.jsonl`, including `summary.memory` continuity and contact-pack metrics.
+  - `npm run outcomes:verify`
+  - Fails on derived continuity, thin-pack, resume-safe checkpoint, or repeated handoff-loop threshold breaches when outcome samples exist.
 - GitHub interop export scaffold (optional):
   - `npm run interop:github:export`
   - Generates `docs/generated/github-agent-export.json` and can emit `.agent.md` plus JSON scaffolds under `.github/agents/`.
@@ -324,8 +328,10 @@ Executor commands should use these outcomes:
 - If the top-level `Status:` is neither `validation` nor `completed`, orchestration starts another executor session for the same plan in the same run (up to `--max-sessions-per-plan`), then leaves it in `active/` for later `resume` if still incomplete.
 - Session boundaries are strict: each planner/explorer/worker/reviewer stage starts a new executor process and can use a role-specific model profile.
 - Each session gets a task-scoped contact pack (`{contact_pack_file}`) built from runtime policy, shared memory posture, task scope, latest continuity state, selected checkpoints, and capped evidence references. Executors should use it as primary context before expanding scope.
+- Contact packs also emit a JSON manifest so later sessions can score which continuity inputs were actually useful.
 - Executor sessions must always emit a structured result payload (`ORCH_RESULT_PATH`) with a numeric `contextRemaining`; include numeric `contextWindow` and `contextUsedRatio` whenever the provider/runtime can estimate them reliably.
 - Non-terminal executor payloads must also include `currentSubtask`, `nextAction`, and `stateDelta` so orchestration can checkpoint resumable state instead of relying on raw session history.
+- Persisted checkpoints are scored for resume safety; synthesized continuity, thin contact packs, and unsafe checkpoints are treated as degraded continuity and can emit replay bundles.
 - Default context rollover policy is hybrid and proactive: use `contextSoftUsedRatio` to stop widening scope, `contextHardUsedRatio` to force same-role handoff when more work remains, and `contextAbsoluteFloor` as the hard remaining-context backstop (override with `--context-soft-used-ratio`, `--context-hard-used-ratio`, or `--context-absolute-floor`; `--context-threshold` remains a legacy alias for the floor).
 - If an executor exits `0` without payload (or without numeric `contextRemaining` for `completed`/`pending`), orchestrator forces an immediate handoff/rollover to protect coding accuracy.
 - Handoff markdown is now paired with a structured JSON handoff packet; same-run rollovers and later `resume` runs rebuild continuity from the durable checkpoint state, not from the raw transcript.

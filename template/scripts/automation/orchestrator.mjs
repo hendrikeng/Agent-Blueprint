@@ -105,6 +105,11 @@ const DEFAULT_CONTACT_PACKS_MAX_RECENT_EVIDENCE_ITEMS = 6;
 const DEFAULT_CONTACT_PACKS_INCLUDE_LATEST_STATE = true;
 const DEFAULT_CONTACT_PACKS_MAX_RECENT_CHECKPOINT_ITEMS = 2;
 const DEFAULT_CONTACT_PACKS_MAX_STATE_LIST_ITEMS = 6;
+const DEFAULT_CONTINUITY_MIN_COMPLETED_SCORE = 0.8;
+const DEFAULT_CONTINUITY_MAX_DERIVED_RATE = 0.1;
+const DEFAULT_CONTINUITY_MIN_RESUME_SAFE_RATE = 0.95;
+const DEFAULT_CONTINUITY_MAX_THIN_PACK_RATE = 0.1;
+const DEFAULT_CONTINUITY_MAX_REPEATED_HANDOFF_LOOP_PLANS = 0;
 const DEFAULT_RETRY_FAILED_PLANS = true;
 const DEFAULT_AUTO_UNBLOCK_PLANS = true;
 const DEFAULT_MAX_FAILED_RETRIES = 2;
@@ -196,7 +201,7 @@ const SENSITIVE_KEY_REGEX = /(token|secret|password|passphrase|api[-_]?key|autho
 const ANSI_ESCAPE_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 const RUN_MEMORY_PLAN_RECORD_CACHE = new Map();
 const RUN_MEMORY_CONTACT_PACK_CACHE = new Map();
-const ROLLING_CONTEXT_SCHEMA_VERSION = 1;
+const ROLLING_CONTEXT_SCHEMA_VERSION = 2;
 
 function usage() {
   console.log(`Usage:
@@ -293,6 +298,11 @@ function asBoolean(value, fallback = false) {
 function asInteger(value, fallback) {
   if (value == null) return fallback;
   const parsed = Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function asNumber(value, fallback = 0) {
+  const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -1297,6 +1307,8 @@ function buildPaths(rootDir) {
     runtimeDir: path.join(opsAutomationDir, 'runtime'),
     runtimeStateDir: path.join(opsAutomationDir, 'runtime', 'state'),
     contactPackDir: path.join(opsAutomationDir, 'runtime', 'contacts'),
+    continuityAnalyticsPath: path.join(opsAutomationDir, 'runtime', 'continuity-analytics.json'),
+    incidentBundleDir: path.join(opsAutomationDir, 'runtime', 'incidents'),
     parallelWorktreesDir: path.join(opsAutomationDir, 'runtime', 'worktrees'),
     runLockPath: path.join(opsAutomationDir, 'runtime', 'orchestrator.lock.json'),
     runStatePath: path.join(opsAutomationDir, 'run-state.json'),
@@ -1315,6 +1327,7 @@ async function ensureDirectories(paths, dryRun) {
   await fs.mkdir(paths.runtimeDir, { recursive: true });
   await fs.mkdir(paths.runtimeStateDir, { recursive: true });
   await fs.mkdir(paths.contactPackDir, { recursive: true });
+  await fs.mkdir(paths.incidentBundleDir, { recursive: true });
   await fs.mkdir(paths.parallelWorktreesDir, { recursive: true });
   await fs.mkdir(paths.evidenceIndexDir, { recursive: true });
 }
@@ -1445,9 +1458,78 @@ function continuityMetrics(raw) {
   };
 }
 
+function normalizeCheckpointQuality(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    score: Math.max(0, Math.min(1, asNumber(source.score, 0))),
+    resumeSafe: source.resumeSafe === true,
+    missingFields: stringList(source.missingFields, 8),
+    degradedReasons: stringList(source.degradedReasons, 8)
+  };
+}
+
+function assessCheckpointQuality(record, minCompletedScore = DEFAULT_CONTINUITY_MIN_COMPLETED_SCORE) {
+  const status = trimmedString(record?.status, 'completed');
+  const currentSubtask = trimmedString(record?.currentSubtask);
+  const nextAction = trimmedString(record?.nextAction);
+  const delta = normalizeContinuityDelta(record?.stateDelta);
+  const hasDecisionContext = delta.decisions.length > 0 || delta.openQuestions.length > 0;
+  const hasBlocker = delta.reasoning.blockers.length > 0 || /blocked|failed/i.test(trimmedString(record?.reason));
+  const hasArtifactRef =
+    delta.artifacts.length > 0 ||
+    delta.evidence.artifactRefs.length > 0 ||
+    delta.evidence.logRefs.length > 0 ||
+    delta.evidence.validationRefs.length > 0;
+  const hasOutcomeDelta = delta.completedWork.length > 0 || delta.recentResults.length > 0;
+  const missingFields = [];
+
+  if (!currentSubtask) {
+    missingFields.push('currentSubtask');
+  }
+
+  if (status === 'pending' || status === 'handoff_required') {
+    if (!nextAction) missingFields.push('nextAction');
+    if (!hasDecisionContext) missingFields.push('decisionOrOpenQuestion');
+    if (!hasArtifactRef) missingFields.push('artifactOrValidationRef');
+    if (!hasOutcomeDelta) missingFields.push('completedWorkOrRecentResults');
+  } else if (status === 'blocked' || status === 'failed') {
+    if (!nextAction) missingFields.push('nextAction');
+    if (!hasDecisionContext) missingFields.push('decisionOrOpenQuestion');
+    if (!hasBlocker) missingFields.push('blockerOrReason');
+    if (!hasArtifactRef) missingFields.push('artifactOrValidationRef');
+  } else {
+    if (!hasOutcomeDelta) missingFields.push('completedWorkOrRecentResults');
+    if (!hasArtifactRef) missingFields.push('artifactOrValidationRef');
+  }
+
+  const requiredCount =
+    status === 'pending' || status === 'handoff_required'
+      ? 5
+      : status === 'blocked' || status === 'failed'
+        ? 5
+        : 3;
+  const satisfiedCount = Math.max(0, requiredCount - missingFields.length);
+  const score = requiredCount > 0 ? Math.round((satisfiedCount / requiredCount) * 100) / 100 : 1;
+  const resumeSafe =
+    status === 'completed'
+      ? score >= minCompletedScore
+      : missingFields.length === 0;
+  const degradedReasons = [];
+  if (!resumeSafe) {
+    degradedReasons.push(`checkpoint_quality_below_threshold:${score.toFixed(2)}`);
+  }
+  return {
+    score,
+    resumeSafe,
+    missingFields,
+    degradedReasons
+  };
+}
+
 function continuityStateFromRecord(plan, checkpoint, existingState = null) {
   const prior = existingState && typeof existingState === 'object' ? existingState : {};
   const delta = normalizeContinuityDelta(checkpoint?.stateDelta);
+  const quality = normalizeCheckpointQuality(checkpoint?.quality ?? prior?.quality);
   const nextAction = trimmedString(
     checkpoint?.nextAction ??
       delta.reasoning.nextAction ??
@@ -1496,6 +1578,7 @@ function continuityStateFromRecord(plan, checkpoint, existingState = null) {
         10
       )
     },
+    quality,
     updatedAt: nowIso()
   };
 }
@@ -2358,6 +2441,21 @@ async function loadConfig(paths) {
         cacheMode: DEFAULT_CONTACT_PACK_CACHE_MODE
       }
     },
+    continuity: {
+      checkpointQuality: {
+        minCompletedScore: DEFAULT_CONTINUITY_MIN_COMPLETED_SCORE
+      },
+      thresholds: {
+        maxDerivedContinuityRate: DEFAULT_CONTINUITY_MAX_DERIVED_RATE,
+        minResumeSafeCheckpointRate: DEFAULT_CONTINUITY_MIN_RESUME_SAFE_RATE,
+        maxThinPackRate: DEFAULT_CONTINUITY_MAX_THIN_PACK_RATE,
+        maxRepeatedHandoffLoopPlans: DEFAULT_CONTINUITY_MAX_REPEATED_HANDOFF_LOOP_PLANS
+      },
+      incidentBundles: {
+        enabled: true,
+        emitOn: ['failed', 'degraded']
+      }
+    },
     validationCommands: [],
     validation: {
       always: [],
@@ -2525,6 +2623,22 @@ async function loadConfig(paths) {
       contactPacks: {
         ...defaultConfig.context.contactPacks,
         ...(configured.context?.contactPacks ?? {})
+      }
+    },
+    continuity: {
+      ...defaultConfig.continuity,
+      ...(configured.continuity ?? {}),
+      checkpointQuality: {
+        ...defaultConfig.continuity.checkpointQuality,
+        ...(configured.continuity?.checkpointQuality ?? {})
+      },
+      thresholds: {
+        ...defaultConfig.continuity.thresholds,
+        ...(configured.continuity?.thresholds ?? {})
+      },
+      incidentBundles: {
+        ...defaultConfig.continuity.incidentBundles,
+        ...(configured.continuity?.incidentBundles ?? {})
       }
     },
     validation: {
@@ -2896,6 +3010,9 @@ function resolveRuntimeExecutorOptions(options, config) {
     )
   );
   const contactPacks = config.context?.contactPacks ?? {};
+  const continuity = config.continuity ?? {};
+  const continuityCheckpointQuality = continuity.checkpointQuality ?? {};
+  const continuityIncidentBundles = continuity.incidentBundles ?? {};
   const contactPackEnabled = asBoolean(
     contactPacks.enabled,
     DEFAULT_CONTACT_PACKS_ENABLED
@@ -2931,6 +3048,17 @@ function resolveRuntimeExecutorOptions(options, config) {
     contactPacks.cacheMode,
     DEFAULT_CONTACT_PACK_CACHE_MODE
   );
+  const continuityMinCompletedScore = asRatio(
+    continuityCheckpointQuality.minCompletedScore,
+    DEFAULT_CONTINUITY_MIN_COMPLETED_SCORE
+  );
+  const continuityIncidentBundlesEnabled = asBoolean(
+    continuityIncidentBundles.enabled,
+    true
+  );
+  const continuityIncidentEmitOn = Array.isArray(continuityIncidentBundles.emitOn)
+    ? continuityIncidentBundles.emitOn.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean)
+    : ['failed', 'degraded'];
   const evidenceSessionCurationMode = normalizeSessionEvidenceMode(
     config.evidence?.sessionCurationMode,
     DEFAULT_EVIDENCE_SESSION_CURATION_MODE
@@ -2995,6 +3123,9 @@ function resolveRuntimeExecutorOptions(options, config) {
     contactPackMaxRecentCheckpointItems,
     contactPackMaxStateListItems,
     contactPackCacheMode,
+    continuityMinCompletedScore,
+    continuityIncidentBundlesEnabled,
+    continuityIncidentEmitOn,
     evidenceSessionCurationMode,
     evidenceSessionIndexRefreshMode,
     retryFailedPlans,
@@ -4364,7 +4495,11 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
       contactPackFile: contactPackRel,
       generated: false,
       reason: 'dry-run',
-      checkpointCount: 0
+      checkpointCount: 0,
+      contactPackManifestFile: contactPackRel.replace(/\.md$/, '.json'),
+      selectedInputCount: 0,
+      thinPack: false,
+      thinPackMissingCategories: []
     };
   }
 
@@ -4403,13 +4538,18 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
         lineCount: cached.lineCount,
         policyRuleCount: cached.policyRuleCount,
         evidenceCount: cached.evidenceCount,
-        checkpointCount: cached.checkpointCount
+        checkpointCount: cached.checkpointCount,
+        contactPackManifestFile: cached.contactPackManifestFile,
+        selectedInputCount: cached.selectedInputCount,
+        thinPack: cached.thinPack,
+        thinPackMissingCategories: cached.thinPackMissingCategories
       };
     }
   }
 
   const result = await compileTaskContactPack({
     rootDir: paths.rootDir,
+    runId: state.runId,
     planId: plan.planId,
     planFile: plan.rel,
     role,
@@ -4434,19 +4574,27 @@ async function prepareTaskContactPack(plan, paths, state, options, config, sessi
       lineCount: result.lineCount,
       policyRuleCount: result.policyRuleCount,
       evidenceCount: result.evidenceCount,
-      checkpointCount: result.checkpointCount
+      checkpointCount: result.checkpointCount,
+      contactPackManifestFile: result.manifestPath,
+      selectedInputCount: result.selectedInputCount,
+      thinPack: result.thinPack,
+      thinPackMissingCategories: result.thinPackMissingCategories
     });
   }
 
   return {
     enabled: true,
     contactPackFile: result.outputPath,
+    contactPackManifestFile: result.manifestPath,
     generated: true,
     bytes: result.bytes,
     lineCount: result.lineCount,
     policyRuleCount: result.policyRuleCount,
     evidenceCount: result.evidenceCount,
-    checkpointCount: result.checkpointCount
+    checkpointCount: result.checkpointCount,
+    selectedInputCount: result.selectedInputCount,
+    thinPack: result.thinPack,
+    thinPackMissingCategories: result.thinPackMissingCategories
   };
 }
 
@@ -4637,11 +4785,14 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     stageIndex,
     stageTotal,
     contactPackFile,
+    contactPackManifestFile: contactPack?.contactPackManifestFile ?? null,
     contactPackEnabled: contactPack?.enabled ?? false,
     contactPackGenerated: contactPack?.generated ?? false,
     contactPackPolicyRuleCount: contactPack?.policyRuleCount ?? 0,
     contactPackEvidenceCount: contactPack?.evidenceCount ?? 0,
     contactPackCheckpointCount: contactPack?.checkpointCount ?? 0,
+    contactPackSelectedInputCount: contactPack?.selectedInputCount ?? 0,
+    contactPackThin: contactPack?.thinPack ?? false,
     executorCommandConfigured: true,
     commandLogPath: sessionLogPath
   }, options.dryRun);
@@ -4656,10 +4807,14 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
       model: roleProfile.model || null,
       sessionLogPath,
       contactPackFile,
+      contactPackManifestFile: contactPack?.contactPackManifestFile ?? null,
       contactPackGenerated: contactPack?.generated ?? false,
       contactPackPolicyRuleCount: contactPack?.policyRuleCount ?? 0,
       contactPackEvidenceCount: contactPack?.evidenceCount ?? 0,
       contactPackCheckpointCount: contactPack?.checkpointCount ?? 0,
+      contactPackSelectedInputCount: contactPack?.selectedInputCount ?? 0,
+      contactPackThin: contactPack?.thinPack ?? false,
+      contactPackThinPackMissingCategories: contactPack?.thinPackMissingCategories ?? [],
       durationSeconds: 0
     };
   }
@@ -4739,10 +4894,14 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     touchSummary: sessionTouchSummary,
     touchMonitor: sessionTouchMonitor,
     contactPackFile,
+    contactPackManifestFile: contactPack?.contactPackManifestFile ?? null,
     contactPackGenerated: contactPack?.generated ?? false,
     contactPackPolicyRuleCount: contactPack?.policyRuleCount ?? 0,
     contactPackEvidenceCount: contactPack?.evidenceCount ?? 0,
     contactPackCheckpointCount: contactPack?.checkpointCount ?? 0,
+    contactPackSelectedInputCount: contactPack?.selectedInputCount ?? 0,
+    contactPackThin: contactPack?.thinPack ?? false,
+    contactPackThinPackMissingCategories: contactPack?.thinPackMissingCategories ?? [],
     durationSeconds
   });
   if (captureOutput) {
@@ -7134,6 +7293,7 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
   const targetPath = path.join(paths.handoffDir, plan.planId, markdownName);
   const jsonPath = path.join(paths.handoffDir, plan.planId, jsonName);
   const stateDelta = normalizeContinuityDelta(sessionContext.stateDelta);
+  const quality = normalizeCheckpointQuality(sessionContext.quality);
   const handoffPacket = {
     schemaVersion: ROLLING_CONTEXT_SCHEMA_VERSION,
     planId: plan.planId,
@@ -7162,8 +7322,10 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
         ? sessionContext.contextUsedRatio
         : null,
     contactPackFile: trimmedString(sessionContext.contactPackFile),
+    contactPackManifestFile: trimmedString(sessionContext.contactPackManifestFile),
     sessionLogPath: trimmedString(sessionContext.sessionLogPath),
-    stateDelta
+    stateDelta,
+    quality
   };
 
   if (options.dryRun) {
@@ -7189,6 +7351,7 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
     `- Current Subtask: ${handoffPacket.currentSubtask || 'none'}`,
     `- Next Action: ${handoffPacket.nextAction || 'none'}`,
     `- Contact Pack: ${handoffPacket.contactPackFile || 'none'}`,
+    `- Contact Pack Manifest: ${handoffPacket.contactPackManifestFile || 'none'}`,
     `- Session Log: ${handoffPacket.sessionLogPath || 'none'}`,
     '',
     '## Summary',
@@ -7220,7 +7383,7 @@ async function writeHandoff(paths, state, plan, sessionNumber, reason, summary, 
   return { markdownPath: targetPath, jsonPath, packet: handoffPacket };
 }
 
-function buildSessionCheckpointRecord(plan, state, sessionNumber, sessionResult, sessionContext = {}) {
+function buildSessionCheckpointRecord(plan, state, sessionNumber, sessionResult, sessionContext = {}, options = {}) {
   const role = normalizeRoleName(sessionContext.role, ROLE_WORKER);
   const stageIndex = asInteger(sessionContext.stageIndex, 1);
   const stageTotal = asInteger(sessionContext.stageTotal, 1);
@@ -7238,6 +7401,16 @@ function buildSessionCheckpointRecord(plan, state, sessionNumber, sessionResult,
     nextAction: trimmedString(sessionResult?.nextAction ?? synthesized.nextAction),
     stateDelta: normalizeContinuityDelta(sessionResult?.stateDelta ?? synthesized.stateDelta)
   };
+  const quality = assessCheckpointQuality(
+    {
+      status: trimmedString(sessionResult?.status, 'completed'),
+      currentSubtask: normalized.currentSubtask,
+      nextAction: normalized.nextAction,
+      stateDelta: normalized.stateDelta,
+      reason: trimmedString(sessionResult?.reason)
+    },
+    asRatio(options.continuityMinCompletedScore, DEFAULT_CONTINUITY_MIN_COMPLETED_SCORE)
+  );
   return {
     schemaVersion: ROLLING_CONTEXT_SCHEMA_VERSION,
     createdAt: nowIso(),
@@ -7265,10 +7438,148 @@ function buildSessionCheckpointRecord(plan, state, sessionNumber, sessionResult,
         ? sessionResult.contextUsedRatio
         : null,
     contactPackFile: trimmedString(sessionResult?.contactPackFile),
+    contactPackManifestFile: trimmedString(sessionResult?.contactPackManifestFile),
+    contactPackThin: sessionResult?.contactPackThin === true,
+    contactPackThinPackMissingCategories: stringList(sessionResult?.contactPackThinPackMissingCategories, 4),
     sessionLogPath: trimmedString(sessionResult?.sessionLogPath),
     touchSamples: meaningfulTouchSamples(sessionResult?.touchSummary),
-    stateDelta: normalized.stateDelta
+    stateDelta: normalized.stateDelta,
+    quality
   };
+}
+
+function normalizeContinuityAnalytics(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    schemaVersion: asInteger(source.schemaVersion, 1),
+    updatedAt: trimmedString(source.updatedAt),
+    items: source.items && typeof source.items === 'object' ? source.items : {}
+  };
+}
+
+async function readContactPackManifest(paths, manifestRel) {
+  const rel = trimmedString(manifestRel);
+  if (!rel) {
+    return null;
+  }
+  return readJsonIfExists(path.join(paths.rootDir, rel), null);
+}
+
+function selectedInputArtifactReused(selectedInput, checkpointRecord) {
+  if (!selectedInput || selectedInput.category !== 'artifact') {
+    return false;
+  }
+  const probe = trimmedString(selectedInput.value).toLowerCase();
+  if (!probe) {
+    return false;
+  }
+  const haystack = [
+    ...checkpointRecord.stateDelta.artifacts,
+    ...checkpointRecord.stateDelta.evidence.artifactRefs,
+    ...checkpointRecord.stateDelta.evidence.logRefs,
+    ...checkpointRecord.stateDelta.evidence.validationRefs,
+    ...checkpointRecord.touchSamples
+  ]
+    .map((entry) => trimmedString(entry).toLowerCase())
+    .filter(Boolean);
+  return haystack.some((entry) => entry.includes(probe) || probe.includes(entry));
+}
+
+async function updateContinuityAnalytics(paths, checkpointRecord, sessionResult, options) {
+  const manifest = await readContactPackManifest(paths, checkpointRecord.contactPackManifestFile);
+  if (!manifest || !Array.isArray(manifest.selectedInputs) || options.dryRun) {
+    return { helpfulSessions: 0, degradedSessions: 0, trackedItems: 0 };
+  }
+
+  const store = normalizeContinuityAnalytics(await readJsonIfExists(paths.continuityAnalyticsPath, null));
+  const helpful = sessionResult?.continuityDerived !== true && checkpointRecord.quality.resumeSafe && sessionResult?.status !== 'failed';
+  const degraded =
+    sessionResult?.continuityDerived === true ||
+    checkpointRecord.quality.resumeSafe !== true ||
+    checkpointRecord.contactPackThin === true;
+
+  for (const selectedInput of manifest.selectedInputs) {
+    const itemId = trimmedString(selectedInput?.itemId);
+    if (!itemId) {
+      continue;
+    }
+    const current = store.items[itemId] && typeof store.items[itemId] === 'object' ? store.items[itemId] : {};
+    const artifactReused = selectedInputArtifactReused(selectedInput, checkpointRecord);
+    store.items[itemId] = {
+      itemId,
+      category: trimmedString(selectedInput.category),
+      selectedCount: asInteger(current.selectedCount, 0) + 1,
+      helpfulSessions: asInteger(current.helpfulSessions, 0) + (helpful ? 1 : 0),
+      degradedSessions: asInteger(current.degradedSessions, 0) + (degraded ? 1 : 0),
+      artifactReuseCount: asInteger(current.artifactReuseCount, 0) + (artifactReused ? 1 : 0),
+      lastSeenAt: nowIso()
+    };
+  }
+  store.updatedAt = nowIso();
+  await writeJson(paths.continuityAnalyticsPath, store, false);
+  return {
+    helpfulSessions: helpful ? 1 : 0,
+    degradedSessions: degraded ? 1 : 0,
+    trackedItems: manifest.selectedInputs.length
+  };
+}
+
+function continuityDegradationReasons(sessionResult, checkpointRecord) {
+  const reasons = [];
+  if (sessionResult?.continuityDerived === true) {
+    reasons.push('continuity_derived');
+  }
+  if (checkpointRecord?.quality?.resumeSafe !== true) {
+    reasons.push(...normalizeCheckpointQuality(checkpointRecord?.quality).degradedReasons);
+  }
+  if (checkpointRecord?.contactPackThin === true) {
+    reasons.push(
+      `thin_contact_pack:${stringList(checkpointRecord.contactPackThinPackMissingCategories, 4).join(',') || 'low_item_count'}`
+    );
+  }
+  return stringList(reasons, 8);
+}
+
+async function writeContinuityIncidentBundle(paths, state, plan, sessionNumber, sessionResult, checkpointRecord, options) {
+  if (!options.continuityIncidentBundlesEnabled || options.dryRun) {
+    return null;
+  }
+  const degradationReasons = continuityDegradationReasons(sessionResult, checkpointRecord);
+  const shouldEmitFailed = sessionResult?.status === 'failed' && options.continuityIncidentEmitOn.includes('failed');
+  const shouldEmitDegraded = degradationReasons.length > 0 && options.continuityIncidentEmitOn.includes('degraded');
+  if (!shouldEmitFailed && !shouldEmitDegraded) {
+    return null;
+  }
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const bundlePath = path.join(paths.incidentBundleDir, state.runId, plan.planId, `${stamp}-session-${sessionNumber}.json`);
+  const manifest = await readContactPackManifest(paths, checkpointRecord.contactPackManifestFile);
+  const bundle = {
+    schemaVersion: ROLLING_CONTEXT_SCHEMA_VERSION,
+    runId: state.runId,
+    planId: plan.planId,
+    session: sessionNumber,
+    role: checkpointRecord.role,
+    stageIndex: checkpointRecord.stageIndex,
+    stageTotal: checkpointRecord.stageTotal,
+    status: checkpointRecord.status,
+    summary: checkpointRecord.summary,
+    reason: checkpointRecord.reason,
+    classification: shouldEmitFailed ? 'failed' : 'degraded',
+    degradationReasons,
+    continuityDerived: sessionResult?.continuityDerived === true,
+    quality: checkpointRecord.quality,
+    latestStateRef: continuityStateArtifactRel(plan.planId),
+    checkpointsRef: continuityCheckpointArtifactRel(plan.planId),
+    contactPackFile: checkpointRecord.contactPackFile,
+    contactPackManifestFile: checkpointRecord.contactPackManifestFile,
+    sessionLogPath: checkpointRecord.sessionLogPath,
+    selectedInputs: Array.isArray(manifest?.selectedInputs) ? manifest.selectedInputs : [],
+    stateDelta: checkpointRecord.stateDelta
+  };
+  await fs.mkdir(path.dirname(bundlePath), { recursive: true });
+  await writeJson(bundlePath, bundle, false);
+  return toPosix(path.relative(paths.rootDir, bundlePath));
 }
 
 async function announceStageReuse(paths, state, plan, roleState, options) {
@@ -7740,7 +8051,16 @@ async function processPlan(plan, paths, state, options, config) {
       workerNoTouchRetryCount: currentRole === ROLE_WORKER ? workerNoTouchRetryCount : 0,
       workerNoTouchRetryLimit: asInteger(options.workerNoTouchRetryLimit, DEFAULT_WORKER_NO_TOUCH_RETRY_LIMIT)
     });
-    const sessionContinuityMetrics = continuityMetrics(sessionResult?.stateDelta);
+    const checkpointRecord = buildSessionCheckpointRecord(
+      plan,
+      state,
+      session,
+      sessionResult,
+      { role: currentRole, stageIndex, stageTotal },
+      options
+    );
+    const sessionContinuityMetrics = continuityMetrics(checkpointRecord.stateDelta);
+    const continuityDegraded = continuityDegradationReasons(sessionResult, checkpointRecord).length > 0;
     await logEvent(paths, state, 'session_finished', {
       planId: plan.planId,
       session,
@@ -7754,15 +8074,24 @@ async function processPlan(plan, paths, state, options, config) {
       status: sessionResult.status,
       reason: sessionResult.reason ?? null,
       summary: sessionResult.summary ?? null,
+      currentSubtask: checkpointRecord.currentSubtask,
+      nextAction: checkpointRecord.nextAction,
       provider: sessionResult.provider ?? currentRoleProfile.provider,
       model: sessionResult.model ?? currentRoleProfile.model ?? null,
       commandLogPath: sessionResult.sessionLogPath ?? null,
       contactPackFile: sessionResult.contactPackFile ?? null,
+      contactPackManifestFile: sessionResult.contactPackManifestFile ?? null,
       contactPackGenerated: sessionResult.contactPackGenerated ?? false,
       contactPackPolicyRuleCount: sessionResult.contactPackPolicyRuleCount ?? 0,
       contactPackEvidenceCount: sessionResult.contactPackEvidenceCount ?? 0,
       contactPackCheckpointCount: sessionResult.contactPackCheckpointCount ?? 0,
+      contactPackSelectedInputCount: sessionResult.contactPackSelectedInputCount ?? 0,
+      contactPackThin: sessionResult.contactPackThin ?? false,
       continuityDerived: sessionResult.continuityDerived ?? false,
+      continuityDegraded,
+      checkpointQualityScore: checkpointRecord.quality.score,
+      checkpointResumeSafe: checkpointRecord.quality.resumeSafe,
+      checkpointMissingFieldCount: checkpointRecord.quality.missingFields.length,
       continuityPendingActionCount: sessionContinuityMetrics.pendingActionCount,
       continuityCompletedWorkCount: sessionContinuityMetrics.completedWorkCount,
       continuityDecisionCount: sessionContinuityMetrics.decisionCount,
@@ -7846,14 +8175,35 @@ async function processPlan(plan, paths, state, options, config) {
         }
       }
     }
-    const checkpointRecord = buildSessionCheckpointRecord(
-      plan,
+    await persistContinuityCheckpoint(paths, plan, checkpointRecord, options);
+    const analyticsUpdate = await updateContinuityAnalytics(paths, checkpointRecord, sessionResult, options);
+    if (analyticsUpdate.trackedItems > 0) {
+      await logEvent(paths, state, 'continuity_analytics_updated', {
+        planId: plan.planId,
+        session,
+        trackedItems: analyticsUpdate.trackedItems,
+        helpfulSessions: analyticsUpdate.helpfulSessions,
+        degradedSessions: analyticsUpdate.degradedSessions
+      }, options.dryRun);
+    }
+    const incidentBundleFile = await writeContinuityIncidentBundle(
+      paths,
       state,
+      plan,
       session,
       sessionResult,
-      { role: currentRole, stageIndex, stageTotal }
+      checkpointRecord,
+      options
     );
-    await persistContinuityCheckpoint(paths, plan, checkpointRecord, options);
+    if (incidentBundleFile) {
+      await logEvent(paths, state, 'continuity_incident_bundle_created', {
+        planId: plan.planId,
+        session,
+        role: currentRole,
+        incidentBundleFile,
+        status: sessionResult.status
+      }, options.dryRun);
+    }
 
     if (sessionResult.status === 'handoff_required') {
       const handoffPaths = await writeHandoff(
@@ -7872,8 +8222,10 @@ async function processPlan(plan, paths, state, options, config) {
           currentSubtask: checkpointRecord.currentSubtask,
           nextAction: checkpointRecord.nextAction,
           stateDelta: checkpointRecord.stateDelta,
+          quality: checkpointRecord.quality,
           sessionLogPath: sessionResult.sessionLogPath,
           contactPackFile: sessionResult.contactPackFile,
+          contactPackManifestFile: sessionResult.contactPackManifestFile,
           contextRemaining: sessionResult.contextRemaining,
           contextWindow: sessionResult.contextWindow,
           contextUsedRatio: sessionResult.contextUsedRatio

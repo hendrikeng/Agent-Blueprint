@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import {
   metadataValue,
@@ -17,6 +18,17 @@ const DEFAULT_MAX_POLICY_BULLETS = 10;
 const DEFAULT_MAX_RECENT_EVIDENCE_ITEMS = 6;
 const DEFAULT_MAX_RECENT_CHECKPOINT_ITEMS = 2;
 const DEFAULT_MAX_STATE_LIST_ITEMS = 6;
+const DEFAULT_SELECTION_MAX_ITEMS = 6;
+const DEFAULT_SELECTION_CANDIDATE_CHECKPOINTS = 6;
+const DEFAULT_SELECTION_WEIGHTS = {
+  successfulResumeReuse: 5,
+  roleMatch: 4,
+  stageMatch: 3,
+  artifactReuse: 2,
+  recency: 2,
+  sameRun: 1,
+  degradedReuse: -3
+};
 
 const ROLE_NAMES = new Set(['planner', 'explorer', 'worker', 'reviewer']);
 
@@ -80,6 +92,11 @@ function asInteger(value, fallback) {
     return fallback;
   }
   const parsed = Number.parseInt(String(value).trim(), 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function asNumber(value, fallback = 0) {
+  const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
@@ -197,7 +214,15 @@ function normalizeContinuityPayload(raw) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const reasoning = source.reasoning && typeof source.reasoning === 'object' ? source.reasoning : {};
   const evidence = source.evidence && typeof source.evidence === 'object' ? source.evidence : {};
+  const quality = source.quality && typeof source.quality === 'object' ? source.quality : {};
   return {
+    schemaVersion: asInteger(source.schemaVersion, 1),
+    planId: String(source.planId ?? '').trim(),
+    runId: String(source.runId ?? '').trim(),
+    createdAt: String(source.createdAt ?? source.updatedAt ?? '').trim(),
+    stageIndex: asInteger(source.stageIndex, 1),
+    stageTotal: asInteger(source.stageTotal, 1),
+    session: asInteger(source.session, 1),
     role: String(source.role ?? '').trim(),
     summary: String(source.summary ?? '').trim(),
     goal: String(source.goal ?? '').trim(),
@@ -221,6 +246,12 @@ function normalizeContinuityPayload(raw) {
       artifactRefs: summarizeList(evidence.artifactRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
       logRefs: summarizeList(evidence.logRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
       validationRefs: summarizeList(evidence.validationRefs, DEFAULT_MAX_STATE_LIST_ITEMS, 12)
+    },
+    quality: {
+      score: Math.max(0, Math.min(1, asNumber(quality.score, 0))),
+      resumeSafe: quality.resumeSafe === true,
+      missingFields: summarizeList(quality.missingFields, DEFAULT_MAX_STATE_LIST_ITEMS, 12),
+      degradedReasons: summarizeList(quality.degradedReasons, DEFAULT_MAX_STATE_LIST_ITEMS, 12)
     }
   };
 }
@@ -247,52 +278,6 @@ function checkpointKey(checkpoint) {
   ].join('|');
 }
 
-function selectRelevantCheckpoints(checkpoints, role, maxItems) {
-  if (maxItems <= 0) {
-    return [];
-  }
-  const source = Array.isArray(checkpoints) ? checkpoints.filter((entry) => entry && typeof entry === 'object') : [];
-  if (source.length === 0) {
-    return [];
-  }
-  const selected = [];
-  const seen = new Set();
-  const reversed = [...source].reverse();
-  const pick = (predicate) => {
-    const match = reversed.find((entry) => !seen.has(checkpointKey(entry)) && predicate(entry));
-    if (!match) {
-      return;
-    }
-    selected.push(match);
-    seen.add(checkpointKey(match));
-  };
-
-  pick(() => true);
-  pick((entry) => String(entry?.role ?? '').trim().toLowerCase() === role);
-
-  const latest = selected[0] ?? null;
-  pick((entry) => {
-    const entryRole = String(entry?.role ?? '').trim().toLowerCase();
-    const entryStageIndex = asInteger(entry?.stageIndex, -1);
-    const latestStageIndex = asInteger(latest?.stageIndex, -1);
-    return entryRole !== role || (latest && entryStageIndex !== latestStageIndex);
-  });
-
-  for (const entry of reversed) {
-    if (selected.length >= maxItems) {
-      break;
-    }
-    const key = checkpointKey(entry);
-    if (seen.has(key)) {
-      continue;
-    }
-    selected.push(entry);
-    seen.add(key);
-  }
-
-  return selected.slice(0, maxItems).map((entry) => normalizeContinuityPayload(entry));
-}
-
 function preferredEvidenceReferences(latestState) {
   if (!latestState) {
     return [];
@@ -303,6 +288,172 @@ function preferredEvidenceReferences(latestState) {
     ...(Array.isArray(latestState.evidence?.logRefs) ? latestState.evidence.logRefs : []),
     ...(Array.isArray(latestState.artifacts) ? latestState.artifacts : [])
   ]);
+}
+
+function stableItemId(parts) {
+  return createHash('sha1')
+    .update(JSON.stringify(parts))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function normalizeAnalyticsStore(raw) {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  return {
+    schemaVersion: asInteger(source.schemaVersion, 1),
+    updatedAt: String(source.updatedAt ?? '').trim(),
+    items: source.items && typeof source.items === 'object' ? source.items : {}
+  };
+}
+
+function buildStateCandidate(planId, latestState, runId) {
+  if (!latestState) {
+    return null;
+  }
+  return {
+    itemId: `state-${stableItemId([planId, 'latest-state'])}`,
+    category: 'state',
+    type: 'latest-state',
+    role: String(latestState.role ?? '').trim().toLowerCase(),
+    stageIndex: asInteger(latestState.stageIndex, 1),
+    runId: String(latestState.runId ?? runId ?? '').trim(),
+    recencyRank: 0,
+    value: `status=${latestState.status || 'none'} subtask=${latestState.currentSubtask || 'none'} next=${latestState.reasoning.nextAction || 'none'}`,
+    source: latestState
+  };
+}
+
+function buildCheckpointCandidates(checkpoints, role, stageIndex, runId, maxCandidates) {
+  const source = Array.isArray(checkpoints) ? checkpoints.filter((entry) => entry && typeof entry === 'object') : [];
+  const normalized = source.slice(-Math.max(0, maxCandidates)).reverse().map((entry) => normalizeContinuityPayload(entry));
+  const seen = new Set();
+  const candidates = [];
+  for (const [index, checkpoint] of normalized.entries()) {
+    const key = checkpointKey(checkpoint);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    candidates.push({
+      itemId: `checkpoint-${stableItemId([
+        checkpoint.planId,
+        checkpoint.runId,
+        checkpoint.session,
+        checkpoint.role,
+        checkpoint.stageIndex,
+        checkpoint.nextAction || checkpoint.reasoning.nextAction
+      ])}`,
+      category: 'checkpoint',
+      type: String(checkpoint.role ?? '').trim().toLowerCase() === role ? 'same-role-checkpoint' : 'cross-role-checkpoint',
+      role: String(checkpoint.role ?? '').trim().toLowerCase(),
+      stageIndex: asInteger(checkpoint.stageIndex, stageIndex),
+      runId: String(checkpoint.runId ?? runId ?? '').trim(),
+      recencyRank: index,
+      value: summarizeCheckpoint(checkpoint),
+      source: checkpoint
+    });
+  }
+  return candidates;
+}
+
+function buildEvidenceCandidates(references) {
+  return unique(references).map((entry, index) => ({
+    itemId: `artifact-${stableItemId([entry])}`,
+    category: 'artifact',
+    type: 'artifact-ref',
+    role: '',
+    stageIndex: 0,
+    runId: '',
+    recencyRank: index,
+    value: entry,
+    source: entry
+  }));
+}
+
+function scoreCandidate(candidate, analyticsStore, context, weights) {
+  const itemStats = analyticsStore.items?.[candidate.itemId] ?? {};
+  let score = 0;
+  const reasons = [];
+  const helpfulCount = asInteger(itemStats.helpfulSessions, 0);
+  const selectedCount = Math.max(1, asInteger(itemStats.selectedCount, 0));
+  const helpfulRate = helpfulCount / selectedCount;
+  if (helpfulCount > 0 && helpfulRate >= 0.5) {
+    score += weights.successfulResumeReuse;
+    reasons.push(`historically helpful (${helpfulCount}/${selectedCount})`);
+  }
+  if (candidate.category === 'artifact' && asInteger(itemStats.artifactReuseCount, 0) > 0) {
+    score += weights.artifactReuse;
+    reasons.push(`artifact reused ${asInteger(itemStats.artifactReuseCount, 0)}x`);
+  }
+  if (candidate.role && candidate.role === context.role) {
+    score += weights.roleMatch;
+    reasons.push('role match');
+  }
+  if (candidate.stageIndex > 0 && Math.abs(candidate.stageIndex - context.stageIndex) <= 1) {
+    score += weights.stageMatch;
+    reasons.push('same or adjacent stage');
+  }
+  if (candidate.recencyRank <= 1) {
+    score += weights.recency;
+    reasons.push('recent');
+  }
+  if (candidate.runId && candidate.runId === context.runId) {
+    score += weights.sameRun;
+    reasons.push('same run');
+  }
+  if (asInteger(itemStats.degradedSessions, 0) > helpfulCount) {
+    score += weights.degradedReuse;
+    reasons.push('historically degraded');
+  }
+  return {
+    ...candidate,
+    score,
+    reasons
+  };
+}
+
+function selectScoredInputs(candidates, maxItems, role, stageIndex) {
+  const selected = [];
+  const seen = new Set();
+  const sorted = [...candidates].sort((a, b) => b.score - a.score || a.recencyRank - b.recencyRank);
+  const addFirst = (predicate) => {
+    const match = sorted.find((entry) => !seen.has(entry.itemId) && predicate(entry));
+    if (!match) {
+      return;
+    }
+    selected.push(match);
+    seen.add(match.itemId);
+  };
+
+  addFirst((entry) => entry.category === 'state');
+  addFirst((entry) => entry.category === 'checkpoint' && entry.role === role);
+  addFirst(
+    (entry) =>
+      entry.category === 'checkpoint' &&
+      (entry.role !== role || (entry.stageIndex > 0 && entry.stageIndex !== stageIndex))
+  );
+  addFirst((entry) => entry.category === 'artifact');
+
+  for (const entry of sorted) {
+    if (selected.length >= maxItems) {
+      break;
+    }
+    if (seen.has(entry.itemId)) {
+      continue;
+    }
+    selected.push(entry);
+    seen.add(entry.itemId);
+  }
+  return selected.slice(0, maxItems);
+}
+
+function thinPackSummary(selectedInputs) {
+  const categories = new Set(selectedInputs.map((entry) => entry.category));
+  const missingCategories = ['state', 'checkpoint', 'artifact'].filter((entry) => !categories.has(entry));
+  return {
+    thinPack: selectedInputs.length < 4 || missingCategories.length > 0,
+    missingCategories
+  };
 }
 
 function renderSummaryBullet(label, values) {
@@ -353,9 +504,11 @@ export async function compileTaskContactPack(input) {
   const policyPath = path.resolve(rootDir, String(input.policyPath ?? DEFAULT_POLICY_PATH));
   const configPath = path.resolve(rootDir, String(input.configPath ?? DEFAULT_CONFIG_PATH));
   const outputPath = path.resolve(rootDir, String(input.outputPath ?? DEFAULT_OUTPUT_PATH));
+  const manifestPath = outputPath.endsWith('.md') ? `${outputPath.slice(0, -3)}.json` : `${outputPath}.json`;
   const role = normalizeRoleName(input.role, 'worker');
   const stageIndex = Math.max(1, asInteger(input.stageIndex, 1));
   const stageTotal = Math.max(stageIndex, asInteger(input.stageTotal, stageIndex));
+  const runId = String(input.runId ?? '').trim();
 
   const [policyManifest, config, planRaw] = await Promise.all([
     readJsonStrict(policyPath),
@@ -384,6 +537,9 @@ export async function compileTaskContactPack(input) {
   const ruleSource = requiredRules.length > 0 ? requiredRules : mandatoryRules;
 
   const configuredContactPacks = config?.context?.contactPacks ?? {};
+  const selectionConfig = configuredContactPacks.selection && typeof configuredContactPacks.selection === 'object'
+    ? configuredContactPacks.selection
+    : {};
   const maxPolicyBullets = Math.max(
     1,
     asInteger(input.maxPolicyBullets, asInteger(configuredContactPacks.maxPolicyBullets, DEFAULT_MAX_POLICY_BULLETS))
@@ -420,6 +576,29 @@ export async function compileTaskContactPack(input) {
       asInteger(configuredContactPacks.maxStateListItems, DEFAULT_MAX_STATE_LIST_ITEMS)
     )
   );
+  const selectionMaxItems = Math.max(
+    1,
+    asInteger(input.selectionMaxItems, asInteger(selectionConfig.maxItems, DEFAULT_SELECTION_MAX_ITEMS))
+  );
+  const selectionCandidateCheckpoints = Math.max(
+    selectionMaxItems,
+    asInteger(
+      input.selectionCandidateCheckpoints,
+      asInteger(selectionConfig.candidateCheckpointWindow, DEFAULT_SELECTION_CANDIDATE_CHECKPOINTS)
+    )
+  );
+  const selectionWeights = {
+    successfulResumeReuse: asInteger(
+      selectionConfig?.weights?.successfulResumeReuse,
+      DEFAULT_SELECTION_WEIGHTS.successfulResumeReuse
+    ),
+    roleMatch: asInteger(selectionConfig?.weights?.roleMatch, DEFAULT_SELECTION_WEIGHTS.roleMatch),
+    stageMatch: asInteger(selectionConfig?.weights?.stageMatch, DEFAULT_SELECTION_WEIGHTS.stageMatch),
+    artifactReuse: asInteger(selectionConfig?.weights?.artifactReuse, DEFAULT_SELECTION_WEIGHTS.artifactReuse),
+    recency: asInteger(selectionConfig?.weights?.recency, DEFAULT_SELECTION_WEIGHTS.recency),
+    sameRun: asInteger(selectionConfig?.weights?.sameRun, DEFAULT_SELECTION_WEIGHTS.sameRun),
+    degradedReuse: asInteger(selectionConfig?.weights?.degradedReuse, DEFAULT_SELECTION_WEIGHTS.degradedReuse)
+  };
   const runtimeContextPath =
     String(input.runtimeContextPath ?? config?.context?.runtimeContextPath ?? DEFAULT_RUNTIME_CONTEXT_PATH).trim() ||
     DEFAULT_RUNTIME_CONTEXT_PATH;
@@ -428,11 +607,12 @@ export async function compileTaskContactPack(input) {
   const roleProfile = config?.roleOrchestration?.roleProfiles?.[role] ?? {};
   const resolvedReasoningEffort = resolveRoleReasoningEffort(roleProfile, roleContract, effectiveRiskTier);
 
-  const evidenceCandidates = [
+  const evidenceCandidatePaths = [
     path.join(rootDir, 'docs', 'exec-plans', 'evidence-index', `${planId}.md`),
     path.join(rootDir, 'docs', 'exec-plans', 'active', 'evidence', `${planId}.md`)
   ];
   const continuityDir = path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'state', planId);
+  const analyticsPath = path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'continuity-analytics.json');
   const latestStatePath = path.join(continuityDir, 'latest.json');
   const checkpointsPath = path.join(continuityDir, 'checkpoints.jsonl');
   let latestState = null;
@@ -440,12 +620,9 @@ export async function compileTaskContactPack(input) {
   if (includeLatestState) {
     latestState = normalizeContinuityPayload(await readJsonStrict(latestStatePath).catch(() => null));
     const checkpointsRaw = await readUtf8IfExists(checkpointsPath);
-    recentCheckpoints = selectRelevantCheckpoints(
-      parseJsonLines(checkpointsRaw, Number.POSITIVE_INFINITY),
-      role,
-      maxRecentCheckpointItems
-    );
+    recentCheckpoints = parseJsonLines(checkpointsRaw, Number.POSITIVE_INFINITY);
   }
+  const analyticsStore = normalizeAnalyticsStore(await readJsonStrict(analyticsPath).catch(() => null));
 
   const evidenceReferences = [];
   if (includeRecentEvidence && maxRecentEvidenceItems > 0) {
@@ -456,7 +633,7 @@ export async function compileTaskContactPack(input) {
       }
     }
     if (evidenceReferences.length < maxRecentEvidenceItems) {
-      for (const evidencePath of evidenceCandidates) {
+      for (const evidencePath of evidenceCandidatePaths) {
         const evidenceRaw = await readUtf8IfExists(evidencePath);
         if (!evidenceRaw) {
           continue;
@@ -478,6 +655,25 @@ export async function compileTaskContactPack(input) {
       }
     }
   }
+
+  const stateCandidate = includeLatestState ? buildStateCandidate(planId, latestState, runId) : null;
+  const checkpointCandidates = buildCheckpointCandidates(
+    recentCheckpoints,
+    role,
+    stageIndex,
+    runId,
+    selectionCandidateCheckpoints
+  );
+  const evidenceCandidates = buildEvidenceCandidates(evidenceReferences);
+  const scoredInputs = [
+    ...(stateCandidate ? [stateCandidate] : []),
+    ...checkpointCandidates,
+    ...evidenceCandidates
+  ].map((entry) => scoreCandidate(entry, analyticsStore, { role, stageIndex, runId }, selectionWeights));
+  const selectedInputs = selectScoredInputs(scoredInputs, selectionMaxItems, role, stageIndex);
+  const thinPack = thinPackSummary(selectedInputs);
+  const selectedCheckpointInputs = selectedInputs.filter((entry) => entry.category === 'checkpoint');
+  const selectedEvidenceInputs = selectedInputs.filter((entry) => entry.category === 'artifact');
 
   const renderedRules = ruleSource.slice(0, maxPolicyBullets);
   const lines = [];
@@ -560,11 +756,11 @@ export async function compileTaskContactPack(input) {
   lines.push('## Selected Checkpoints');
   if (!includeLatestState) {
     lines.push('- skipped (includeLatestState=false)');
-  } else if (recentCheckpoints.length === 0) {
+  } else if (selectedCheckpointInputs.length === 0) {
     lines.push('- none');
   } else {
-    for (const checkpoint of recentCheckpoints) {
-      lines.push(`- ${summarizeCheckpoint(checkpoint)}`);
+    for (const checkpoint of selectedCheckpointInputs) {
+      lines.push(`- ${checkpoint.value}`);
     }
   }
   lines.push('');
@@ -577,33 +773,65 @@ export async function compileTaskContactPack(input) {
   lines.push('## Selected Evidence');
   if (!includeRecentEvidence) {
     lines.push('- skipped (includeRecentEvidence=false)');
-  } else if (evidenceReferences.length === 0) {
+  } else if (selectedEvidenceInputs.length === 0) {
     lines.push('- none');
   } else {
-    for (const entry of evidenceReferences) {
-      lines.push(`- ${entry}`);
+    for (const entry of selectedEvidenceInputs) {
+      lines.push(`- ${entry.value}`);
     }
   }
   lines.push('');
   lines.push('## Contact Boundaries');
   lines.push('- Use this pack as the primary context for this role session.');
   lines.push('- Expand beyond this pack only for explicit blockers tied to current scope.');
-  lines.push(`- Selected continuity inputs: checkpoints=${recentCheckpoints.length}, evidence=${evidenceReferences.length}.`);
+  lines.push(
+    `- Selected continuity inputs: state=${selectedInputs.some((entry) => entry.category === 'state') ? 1 : 0}, checkpoints=${selectedCheckpointInputs.length}, evidence=${selectedEvidenceInputs.length}.`
+  );
+  lines.push(`- Thin pack: ${thinPack.thinPack ? `yes (${thinPack.missingCategories.join(', ') || 'low item count'})` : 'no'}.`);
   lines.push('- Keep edits scoped to the active plan, canonical evidence, and required implementation files.');
   lines.push('');
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const rendered = `${lines.join('\n')}\n`;
   await fs.writeFile(outputPath, rendered, 'utf8');
+  const manifest = {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    planId,
+    runId,
+    role,
+    stageIndex,
+    stageTotal,
+    selectionMaxItems,
+    selectedInputs: selectedInputs.map((entry) => ({
+      itemId: entry.itemId,
+      category: entry.category,
+      type: entry.type,
+      score: entry.score,
+      reasons: entry.reasons,
+      role: entry.role,
+      stageIndex: entry.stageIndex,
+      value: entry.value
+    })),
+    candidateCount: scoredInputs.length,
+    thinPack: thinPack.thinPack,
+    missingCategories: thinPack.missingCategories
+  };
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
   const outputRel = toPosix(path.relative(rootDir, outputPath));
+  const manifestRel = toPosix(path.relative(rootDir, manifestPath));
   return {
     outputPath: outputRel,
+    manifestPath: manifestRel,
     bytes: Buffer.byteLength(rendered, 'utf8'),
     lineCount: lines.length,
     policyRuleCount: renderedRules.length,
-    evidenceCount: evidenceReferences.length,
-    checkpointCount: recentCheckpoints.length
+    evidenceCount: selectedEvidenceInputs.length,
+    checkpointCount: selectedCheckpointInputs.length,
+    selectedInputCount: selectedInputs.length,
+    thinPack: thinPack.thinPack,
+    thinPackMissingCategories: thinPack.missingCategories
   };
 }
 
@@ -612,6 +840,7 @@ async function main() {
   const result = await compileTaskContactPack({
     rootDir: options['root-dir'] ?? process.cwd(),
     planId: options['plan-id'],
+    runId: options['run-id'],
     planFile: options['plan-file'],
     role: options.role,
     declaredRiskTier: options['declared-risk-tier'],
@@ -627,10 +856,12 @@ async function main() {
     maxRecentEvidenceItems: options['max-recent-evidence-items'],
     includeLatestState: options['include-latest-state'],
     maxRecentCheckpointItems: options['max-recent-checkpoint-items'],
-    maxStateListItems: options['max-state-list-items']
+    maxStateListItems: options['max-state-list-items'],
+    selectionMaxItems: options['selection-max-items'],
+    selectionCandidateCheckpoints: options['selection-candidate-checkpoints']
   });
   console.log(
-    `[contact-pack] wrote ${result.outputPath} (rules=${result.policyRuleCount}, checkpoints=${result.checkpointCount}, evidence=${result.evidenceCount}, bytes=${result.bytes}).`
+    `[contact-pack] wrote ${result.outputPath} (manifest=${result.manifestPath}, inputs=${result.selectedInputCount}, thin=${result.thinPack}, checkpoints=${result.checkpointCount}, evidence=${result.evidenceCount}, bytes=${result.bytes}).`
   );
 }
 

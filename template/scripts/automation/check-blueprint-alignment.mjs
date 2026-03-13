@@ -345,6 +345,57 @@ function ensureConfigPolicy(config, configPath) {
       rel(configPath)
     );
   }
+  const selection = contactPacks.selection ?? {};
+  const selectionMaxItems = Number.parseInt(String(selection.maxItems ?? ''), 10);
+  if (!Number.isFinite(selectionMaxItems) || selectionMaxItems <= 0) {
+    addFinding(
+      'INVALID_CONTACT_PACK_SELECTION_MAX_ITEMS',
+      'context.contactPacks.selection.maxItems must be a positive integer.',
+      rel(configPath)
+    );
+  }
+
+  const continuity = config?.continuity ?? {};
+  const minCompletedScore = Number(continuity?.checkpointQuality?.minCompletedScore ?? NaN);
+  if (!Number.isFinite(minCompletedScore) || minCompletedScore < 0 || minCompletedScore > 1) {
+    addFinding(
+      'INVALID_CONTINUITY_MIN_COMPLETED_SCORE',
+      'continuity.checkpointQuality.minCompletedScore must be within [0,1].',
+      rel(configPath)
+    );
+  }
+  const maxDerivedContinuityRate = Number(continuity?.thresholds?.maxDerivedContinuityRate ?? NaN);
+  if (!Number.isFinite(maxDerivedContinuityRate) || maxDerivedContinuityRate < 0 || maxDerivedContinuityRate > 1) {
+    addFinding(
+      'INVALID_CONTINUITY_MAX_DERIVED_RATE',
+      'continuity.thresholds.maxDerivedContinuityRate must be within [0,1].',
+      rel(configPath)
+    );
+  }
+  const minResumeSafeCheckpointRate = Number(continuity?.thresholds?.minResumeSafeCheckpointRate ?? NaN);
+  if (!Number.isFinite(minResumeSafeCheckpointRate) || minResumeSafeCheckpointRate < 0 || minResumeSafeCheckpointRate > 1) {
+    addFinding(
+      'INVALID_CONTINUITY_MIN_RESUME_SAFE_RATE',
+      'continuity.thresholds.minResumeSafeCheckpointRate must be within [0,1].',
+      rel(configPath)
+    );
+  }
+  const maxThinPackRate = Number(continuity?.thresholds?.maxThinPackRate ?? NaN);
+  if (!Number.isFinite(maxThinPackRate) || maxThinPackRate < 0 || maxThinPackRate > 1) {
+    addFinding(
+      'INVALID_CONTINUITY_MAX_THIN_PACK_RATE',
+      'continuity.thresholds.maxThinPackRate must be within [0,1].',
+      rel(configPath)
+    );
+  }
+  const maxRepeatedHandoffLoopPlans = Number.parseInt(String(continuity?.thresholds?.maxRepeatedHandoffLoopPlans ?? ''), 10);
+  if (!Number.isFinite(maxRepeatedHandoffLoopPlans) || maxRepeatedHandoffLoopPlans < 0) {
+    addFinding(
+      'INVALID_CONTINUITY_MAX_REPEATED_HANDOFF_LOOP_PLANS',
+      'continuity.thresholds.maxRepeatedHandoffLoopPlans must be an integer >= 0.',
+      rel(configPath)
+    );
+  }
 
   if (config?.logging?.output !== 'pretty') {
     addFinding(

@@ -13,6 +13,7 @@ Use this to demonstrate that orchestration reduces blast radius and debugging ov
 ## Data Sources
 
 - `docs/ops/automation/run-events.jsonl`
+- runtime continuity analytics artifact generated during automation runs
 - `docs/generated/perf-comparison.json`
 - `docs/exec-plans/evidence-index/*.md`
 - `docs/generated/run-outcomes.json`
@@ -36,10 +37,10 @@ Use this to demonstrate that orchestration reduces blast radius and debugging ov
   - Output: curated vs noisy evidence trend.
 - Memory posture quality:
   - Definition: continuity payload quality plus contact-pack richness captured from `session_finished` events.
-  - Output: derived-continuity rate, mean/median evidence refs per contact pack, mean/median checkpoint items per contact pack, and cache-hit/generated mix.
+  - Output: derived-continuity rate, continuity-degraded rate, resume-safe checkpoint rate, thin-pack rate, mean/median evidence refs per contact pack, mean/median checkpoint items per contact pack, mean/median selected-input count, and cache-hit/generated mix.
 - Rework loops:
   - Definition: count rollover/handoff and repeated non-terminal sessions.
-  - Output: handoff totals, handoffs-per-plan distribution, and worker no-touch retry count.
+  - Output: handoff totals, handoffs-per-plan distribution, repeated handoff-loop plan count, and worker no-touch retry count.
 
 ## Report Workflow
 
@@ -56,13 +57,15 @@ Use this to demonstrate that orchestration reduces blast radius and debugging ov
   - Stable lead times for similar risk tiers.
   - Validation failures trend down over time.
   - Evidence compaction keeps references concise.
-  - Contact packs stay rich enough to resume work without frequent synthesized continuity.
+  - Contact packs stay rich enough to resume work without frequent synthesized continuity or thin-pack classifications.
+  - Resume-safe checkpoint rates stay high and degraded continuity stays rare.
 - Investigation signal:
   - Time-to-first-edit spikes without corresponding risk increase.
   - Long planner/explorer/reviewer sessions with zero touched files.
   - Spiking handoff/rework counts.
   - Repeated validation failures on same plan group.
   - High derived-continuity rates or thin contact packs despite repeated handoffs.
+  - Low resume-safe checkpoint rates or repeated handoff loops for the same role/subtask.
   - High event volume with low completion throughput.
 
 ## Notes

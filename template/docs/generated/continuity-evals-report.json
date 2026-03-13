@@ -1,0 +1,81 @@
+{
+  "generatedAtUtc": "2026-03-13T22:42:46.139Z",
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0,
+    "skipped": 1,
+    "passRate": 1
+  },
+  "suites": [
+    {
+      "id": "continuity-fixture-resume",
+      "status": "pass",
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0
+    },
+    {
+      "id": "continuity-dogfood",
+      "status": "skip",
+      "total": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 1
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "worker-mid-implementation",
+      "suite": "continuity-fixture-resume",
+      "status": "pass",
+      "score": 1,
+      "dimensions": {
+        "correctness": 1,
+        "contextCarryover": 1,
+        "duplicateWorkAvoidance": 1,
+        "handoffQuality": 1
+      }
+    },
+    {
+      "id": "cross-role-planner-worker",
+      "suite": "continuity-fixture-resume",
+      "status": "pass",
+      "score": 1,
+      "dimensions": {
+        "correctness": 1,
+        "contextCarryover": 1,
+        "duplicateWorkAvoidance": 1,
+        "handoffQuality": 1
+      }
+    },
+    {
+      "id": "validation-handoff",
+      "suite": "continuity-fixture-resume",
+      "status": "pass",
+      "score": 1,
+      "dimensions": {
+        "correctness": 1,
+        "contextCarryover": 1,
+        "duplicateWorkAvoidance": 1,
+        "handoffQuality": 1
+      }
+    },
+    {
+      "id": "failed-session-recovery",
+      "suite": "continuity-fixture-resume",
+      "status": "pass",
+      "score": 1,
+      "dimensions": {
+        "correctness": 1,
+        "contextCarryover": 1,
+        "duplicateWorkAvoidance": 1,
+        "handoffQuality": 1
+      }
+    }
+  ],
+  "evidence": [
+    "docs/agent-hardening/continuity-fixtures.json"
+  ]
+}

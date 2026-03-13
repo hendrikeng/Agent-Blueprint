@@ -1,7 +1,9 @@
 {
   "reportPath": "docs/generated/evals-report.json",
+  "continuityReportPath": "docs/generated/continuity-evals-report.json",
   "maxAgeDays": 14,
   "minimumPassRate": 0.95,
+  "continuityMinimumPassRate": 0.95,
   "maxCriticalRegressions": 0,
   "maxHighRegressions": 0,
   "requiredSuites": [
@@ -11,6 +13,12 @@
     },
     {
       "id": "agent-safety-policy",
+      "status": "pass"
+    }
+  ],
+  "requiredContinuitySuites": [
+    {
+      "id": "continuity-fixture-resume",
       "status": "pass"
     }
   ],

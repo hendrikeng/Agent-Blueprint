@@ -4,6 +4,7 @@ import path from 'node:path';
 
 const DEFAULT_EVENTS_PATH = 'docs/ops/automation/run-events.jsonl';
 const DEFAULT_OUTPUT_PATH = 'docs/generated/run-outcomes.json';
+const DEFAULT_ANALYTICS_PATH = 'docs/ops/automation/runtime/continuity-analytics.json';
 
 function parseArgs(argv) {
   const options = {};
@@ -130,6 +131,7 @@ async function main() {
 
   const eventsPath = path.resolve(rootDir, String(options.events ?? DEFAULT_EVENTS_PATH));
   const outputPath = path.resolve(rootDir, String(options.output ?? DEFAULT_OUTPUT_PATH));
+  const analyticsPath = path.resolve(rootDir, String(options.analytics ?? DEFAULT_ANALYTICS_PATH));
 
   const eventTypeCounts = new Map();
   const runIds = new Set();
@@ -137,11 +139,15 @@ async function main() {
   const planStats = new Map();
   let sessionFinishedCount = 0;
   let continuityDerivedSessions = 0;
+  let continuityDegradedSessions = 0;
+  let resumeSafeCheckpointSessions = 0;
   let contactPackSessions = 0;
   let contactPackGeneratedSessions = 0;
   let contactPackCacheHitSessions = 0;
   const contactPackEvidenceCounts = [];
   const contactPackCheckpointCounts = [];
+  const contactPackSelectedInputCounts = [];
+  let thinContactPackSessions = 0;
 
   let totalLines = 0;
   let parsedEvents = 0;
@@ -202,7 +208,9 @@ async function main() {
           },
           validationPassed: 0,
           validationFailed: 0,
-          validationBlocked: 0
+          validationBlocked: 0,
+          repeatedHandoffLoops: 0,
+          lastNonTerminalLoopKey: null
         });
       }
 
@@ -265,6 +273,12 @@ async function main() {
         if (details.continuityDerived === true) {
           continuityDerivedSessions += 1;
         }
+        if (details.continuityDegraded === true) {
+          continuityDegradedSessions += 1;
+        }
+        if (details.checkpointResumeSafe === true) {
+          resumeSafeCheckpointSessions += 1;
+        }
         if (String(details.contactPackFile ?? '').trim()) {
           contactPackSessions += 1;
           if (details.contactPackGenerated === true) {
@@ -272,6 +286,9 @@ async function main() {
           } else {
             contactPackCacheHitSessions += 1;
           }
+        }
+        if (details.contactPackThin === true) {
+          thinContactPackSessions += 1;
         }
         const contactPackEvidenceCount = asNumber(details.contactPackEvidenceCount);
         if (contactPackEvidenceCount != null && contactPackEvidenceCount >= 0) {
@@ -281,8 +298,26 @@ async function main() {
         if (contactPackCheckpointCount != null && contactPackCheckpointCount >= 0) {
           contactPackCheckpointCounts.push(contactPackCheckpointCount);
         }
+        const contactPackSelectedInputCount = asNumber(details.contactPackSelectedInputCount);
+        if (contactPackSelectedInputCount != null && contactPackSelectedInputCount >= 0) {
+          contactPackSelectedInputCounts.push(contactPackSelectedInputCount);
+        }
 
+        const sessionStatus = String(details.status ?? '').trim().toLowerCase();
+        const loopKey = [
+          String(details.role ?? '').trim().toLowerCase(),
+          String(details.currentSubtask ?? '').trim(),
+          String(details.nextAction ?? '').trim()
+        ].join('|');
         const touchCount = asNumber(details.touchCount);
+        if ((sessionStatus === 'pending' || sessionStatus === 'handoff_required') && loopKey.replaceAll('|', '').length > 0) {
+          if (stats.lastNonTerminalLoopKey === loopKey && (touchCount ?? 0) === 0) {
+            stats.repeatedHandoffLoops += 1;
+          }
+          stats.lastNonTerminalLoopKey = loopKey;
+        } else if (sessionStatus === 'completed' || (touchCount ?? 0) > 0) {
+          stats.lastNonTerminalLoopKey = null;
+        }
         if (
           role === 'worker' &&
           (touchCount ?? 0) > 0 &&
@@ -314,6 +349,7 @@ async function main() {
   let pendingPlans = 0;
   let handoffEvents = 0;
   let workerNoTouchRetries = 0;
+  let repeatedHandoffLoopPlans = 0;
   let validationPassed = 0;
   let validationFailed = 0;
   let validationBlocked = 0;
@@ -343,6 +379,9 @@ async function main() {
     handoffEvents += stats.handoff;
     handoffsPerPlan.push(stats.handoff);
     workerNoTouchRetries += stats.workerNoTouchRetries;
+    if (stats.repeatedHandoffLoops > 0) {
+      repeatedHandoffLoopPlans += 1;
+    }
     validationPassed += stats.validationPassed;
     validationFailed += stats.validationFailed;
     validationBlocked += stats.validationBlocked;
@@ -370,12 +409,29 @@ async function main() {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([type, count]) => ({ type, count }));
 
+  let analytics = null;
+  if (await exists(analyticsPath)) {
+    try {
+      analytics = JSON.parse(await fs.readFile(analyticsPath, 'utf8'));
+    } catch {
+      analytics = null;
+    }
+  }
+  const analyticsItems = analytics?.items && typeof analytics.items === 'object'
+    ? Object.values(analytics.items).filter((entry) => entry && typeof entry === 'object')
+    : [];
+  const trackedItemCount = analyticsItems.length;
+  const helpfulItemCount = analyticsItems.filter((entry) => asNumber(entry.helpfulSessions) > 0).length;
+  const artifactReuseCount = analyticsItems.reduce((acc, entry) => acc + Math.max(0, asNumber(entry.artifactReuseCount, 0)), 0);
+
   const report = {
     generatedAt: new Date().toISOString(),
     source: {
       eventsPath: toPosix(path.relative(rootDir, eventsPath)),
       outputPath: toPosix(path.relative(rootDir, outputPath)),
+      analyticsPath: toPosix(path.relative(rootDir, analyticsPath)),
       eventsFileExists: await exists(eventsPath),
+      analyticsFileExists: await exists(analyticsPath),
       totalLines,
       parsedEvents,
       malformedLines
@@ -439,10 +495,25 @@ async function main() {
           sessionFinishedCount > 0
             ? round(continuityDerivedSessions / sessionFinishedCount, 4)
             : null,
+        degradedSessions: continuityDegradedSessions,
+        continuityDegradedRate:
+          sessionFinishedCount > 0
+            ? round(continuityDegradedSessions / sessionFinishedCount, 4)
+            : null,
+        resumeSafeCheckpointSessions: resumeSafeCheckpointSessions,
+        resumeSafeCheckpointRate:
+          sessionFinishedCount > 0
+            ? round(resumeSafeCheckpointSessions / sessionFinishedCount, 4)
+            : null,
         contactPacks: {
           sessions: contactPackSessions,
           generatedSessions: contactPackGeneratedSessions,
           cacheHitSessions: contactPackCacheHitSessions,
+          thinSessions: thinContactPackSessions,
+          thinRate:
+            contactPackSessions > 0
+              ? round(thinContactPackSessions / contactPackSessions, 4)
+              : null,
           evidenceRefs: {
             sampleSize: contactPackEvidenceCounts.length,
             mean: round(mean(contactPackEvidenceCounts)),
@@ -452,7 +523,18 @@ async function main() {
             sampleSize: contactPackCheckpointCounts.length,
             mean: round(mean(contactPackCheckpointCounts)),
             median: round(median(contactPackCheckpointCounts))
+          },
+          selectedInputs: {
+            sampleSize: contactPackSelectedInputCounts.length,
+            mean: round(mean(contactPackSelectedInputCounts)),
+            median: round(median(contactPackSelectedInputCounts))
           }
+        },
+        usefulness: {
+          trackedItems: trackedItemCount,
+          helpfulItems: helpfulItemCount,
+          helpfulItemRate: trackedItemCount > 0 ? round(helpfulItemCount / trackedItemCount, 4) : null,
+          artifactReuseCount
         }
       },
       rework: {
@@ -462,7 +544,8 @@ async function main() {
           mean: round(mean(handoffsPerPlan)),
           median: round(median(handoffsPerPlan))
         },
-        workerNoTouchRetries
+        workerNoTouchRetries,
+        repeatedHandoffLoopPlans
       }
     },
     eventTypeCounts: eventTypeEntries

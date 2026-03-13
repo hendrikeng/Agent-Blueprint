@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "scenarios": [
+    {
+      "id": "worker-mid-implementation",
+      "suite": "continuity-fixture-resume",
+      "expectedStatus": "completed",
+      "alreadyCompletedWork": [
+        "Added continuity incident bundle writer"
+      ],
+      "requiredContext": {
+        "facts": [
+          "contact pack manifests must include stable item ids",
+          "incident bundles must include validation refs"
+        ],
+        "decisions": [
+          "promotion thresholds block full verification only"
+        ],
+        "artifacts": [
+          "docs/generated/run-outcomes.json"
+        ]
+      },
+      "resumeOutput": {
+        "status": "completed",
+        "currentSubtask": "Finish outcomes threshold enforcement",
+        "nextAction": "Wire outcomes verify into full verification",
+        "stateDelta": {
+          "completedWork": [
+            "Added outcomes threshold verifier"
+          ],
+          "acceptedFacts": [
+            "contact pack manifests must include stable item ids",
+            "incident bundles must include validation refs"
+          ],
+          "decisions": [
+            "promotion thresholds block full verification only"
+          ],
+          "recentResults": [
+            "Generated run outcomes now include thin pack rate"
+          ],
+          "artifacts": [
+            "docs/generated/run-outcomes.json"
+          ],
+          "evidence": {
+            "validationRefs": [
+              "npm run verify:full"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "cross-role-planner-worker",
+      "suite": "continuity-fixture-resume",
+      "expectedStatus": "handoff_required",
+      "alreadyCompletedWork": [
+        "Enumerated required continuity thresholds"
+      ],
+      "requiredContext": {
+        "facts": [
+          "verify:fast warns but does not fail on continuity thresholds"
+        ],
+        "decisions": [
+          "fixture continuity suite is mandatory in ci"
+        ],
+        "artifacts": [
+          "docs/generated/continuity-evals-report.json"
+        ]
+      },
+      "resumeOutput": {
+        "status": "handoff_required",
+        "currentSubtask": "Hand worker the remaining eval integration",
+        "nextAction": "Update eval verifier to require continuity report freshness",
+        "stateDelta": {
+          "acceptedFacts": [
+            "verify:fast warns but does not fail on continuity thresholds"
+          ],
+          "decisions": [
+            "fixture continuity suite is mandatory in ci"
+          ],
+          "recentResults": [
+            "Planner completed the continuity eval wiring plan"
+          ],
+          "artifacts": [
+            "docs/generated/continuity-evals-report.json"
+          ],
+          "reasoning": {
+            "blockers": [
+              "worker implementation still pending"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "validation-handoff",
+      "suite": "continuity-fixture-resume",
+      "expectedStatus": "completed",
+      "alreadyCompletedWork": [
+        "Implemented continuity threshold checker"
+      ],
+      "requiredContext": {
+        "facts": [
+          "host validation should remain outside executor sessions"
+        ],
+        "decisions": [
+          "continuity thresholds use run outcomes data only when sample size is non-zero"
+        ],
+        "artifacts": [
+          "docs/ops/automation/runtime/incidents/example.json"
+        ]
+      },
+      "resumeOutput": {
+        "status": "completed",
+        "currentSubtask": "Close validation handoff",
+        "nextAction": "Re-run verify full after outcomes report generation",
+        "stateDelta": {
+          "completedWork": [
+            "Linked outcomes verification into validation flow"
+          ],
+          "acceptedFacts": [
+            "host validation should remain outside executor sessions"
+          ],
+          "decisions": [
+            "continuity thresholds use run outcomes data only when sample size is non-zero"
+          ],
+          "recentResults": [
+            "Validation handoff closed cleanly"
+          ],
+          "artifacts": [
+            "docs/ops/automation/runtime/incidents/example.json"
+          ],
+          "evidence": {
+            "validationRefs": [
+              "npm run outcomes:verify"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "failed-session-recovery",
+      "suite": "continuity-fixture-resume",
+      "expectedStatus": "failed",
+      "alreadyCompletedWork": [],
+      "requiredContext": {
+        "facts": [
+          "failed or degraded sessions must emit incident bundles"
+        ],
+        "decisions": [
+          "continuity-degraded sessions remain reportable even when execution does not fail"
+        ],
+        "artifacts": [
+          "docs/ops/automation/runtime/incidents/run-1/plan-a/session-1.json"
+        ]
+      },
+      "resumeOutput": {
+        "status": "failed",
+        "currentSubtask": "Capture failed session replay bundle",
+        "nextAction": "Inspect incident bundle and selected inputs before retry",
+        "stateDelta": {
+          "acceptedFacts": [
+            "failed or degraded sessions must emit incident bundles"
+          ],
+          "decisions": [
+            "continuity-degraded sessions remain reportable even when execution does not fail"
+          ],
+          "recentResults": [
+            "Session failed before completion"
+          ],
+          "artifacts": [
+            "docs/ops/automation/runtime/incidents/run-1/plan-a/session-1.json"
+          ],
+          "reasoning": {
+            "blockers": [
+              "executor exited with status 1"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
