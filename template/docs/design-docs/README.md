@@ -1,4 +1,4 @@
-# Design Docs Index
+# Design Docs
 
 Status: canonical
 Owner: {{DOC_OWNER}}

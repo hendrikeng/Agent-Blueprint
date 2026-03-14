@@ -62,7 +62,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/architecture/README.md`
 - `docs/architecture/layers.md`
 - `docs/architecture/dependency-rules.md`
-- `docs/design-docs/index.md`
+- `docs/design-docs/README.md`
 - `docs/design-docs/core-beliefs.md`
 - `docs/design-docs/engineering-invariants.md`
 - `docs/design-docs/ui-standards.md`

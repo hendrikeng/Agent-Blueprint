@@ -47,7 +47,7 @@ Start here, then follow linked source-of-truth docs:
 - Policy manifest (runtime source): `docs/governance/policy-manifest.json`
 - Golden principles: `docs/governance/golden-principles.md`
 - Quality scorecard: `docs/QUALITY_SCORE.md`
-- Design docs index: `docs/design-docs/index.md`
+- Design docs: `docs/design-docs/README.md`
 - Engineering invariants: `docs/design-docs/engineering-invariants.md`
 - UI standards: `docs/design-docs/ui-standards.md`
 - Frontend standards: `docs/FRONTEND.md`
