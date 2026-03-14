@@ -21,6 +21,7 @@ Source of Truth: This document.
 - Product specs index: `docs/product-specs/README.md`
 - Product state: `docs/product-specs/current-state.md`
 - References index: `docs/references/README.md`
+- UI contracts: `docs/ui/README.md`
 - Plan workflow: `docs/PLANS.md`
 - Evidence index: `docs/exec-plans/evidence-index/README.md`
 - Ops runbooks: `docs/ops/README.md`
