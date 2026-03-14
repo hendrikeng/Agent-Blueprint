@@ -46,6 +46,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/product-specs/README.md`
 - `docs/product-specs/current-state.md`
 - `docs/references/`
+- `docs/references/README.md`
 - `docs/ui/`
 
 ## Canonical Markdown Files
@@ -99,5 +100,5 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/ops/automation/PROVIDER_COMPATIBILITY.md`
 - `docs/product-specs/README.md`
 - `docs/product-specs/current-state.md`
-- `docs/references/index.md`
+- `docs/references/README.md`
 - `docs/ui/intents.md`
