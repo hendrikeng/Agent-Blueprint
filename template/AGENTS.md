@@ -56,7 +56,7 @@ Start here, then follow linked source-of-truth docs:
 - Memory and context policy: `docs/agent-hardening/MEMORY_CONTEXT.md`
 - Git safety: `docs/design-docs/git-safety.md`
 - Plan lifecycle (non-trivial changes): `docs/PLANS.md`
-- Product specs index: `docs/product-specs/index.md`
+- Product specs index: `docs/product-specs/README.md`
 - Product state snapshot: `docs/product-specs/current-state.md`
 - Execution plans: `docs/exec-plans/README.md`
 - Ops automation conveyor: `docs/ops/automation/README.md`

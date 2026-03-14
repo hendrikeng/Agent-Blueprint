@@ -91,7 +91,7 @@ Start with:
 - `docs/BACKEND.md`
 - `docs/agent-hardening/README.md`
 - `docs/governance/README.md`
-- `docs/product-specs/index.md`
+- `docs/product-specs/README.md`
 - `docs/product-specs/current-state.md`
 - `docs/exec-plans/README.md`
 - `docs/ops/automation/README.md`

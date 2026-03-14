@@ -18,6 +18,7 @@ Source of Truth: This document.
 - Design docs: `docs/design-docs/README.md`
 - Deployment model: `docs/deploy/README.md`
 - Environment model: `docs/env/README.md`
+- Product specs index: `docs/product-specs/README.md`
 - Product state: `docs/product-specs/current-state.md`
 - Plan workflow: `docs/PLANS.md`
 - Evidence index: `docs/exec-plans/evidence-index/README.md`

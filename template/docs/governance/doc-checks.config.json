@@ -55,7 +55,7 @@
     "docs/ops/README.md",
     "docs/ops/automation/README.md",
     "docs/product-specs/current-state.md",
-    "docs/product-specs/index.md",
+    "docs/product-specs/README.md",
     "docs/references/index.md",
     "docs/ui/intents.md",
     "docs/generated/evals-report.json",
@@ -149,7 +149,9 @@
       "docs/ops/automation/README.md",
       "docs/governance/README.md",
       "docs/governance/rules.md",
-      "docs/governance/policy-manifest.json"
+      "docs/governance/policy-manifest.json",
+      "docs/product-specs/README.md",
+      "docs/product-specs/current-state.md"
     ],
     "docs/ops/README.md": [
       "docs/ops/automation/README.md",
@@ -166,6 +168,9 @@
       "docs/governance/policy-manifest.schema.json",
       "docs/governance/doc-checks.config.json",
       "docs/governance/architecture-rules.json"
+    ],
+    "docs/product-specs/README.md": [
+      "docs/product-specs/current-state.md"
     ]
   },
   "requiredHeadings": {
@@ -371,7 +376,7 @@
       "docs/ops/README.md",
       "docs/ops/automation/README.md",
       "docs/product-specs/current-state.md",
-      "docs/product-specs/index.md",
+      "docs/product-specs/README.md",
       "docs/references/index.md",
       "docs/ui/intents.md",
       "docs/ops/automation/ROLE_ORCHESTRATION.md",

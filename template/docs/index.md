@@ -43,6 +43,8 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/ops/automation/INTEROP_GITHUB.md`
 - `docs/ops/automation/PROVIDER_COMPATIBILITY.md`
 - `docs/product-specs/`
+- `docs/product-specs/README.md`
+- `docs/product-specs/current-state.md`
 - `docs/references/`
 - `docs/ui/`
 
@@ -95,7 +97,7 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/ops/automation/OUTCOMES.md`
 - `docs/ops/automation/INTEROP_GITHUB.md`
 - `docs/ops/automation/PROVIDER_COMPATIBILITY.md`
-- `docs/product-specs/index.md`
+- `docs/product-specs/README.md`
 - `docs/product-specs/current-state.md`
 - `docs/references/index.md`
 - `docs/ui/intents.md`

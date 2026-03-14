@@ -5,9 +5,14 @@ Owner: {{DOC_OWNER}}
 Last Updated: {{LAST_UPDATED_ISO_DATE}}
 Source of Truth: This document.
 
-## Active Specs
+## Canonical Specs
 
 - `docs/product-specs/current-state.md`
+
+## Adopted Repo Rule
+
+- Add repo-specific product docs here as they become canonical or first-class supporting specs.
+- Keep long-form market narrative, roadmaps, and domain specs listed here instead of relying on folder discovery alone.
 
 ## Spec Metadata Standard
 
