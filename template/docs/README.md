@@ -10,7 +10,10 @@ Source of Truth: This document.
 - Canonical index: `docs/index.md`
 - Agent hardening policy: `docs/agent-hardening/README.md`
 - Governance policy: `docs/governance/README.md`
+- Governance rules: `docs/governance/rules.md`
+- Golden principles: `docs/governance/golden-principles.md`
 - Policy manifest: `docs/governance/policy-manifest.json`
+- Architecture rules: `docs/governance/architecture-rules.json`
 - Architecture map: `docs/architecture/README.md`
 - Design docs: `docs/design-docs/README.md`
 - Deployment model: `docs/deploy/README.md`

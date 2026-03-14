@@ -47,6 +47,10 @@
     "docs/governance/README.md",
     "docs/governance/golden-principles.md",
     "docs/governance/rules.md",
+    "docs/governance/policy-manifest.json",
+    "docs/governance/policy-manifest.schema.json",
+    "docs/governance/doc-checks.config.json",
+    "docs/governance/architecture-rules.json",
     "docs/index.md",
     "docs/ops/README.md",
     "docs/ops/automation/README.md",
@@ -142,7 +146,10 @@
     ],
     "docs/README.md": [
       "docs/ops/README.md",
-      "docs/ops/automation/README.md"
+      "docs/ops/automation/README.md",
+      "docs/governance/README.md",
+      "docs/governance/rules.md",
+      "docs/governance/policy-manifest.json"
     ],
     "docs/ops/README.md": [
       "docs/ops/automation/README.md",
@@ -151,6 +158,14 @@
       "docs/ops/automation/OUTCOMES.md",
       "docs/ops/automation/INTEROP_GITHUB.md",
       "docs/ops/automation/PROVIDER_COMPATIBILITY.md"
+    ],
+    "docs/governance/README.md": [
+      "docs/governance/rules.md",
+      "docs/governance/golden-principles.md",
+      "docs/governance/policy-manifest.json",
+      "docs/governance/policy-manifest.schema.json",
+      "docs/governance/doc-checks.config.json",
+      "docs/governance/architecture-rules.json"
     ]
   },
   "requiredHeadings": {

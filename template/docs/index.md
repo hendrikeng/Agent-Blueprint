@@ -34,6 +34,8 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/governance/`
 - `docs/governance/policy-manifest.json`
 - `docs/governance/policy-manifest.schema.json`
+- `docs/governance/doc-checks.config.json`
+- `docs/governance/architecture-rules.json`
 - `docs/ops/`
 - `docs/ops/automation/`
 - `docs/ops/automation/LITE_QUICKSTART.md`
@@ -82,6 +84,10 @@ This is the canonical completeness index for first-class documentation in `docs/
 - `docs/governance/README.md`
 - `docs/governance/rules.md`
 - `docs/governance/golden-principles.md`
+- `docs/governance/policy-manifest.json`
+- `docs/governance/policy-manifest.schema.json`
+- `docs/governance/doc-checks.config.json`
+- `docs/governance/architecture-rules.json`
 - `docs/ops/README.md`
 - `docs/ops/automation/README.md`
 - `docs/ops/automation/ROLE_ORCHESTRATION.md`
