@@ -25,7 +25,9 @@ Source of Truth: This document and linked docs in this folder.
 
 - Targeted policy checks: `npm run agent:verify` and `npm run eval:verify`
 - Continuity fixture runner: `npm run eval:continuity`
+- Real-run continuity scorecard: `npm run outcomes:report` and `npm run outcomes:verify`
 - Iteration profile: `npm run verify:fast`
 - Merge profile: `npm run verify:full`
 
 `agent:verify` and `eval:verify` are required and must pass before merge.
+`eval:verify` gates template/local eval health, while `outcomes:verify` gates continuity thresholds from real automation runs such as derived continuity, resume-safe checkpoints, thin contact packs, and repeated handoff loops.

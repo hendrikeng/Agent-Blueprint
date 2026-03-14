@@ -122,6 +122,7 @@ Use the manual path when any of these are true:
   - `"context.maxTokens"` sets a hard budget for compiled runtime context size.
   - `"context.contactPacks"` configures per-task scoped role contact packs (`enabled`, `maxPolicyBullets`, `includeRecentEvidence`, `maxRecentEvidenceItems`, `includeLatestState`, `maxRecentCheckpointItems`, `maxStateListItems`, `cacheMode`).
   - Contact packs include the shared memory posture and select continuity inputs in priority order: latest continuity state, latest same-role checkpoint, latest cross-role or stage-transition checkpoint, then capped evidence refs.
+  - Thin-pack classification is availability-aware: a first-session pack is not penalized for missing checkpoint entries when no prior checkpoint candidates existed yet.
   - `With "context.contactPacks.cacheMode": "run-memory", cache keys include an evidence freshness token (state signature when available, otherwise evidence-index file stat) to avoid stale recent-evidence payloads.`
   - `"logging.output": "pretty"` (`minimal` | `ticker` | `pretty` | `verbose`), `"logging.failureTailLines": 60`, `"logging.heartbeatSeconds": 120`, `"logging.stallWarnSeconds": 120`, `"logging.touchSummary": true`, `"logging.touchSampleSize": 3`, `"logging.touchScanMode": "adaptive"`, `"logging.touchScanMinHeartbeats": 1`, `"logging.touchScanMaxHeartbeats": 8`, `"logging.touchScanBackoffUnchanged": 2`, `"logging.liveActivity": {"mode": "best-effort", "maxChars": 0, "sampleSeconds": 2, "emitEventLines": false, "redactPatterns": [...]}`, `"logging.workerFirstTouchDeadlineSeconds": 180`, `"logging.workerRetryFirstTouchDeadlineSeconds": 180`, `"logging.workerNoTouchRetryLimit": 1`, and `"logging.workerPendingStreakLimit": 4` tune operator-facing output noise, liveness, live file-touch visibility, provider live-message surfacing, touch-scan cadence, and worker no-progress fail-fast behavior (`workerFirstTouchDeadlineSeconds: 0` disables deadline fail-fast; retry sessions inherit the base deadline unless overridden; `workerPendingStreakLimit: 0` disables worker same-role pending streak fail-fast).
   - `"recovery.retryFailed": true`, `"recovery.autoUnblock": true`, and `"recovery.maxFailedRetries": 2` control automatic retry/unblock behavior for resumable plans.
@@ -225,6 +226,8 @@ Use the manual path when any of these are true:
   - Generates `docs/generated/run-outcomes.json` from `run-events.jsonl`, including `summary.memory` continuity and contact-pack metrics.
   - `npm run outcomes:verify`
   - Fails on derived continuity, thin-pack, resume-safe checkpoint, or repeated handoff-loop threshold breaches when outcome samples exist.
+  - `resumeSafeCheckpointRate` is computed from `session_checkpoint_assessed` events, not raw `session_finished` counts.
+  - `thinPackRate` only counts sessions that were genuinely missing expected continuity categories from the available candidate set; first-session packs without reusable checkpoints are not thin by default.
 - GitHub interop export scaffold (optional):
   - `npm run interop:github:export`
   - Generates `docs/generated/github-agent-export.json` and can emit `.agent.md` plus JSON scaffolds under `.github/agents/`.
@@ -329,6 +332,7 @@ Executor commands should use these outcomes:
 - Session boundaries are strict: each planner/explorer/worker/reviewer stage starts a new executor process and can use a role-specific model profile.
 - Each session gets a task-scoped contact pack (`{contact_pack_file}`) built from runtime policy, shared memory posture, task scope, latest continuity state, selected checkpoints, and capped evidence references. Executors should use it as primary context before expanding scope.
 - Contact packs also emit a JSON manifest so later sessions can score which continuity inputs were actually useful.
+- Thin-pack scoring only expects continuity categories that had candidates available for that session, so missing checkpoints are only penalized once reusable checkpoint history exists.
 - Executor sessions must always emit a structured result payload (`ORCH_RESULT_PATH`) with a numeric `contextRemaining`; include numeric `contextWindow` and `contextUsedRatio` whenever the provider/runtime can estimate them reliably.
 - Non-terminal executor payloads must also include `currentSubtask`, `nextAction`, and `stateDelta` so orchestration can checkpoint resumable state instead of relying on raw session history.
 - Persisted checkpoints are scored for resume safety; synthesized continuity, thin contact packs, and unsafe checkpoints are treated as degraded continuity and can emit replay bundles.
