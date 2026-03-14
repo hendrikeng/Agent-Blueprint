@@ -16,6 +16,7 @@ Source of Truth: This document.
 - Keep agent hardening policy canonical from bootstrap.
 - Keep security and data-safety controls explicit.
 - Docs are part of done.
+- Harness-defined canonical framework docs under `docs/` use uppercase basenames with lowercase `.md`; folder entrypoints remain `README.md`, and newly created repo-local docs stay lowercase unless explicitly promoted into the canonical harness contract.
 - Canonical docs must remain environment-agnostic: no personal machine paths, hostnames, credentials, or private runbooks.
 - `docs/governance/policy-manifest.json` is the machine-readable policy source for runtime context compilation.
 
