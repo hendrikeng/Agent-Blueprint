@@ -41,7 +41,7 @@ Use the least process that still protects correctness.
 Feature agents should consume derived, task-scoped surfaces, not improvise from the entire repo.
 
 - Keep canonical policy in `AGENTS.md`, architecture docs, governance docs, and plan/evidence files.
-- Compile runtime instructions into `docs/generated/agent-runtime-context.md` for compact shared policy.
+- Compile runtime instructions into `template/docs/generated/AGENT-RUNTIME-CONTEXT.md` for compact shared policy.
 - Generate task-scoped contact packs from plan state, checkpoints, and evidence for each role session.
 - Export platform-native agent scaffolds only as derived artifacts such as `.github/agents/*`; do not make them the source of truth.
 - Treat `docs/generated/*`, `.github/agents/*`, and `docs/ops/automation/runtime/*` as generated or transient surfaces that can be rebuilt from canonical docs and run state.
@@ -76,7 +76,7 @@ flowchart TD
 - Non-terminal sessions must also emit structured continuity fields (`currentSubtask`, `nextAction`, `stateDelta`) so orchestration can checkpoint resumable machine state instead of relying on raw transcript history.
 - Continuity is persisted as repo-local runtime state under `docs/ops/automation/runtime/state/<plan-id>/latest.json` and `checkpoints.jsonl`.
 - Handoffs are written as both markdown notes and structured JSON packets, then reused by later same-run rollovers and `resume` runs.
-- Runtime context is recompiled from canonical docs (`docs/generated/agent-runtime-context.md`) to reduce drift and hallucination risk.
+- Runtime context is recompiled from canonical docs (`template/docs/generated/AGENT-RUNTIME-CONTEXT.md`) to reduce drift and hallucination risk.
 - Contact packs now carry runtime policy, the memory posture, task scope, latest continuity state, selected checkpoints, and capped evidence references.
 - Improve checkpoint contents, contact-pack selection, evidence compaction, and observability before considering external retrieval or off-repo memory.
 - Repo-local checkpoints and contact packs remain the default memory architecture; see `template/docs/agent-hardening/MEMORY_CONTEXT.md` for the detailed rule set and escalation triggers.
@@ -134,7 +134,7 @@ Canonical policy and lifecycle docs:
 - `template/docs/ops/automation/OUTCOMES.md`
 - `template/docs/ops/automation/INTEROP_GITHUB.md`
 - `template/docs/ops/automation/PROVIDER_COMPATIBILITY.md`
-- `template/docs/governance/rules.md`
+- `template/docs/governance/RULES.md`
 - `template/docs/governance/policy-manifest.json`
 - `template/docs/PLANS.md`
 - `template/PLACEHOLDERS.md`
