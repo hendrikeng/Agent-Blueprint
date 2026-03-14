@@ -12,6 +12,8 @@ Source of Truth: This document.
 - Governance policy: `docs/governance/README.md`
 - Policy manifest: `docs/governance/policy-manifest.json`
 - Architecture map: `docs/architecture/README.md`
+- Deployment model: `docs/deploy/README.md`
+- Environment model: `docs/env/README.md`
 - Product state: `docs/product-specs/current-state.md`
 - Plan workflow: `docs/PLANS.md`
 - Ops automation: `docs/ops/automation/README.md`
