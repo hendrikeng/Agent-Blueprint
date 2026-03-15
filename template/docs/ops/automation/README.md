@@ -53,7 +53,7 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `## Must-Land Checklist` inside each plan is the executable completion contract; broader vision belongs in `## Deferred Follow-Ons`, not in completion gating.
 - `Delivery-Class` and `Execution-Scope` make plan intent explicit. The harness does not infer executable meaning from titles such as `phase`, `portfolio`, or `blueprint`.
 - `Execution-Scope: program` plans stay active as non-executable parent contracts. `Execution-Scope: slice` plans are the only plans that enter worker/reviewer/validation lanes directly.
-- Product slices must declare `Implementation-Targets`; those roots are the authoritative implementation evidence boundary. `Spec-Targets` remain the broader impact list.
+- Product slices must declare `Implementation-Targets`; those roots are the authoritative implementation evidence boundary. Worker sessions must not edit source/tests/config files outside those roots without first updating plan scope. `Spec-Targets` remain the broader impact list.
 - Future blueprints and active program parents must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
 
 ## Orchestrated vs Manual Execution

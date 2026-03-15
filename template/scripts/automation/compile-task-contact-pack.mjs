@@ -808,7 +808,8 @@ export async function compileTaskContactPack(input) {
     `- Selected continuity inputs: state=${selectedInputs.some((entry) => entry.category === 'state') ? 1 : 0}, checkpoints=${selectedCheckpointInputs.length}, evidence=${selectedEvidenceInputs.length}.`
   );
   lines.push(`- Thin pack: ${thinPack.thinPack ? `yes (${thinPack.missingCategories.join(', ') || 'low item count'})` : 'no'}.`);
-  lines.push('- Keep edits scoped to the active plan, canonical evidence, and required implementation files.');
+  lines.push('- Keep edits scoped to the active plan, canonical evidence, and declared Implementation-Targets.');
+  lines.push('- If implementation requires a new source/test/config root, stop and hand back the missing path instead of editing outside the declared targets.');
   lines.push('');
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });

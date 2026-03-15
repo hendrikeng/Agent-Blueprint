@@ -31,6 +31,7 @@ import {
   todayIsoDate,
   inferPlanId
 } from './lib/plan-metadata.mjs';
+import { disallowedWorkerTouchedPaths } from './lib/plan-scope.mjs';
 
 const DEFAULT_CONTEXT_THRESHOLD = 10000;
 const DEFAULT_CONTEXT_SOFT_USED_RATIO = 0.65;
@@ -1996,10 +1997,10 @@ function monitorTouchedPaths(cwd, baselineState, options = {}) {
   };
 }
 
-function disallowedTouchedPathsForRole(role, touchedPaths = []) {
+function disallowedTouchedPathsForRole(role, plan, touchedPaths = []) {
   const normalizedRole = normalizeRoleName(role, ROLE_WORKER);
   if (normalizedRole === ROLE_WORKER) {
-    return [];
+    return disallowedWorkerTouchedPaths(plan, touchedPaths);
   }
   const normalized = [...new Set(
     (Array.isArray(touchedPaths) ? touchedPaths : [])
@@ -3709,6 +3710,9 @@ function deriveOutcomeNextSteps(plan, outcome, state, config, riskTier) {
   if (status === 'failed') {
     if (reasonLower.includes('executor exited with status') || reasonLower.includes('executor failed')) {
       steps.push(`Inspect latest session logs in docs/ops/automation/runtime/${state.runId}/.`);
+    }
+    if (reasonLower.includes('outside declared implementation-targets')) {
+      steps.push('Update plan `Implementation-Targets` to include the needed code roots, or revert the out-of-scope edits, then resume.');
     }
     if (reasonLower.includes('atomic root policy violation')) {
       steps.push('Stage only plan-scoped files (or run with `--commit false`) while unrelated workspace changes exist.');
@@ -9540,12 +9544,15 @@ async function processPlan(plan, paths, state, options, config) {
     const refreshedPlan = await readPlanRecord(paths.rootDir, plan.filePath, 'active');
     syncPlanRecord(plan, refreshedPlan);
     const workerTouchPolicy = buildWorkerTouchPolicy(plan);
-    const disallowedWrites = disallowedTouchedPathsForRole(currentRole, sessionResult.touchSummary?.touched ?? []);
+    const disallowedWrites = disallowedTouchedPathsForRole(currentRole, plan, sessionResult.touchSummary?.touched ?? []);
     if (disallowedWrites.length > 0) {
       const violationSample = disallowedWrites.slice(0, 3).join(', ');
       const violationReason =
-        `Role '${currentRole}' touched files outside docs/exec-plans. ` +
-        `Allowed scope is execution plan/evidence docs only. Sample: ${violationSample}`;
+        currentRole === ROLE_WORKER
+          ? `Role '${currentRole}' touched files outside declared Implementation-Targets. ` +
+            `Update the plan roots before widening scope or revert the out-of-scope edits. Sample: ${violationSample}`
+          : `Role '${currentRole}' touched files outside docs/exec-plans. ` +
+            `Allowed scope is execution plan/evidence docs only. Sample: ${violationSample}`;
       await logEvent(paths, state, 'session_policy_violation', {
         planId: plan.planId,
         session,
