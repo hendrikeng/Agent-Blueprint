@@ -11,6 +11,7 @@ import {
   ACTIVE_STATUSES,
   CAPABILITY_PROOF_MAP_SECTION,
   collectUnfinishedCoverageRows,
+  parseValidationLanes,
   isValidPlanId,
   listMarkdownFiles,
   metadataValue,
@@ -72,6 +73,7 @@ import {
   gitAvailable,
   gitDirty,
   hasRecordedImplementationEvidence,
+  implementationEvidenceFingerprint,
   implementationEvidencePaths,
   isArtifactSlicePlan,
   isProductPlan,
@@ -83,6 +85,7 @@ import {
   stagedRepoPaths,
   evaluateAtomicCommitReadiness
 } from './lib/atomic-commit-policy.mjs';
+import { compileProgramChildren } from './lib/program-child-compiler.mjs';
 import {
   classifyValidationFailureScope,
   createValidationCompletionOps
@@ -4380,6 +4383,7 @@ async function readPlanRecord(rootDir, filePath, phase) {
   const implementationTargets = parseListField(metadataValue(metadata, 'Implementation-Targets')).map((target) => (
     resolveSafeRepoPath(rootDir, target, `Implementation-Targets entry in ${rel}`).rel
   ));
+  const validationLanes = parseValidationLanes(metadataValue(metadata, 'Validation-Lanes'));
   const doneEvidence = parseListField(metadataValue(metadata, 'Done-Evidence'));
   const parentPlanIdRaw = metadataValue(metadata, 'Parent-Plan-ID');
   const parentPlanId = parentPlanIdRaw ? parsePlanId(parentPlanIdRaw, null) : null;
@@ -4412,6 +4416,7 @@ async function readPlanRecord(rootDir, filePath, phase) {
     deliveryClass: parseDeliveryClass(metadataValue(metadata, 'Delivery-Class'), ''),
     executionScope: parseExecutionScope(metadataValue(metadata, 'Execution-Scope'), ''),
     implementationTargets,
+    validationLanes,
     parentPlanId,
     doneEvidence,
     atomicRoots,
@@ -4438,6 +4443,7 @@ function clonePlanRecord(record) {
     tags: [...(record.tags ?? [])],
     specTargets: [...(record.specTargets ?? [])],
     implementationTargets: [...(record.implementationTargets ?? [])],
+    validationLanes: [...(record.validationLanes ?? [])],
     doneEvidence: [...(record.doneEvidence ?? [])],
     atomicRoots: [...(record.atomicRoots ?? [])],
     concurrencyLocks: [...(record.concurrencyLocks ?? [])],
@@ -4489,6 +4495,36 @@ async function resolveEvidenceFreshnessToken(planId, paths, state) {
   } catch {
     return 'none';
   }
+}
+
+async function preflightCompileProgramChildren(paths, options) {
+  const result = await compileProgramChildren(paths.rootDir, {
+    write: !asBoolean(options.dryRun, false),
+    dryRun: asBoolean(options.dryRun, false),
+    planId: options.planId ?? null
+  });
+
+  for (const advisory of result.advisories) {
+    progressLog(options, `child compile advisory ${advisory.code}: ${advisory.message}`);
+  }
+
+  for (const entry of result.writes) {
+    progressLog(options, `compiled child ${entry.action} ${entry.planId}: ${entry.filePath}`);
+  }
+
+  for (const entry of result.moves) {
+    progressLog(options, `compiled child moved ${entry.planId}: ${entry.source} -> ${entry.target}`);
+  }
+
+  if (result.issues.length > 0) {
+    const preview = result.issues
+      .slice(0, 3)
+      .map((entry) => `${entry.code}: ${entry.message}`)
+      .join(' | ');
+    throw new Error(`Program child compilation failed: ${preview}`);
+  }
+
+  return result;
 }
 
 async function loadPlanRecords(rootDir, directoryPath, phase) {
@@ -4598,12 +4634,7 @@ function executablePlans(activePlans, completedPlanIds, excludedPlanIds = new Se
         : recoveredPlanIds.has(plan.planId)
     )
     .filter((plan) => !excludedPlanIds.has(plan.planId))
-    .filter((plan) => plan.dependencies.every((dependency) => completedPlanIds.has(dependency)))
-    .sort((a, b) => {
-      const priorityDelta = priorityOrder(a.priority) - priorityOrder(b.priority);
-      if (priorityDelta !== 0) return priorityDelta;
-      return a.rel.localeCompare(b.rel);
-    });
+    .filter((plan) => plan.dependencies.every((dependency) => completedPlanIds.has(dependency)));
 }
 
 function blockedPlans(activePlans, completedPlanIds, excludedPlanIds = new Set()) {
@@ -4611,6 +4642,78 @@ function blockedPlans(activePlans, completedPlanIds, excludedPlanIds = new Set()
     .filter((plan) => ACTIVE_STATUSES.has(plan.status))
     .filter((plan) => !excludedPlanIds.has(plan.planId))
     .filter((plan) => plan.dependencies.some((dependency) => !completedPlanIds.has(dependency)));
+}
+
+function effectiveRiskOrder(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'medium') return 1;
+  if (normalized === 'high') return 2;
+  return 0;
+}
+
+function queueReadinessRank(plan, recoveredPlanIds = new Set()) {
+  if (plan.status === 'in-progress') {
+    return 0;
+  }
+  if (plan.status === 'queued') {
+    return 1;
+  }
+  if ((plan.status === 'failed' || plan.status === 'blocked') && recoveredPlanIds.has(plan.planId)) {
+    return 2;
+  }
+  return 3;
+}
+
+function validationLaneRank(plan) {
+  return Array.isArray(plan?.validationLanes) && plan.validationLanes.includes('host-required') ? 1 : 0;
+}
+
+function dependencyDepth(plan, planById, completedPlanIds, memo = new Map()) {
+  if (!plan?.planId) {
+    return 0;
+  }
+  if (memo.has(plan.planId)) {
+    return memo.get(plan.planId);
+  }
+  const depth = Math.max(
+    0,
+    ...plan.dependencies
+      .filter((dependency) => !completedPlanIds.has(dependency))
+      .map((dependency) => {
+        const dependencyPlan = planById.get(dependency);
+        return dependencyPlan ? dependencyDepth(dependencyPlan, planById, completedPlanIds, memo) + 1 : 0;
+      })
+  );
+  memo.set(plan.planId, depth);
+  return depth;
+}
+
+function sortExecutableQueue(plans, completedPlanIds, recoveredPlanIds, state, config) {
+  const planById = new Map(plans.filter((plan) => plan.planId).map((plan) => [plan.planId, plan]));
+  const depthMemo = new Map();
+  return [...plans].sort((left, right) => {
+    const readinessDelta = queueReadinessRank(left, recoveredPlanIds) - queueReadinessRank(right, recoveredPlanIds);
+    if (readinessDelta !== 0) return readinessDelta;
+
+    const depthDelta =
+      dependencyDepth(left, planById, completedPlanIds, depthMemo) -
+      dependencyDepth(right, planById, completedPlanIds, depthMemo);
+    if (depthDelta !== 0) return depthDelta;
+
+    const priorityDelta = priorityOrder(left.priority) - priorityOrder(right.priority);
+    if (priorityDelta !== 0) return priorityDelta;
+
+    const leftRisk = computeRiskAssessment(left, state, config);
+    const rightRisk = computeRiskAssessment(right, state, config);
+    const riskDelta =
+      effectiveRiskOrder(leftRisk.effectiveRiskTier) - effectiveRiskOrder(rightRisk.effectiveRiskTier);
+    if (riskDelta !== 0) return riskDelta;
+
+    const laneDelta = validationLaneRank(left) - validationLaneRank(right);
+    if (laneDelta !== 0) return laneDelta;
+
+    return left.rel.localeCompare(right.rel);
+  });
 }
 
 function evaluateExecutionEligibility(plan) {
@@ -8470,6 +8573,7 @@ async function runLoop(paths, state, options, config, runMode) {
       executable = executable.filter((plan) => matchesPlanIdFilter(plan, options.planId));
       blockedByDependency = blockedByDependency.filter((plan) => matchesPlanIdFilter(plan, options.planId));
     }
+    executable = sortExecutableQueue(executable, completedIds, recoverablePlanIds, state, config);
 
     state.queue = executable.map((plan) => plan.planId);
     await saveState(paths, state, options.dryRun);
@@ -9092,6 +9196,8 @@ async function runParallelCommand(paths, options) {
       }, options.dryRun);
     }
 
+    await preflightCompileProgramChildren(paths, options);
+
     if (!resumeParallel && !asBoolean(options.skipPromotion, false)) {
       const promoted = await promoteFuturePlans(paths, state, options);
       if (promoted > 0) {
@@ -9105,6 +9211,7 @@ async function runParallelCommand(paths, options) {
     let candidates = catalog.active
       .filter((plan) => ACTIVE_STATUSES.has(plan.status))
       .filter((plan) => plan.status !== 'completed')
+      .filter((plan) => !isProgramPlan(plan))
       .sort((a, b) => {
         const priorityDelta = priorityOrder(a.priority) - priorityOrder(b.priority);
         if (priorityDelta !== 0) return priorityDelta;
@@ -9129,6 +9236,7 @@ async function runParallelCommand(paths, options) {
         ? true
         : recoverablePlanIds.has(plan.planId)
     ));
+    candidates = sortExecutableQueue(candidates, completedForScheduling, recoverablePlanIds, state, config);
     const pending = new Map(candidates.map((plan) => [plan.planId, plan]));
     const launched = new Set();
     const active = new Map();
@@ -9160,9 +9268,15 @@ async function runParallelCommand(paths, options) {
         }, options.dryRun);
       }
 
-      const ready = [...pending.values()]
+      const ready = sortExecutableQueue(
+        [...pending.values()]
         .filter((plan) => !launched.has(plan.planId))
-        .filter((plan) => planDependenciesReady(plan, completedForScheduling));
+        .filter((plan) => planDependenciesReady(plan, completedForScheduling)),
+        completedForScheduling,
+        recoverablePlanIds,
+        state,
+        config
+      );
       const remainingBudget = Math.max(0, maxPlans - launched.size);
       const freeSlots = Math.max(0, Math.min(parallelOptions.parallelPlans - active.size, remainingBudget));
       state.queue = ready.map((plan) => plan.planId);
@@ -9414,6 +9528,7 @@ async function runCommand(paths, options) {
       `run started runId=${state.runId} mode=${state.effectiveMode} output=${options.outputMode} failureTailLines=${options.failureTailLines}`
     );
 
+    await preflightCompileProgramChildren(paths, options);
     let processed = await runLoop(paths, state, options, config, 'run');
 
     if (!asBoolean(options.skipPromotion, false)) {
@@ -9543,6 +9658,7 @@ async function resumeCommand(paths, options) {
       `run resumed runId=${state.runId} mode=${state.effectiveMode} output=${options.outputMode} failureTailLines=${options.failureTailLines}`
     );
 
+    await preflightCompileProgramChildren(paths, options);
     const processed = await runLoop(paths, state, options, config, 'resume');
 
     const runDurationSeconds = durationSeconds(state.startedAt);

@@ -194,6 +194,17 @@ function ensureScriptSignatures(
       'scripts/automation/lib/atomic-commit-policy.mjs'
     );
   }
+  if (
+    orchestratorRaw.includes('function captureImplementationBaseline(') &&
+    orchestratorRaw.includes('implementationEvidenceFingerprint(') &&
+    !orchestratorRaw.includes('implementationEvidenceFingerprint,')
+  ) {
+    addFinding(
+      'MISSING_IMPLEMENTATION_EVIDENCE_FINGERPRINT_IMPORT',
+      'scripts/automation/orchestrator.mjs must import implementationEvidenceFingerprint from ./lib/atomic-commit-policy.mjs when captureImplementationBaseline uses it.',
+      'scripts/automation/orchestrator.mjs'
+    );
+  }
   if (!validationCompletionRaw.includes('export function createValidationCompletionOps(')) {
     addFinding(
       'MISSING_VALIDATION_COMPLETION_MODULE',

@@ -53,6 +53,8 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `## Must-Land Checklist` inside each plan is the executable completion contract; broader vision belongs in `## Deferred Follow-Ons`, not in completion gating.
 - `Delivery-Class` and `Execution-Scope` make plan intent explicit. The harness does not infer executable meaning from titles such as `phase`, `portfolio`, or `blueprint`.
 - `Execution-Scope: program` plans stay active as non-executable parent contracts. `Execution-Scope: slice` plans are the only plans that enter worker/reviewer/validation lanes directly.
+- Program parents that want automatic child generation must declare `## Child Slice Definitions`; orchestration/compiler materializes those child slices before promotion and queue selection.
+- Compiled child slices must declare `Validation-Lanes` and include `## Validation Contract` so proof references bind to configured validation IDs instead of free-form command text.
 - Product slices must declare `Implementation-Targets`; those roots are the authoritative implementation evidence boundary. Worker sessions must not edit source/tests/config files outside those roots without first updating plan scope. `Spec-Targets` remain the broader impact list.
 - Future blueprints and active program parents must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
 
@@ -78,6 +80,7 @@ Use the manual path when any of these are true:
 - `node ./scripts/automation/orchestrator.mjs resume`
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
 - `node ./scripts/automation/orchestrator.mjs curate-evidence [--scope active|completed|all] [--plan-id <value>]`
+- `node ./scripts/automation/compile-program-children.mjs --write true [--plan-id <value>]`
 - Optional continuation controls:
   - `--max-sessions-per-plan <n>` (default `12`)
   - `--max-rollovers <n>` (default `20`)
@@ -180,6 +183,7 @@ Use the manual path when any of these are true:
   - `validation.host.local.command`: optional local host-validation command override.
   - Recommended baseline: set `validation.host.local.command` to `npm run verify:full` so host-lane behavior is explicit and reproducible.
   - If host validation fails with command output (for example architecture/dependency checks), treat it as a real repository-gate failure and fix the code/docs; host configuration is already functioning.
+  - Compiled child slices record `Validation-Lanes` plus a generated `## Validation Contract`; those contracts should reference explicit validation IDs already configured here.
 - Semantic proof:
   - `semanticProof.mode: advisory|required` controls whether missing proof coverage is reported or blocks product-slice completion.
   - Product slices should add stable lowercase must-land IDs such as `ml-lifecycle-workbench-summary` plus `## Capability Proof Map` so must-land claims map to explicit capability and proof rows.
@@ -291,6 +295,7 @@ Quick run guide:
 Start examples:
 
 - Run with default pretty output + recovery profile: `npm run automation:run`
+- Materialize structured program children explicitly: `npm run plans:compile`
 - Process up to 5 plans in one run: `npm run automation:run -- --max-plans 5`
 - Faster liveness signal in pretty mode: `npm run automation:run -- --heartbeat-seconds 5 --stall-warn-seconds 45`
 - Compact ticker output: `npm run automation:run -- --output ticker`
@@ -302,6 +307,7 @@ Start examples:
 Future blueprint promotion quick rule:
 
 - Before setting `Status: ready-for-promotion`, require `## Master Plan Coverage` or `## Capability Coverage Matrix`, require `## Prior Completed Plan Reconciliation`, require `## Promotion Blockers`, and run `npm run plans:verify`.
+- `run`, `resume`, `run-parallel`, and `resume-parallel` compile structured program children before future promotion and before queue selection so the executable queue comes from the compiled active child graph rather than ad hoc plan discovery.
 
 Pretty output example:
 

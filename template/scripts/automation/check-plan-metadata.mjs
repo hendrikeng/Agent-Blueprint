@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   ACTIVE_STATUSES,
   CAPABILITY_PROOF_MAP_SECTION,
+  CHILD_SLICE_DEFINITIONS_SECTION,
   COMPLETED_STATUSES,
   COVERAGE_SECTION_TITLES,
   DELIVERY_CLASSES,
@@ -26,9 +27,11 @@ import {
   parseListField,
   parseMetadata,
   parsePlanId,
+  parseValidationLanes,
   normalizeStatus,
   inferPlanId
 } from './lib/plan-metadata.mjs';
+import { compileProgramChildren } from './lib/program-child-compiler.mjs';
 
 const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rootDir = process.cwd();
@@ -497,6 +500,9 @@ async function scanPhase(phase, directoryPath) {
     const parentPlanId = parentPlanIdRaw ? parsePlanId(parentPlanIdRaw, null) : null;
     const implementationTargetsRaw = parseListField(metadataValue(metadata, 'Implementation-Targets'));
     const implementationTargets = implementationTargetsRaw.map(normalizeTargetPathValue).filter(Boolean);
+    const validationLanesRaw = metadataValue(metadata, 'Validation-Lanes');
+    const validationLaneTokens = parseListField(validationLanesRaw).map((entry) => entry.toLowerCase());
+    const validationLanes = parseValidationLanes(validationLanesRaw);
     const implementationTargetsProvided = implementationTargets.length > 0;
     const productSlicePlan = deliveryClass === 'product' && executionScope === 'slice';
     const proofMode = scanPhase.proofMode ?? 'advisory';
@@ -598,6 +604,14 @@ async function scanPhase(phase, directoryPath) {
       );
     }
 
+    if (validationLaneTokens.length > 0 && validationLanes.length !== validationLaneTokens.length) {
+      addFinding(
+        'INVALID_VALIDATION_LANES',
+        `Invalid Validation-Lanes '${validationLanesRaw}' (expected: always, host-required).`,
+        rel
+      );
+    }
+
     if (phase !== 'completed' && !deliveryClass) {
       addFinding(
         'MISSING_DELIVERY_CLASS',
@@ -642,6 +656,22 @@ async function scanPhase(phase, directoryPath) {
       addFinding(
         'UNEXPECTED_IMPLEMENTATION_TARGETS',
         "Only 'Delivery-Class: product' plus 'Execution-Scope: slice' plans may declare 'Implementation-Targets'. Use 'none' or remove the field for program/docs/ops/reconciliation plans.",
+        rel
+      );
+    }
+
+    if (parentPlanId && executionScope === 'slice' && validationLanes.length === 0) {
+      addFinding(
+        'MISSING_VALIDATION_LANES',
+        "Child slice plans with 'Parent-Plan-ID' must declare 'Validation-Lanes'.",
+        rel
+      );
+    }
+
+    if (parentPlanId && executionScope === 'slice' && validationLanes.length > 0 && !sectionBody(content, 'Validation Contract')) {
+      addFinding(
+        'MISSING_VALIDATION_CONTRACT',
+        "Child slice plans with 'Parent-Plan-ID' must include '## Validation Contract'.",
         rel
       );
     }
@@ -1077,6 +1107,16 @@ async function main() {
   ]);
 
   const allPlans = [...futurePlans, ...activePlans, ...completedPlans];
+  const compilerCheck = await compileProgramChildren(rootDir, {
+    write: false,
+    planId: scopedPlanId
+  });
+  for (const advisory of compilerCheck.advisories) {
+    addAdvisory(advisory.code, advisory.message, advisory.filePath);
+  }
+  for (const issue of compilerCheck.issues) {
+    addFinding(issue.code, issue.message, issue.filePath);
+  }
   const seenPlanIds = new Map();
 
   for (const plan of allPlans) {

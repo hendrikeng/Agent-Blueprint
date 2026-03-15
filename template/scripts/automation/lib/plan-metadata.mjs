@@ -9,6 +9,9 @@ export const SECURITY_APPROVAL_VALUES = new Set(['not-required', 'pending', 'app
 export const DELIVERY_CLASSES = new Set(['product', 'docs', 'ops', 'reconciliation']);
 export const EXECUTION_SCOPES = new Set(['slice', 'program']);
 export const CAPABILITY_PROOF_MAP_SECTION = 'Capability Proof Map';
+export const CHILD_SLICE_DEFINITIONS_SECTION = 'Child Slice Definitions';
+export const VALIDATION_CONTRACT_SECTION = 'Validation Contract';
+export const VALIDATION_LANES = new Set(['always', 'host-required']);
 export const PROOF_TYPES = new Set([
   'unit',
   'integration',
@@ -471,6 +474,7 @@ function compareMetadataKeys(a, b) {
     'Security-Approval',
     'Spec-Targets',
     'Implementation-Targets',
+    'Validation-Lanes',
     'Done-Evidence'
   ];
   const aIndex = order.indexOf(a);
@@ -558,6 +562,20 @@ export function parseListField(rawValue) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+export function parseValidationLanes(rawValue, fallback = []) {
+  const parsed = parseListField(rawValue)
+    .map((entry) => String(entry ?? '').trim().toLowerCase())
+    .filter((entry) => VALIDATION_LANES.has(entry));
+  if (parsed.length > 0) {
+    return [...new Set(parsed)];
+  }
+  return [...new Set(
+    (Array.isArray(fallback) ? fallback : [])
+      .map((entry) => String(entry ?? '').trim().toLowerCase())
+      .filter((entry) => VALIDATION_LANES.has(entry))
+  )];
 }
 
 export function firstHeading(content) {

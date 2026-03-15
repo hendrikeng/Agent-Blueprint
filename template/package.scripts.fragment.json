@@ -8,6 +8,7 @@
     "eval:continuity": "node ./scripts/agent-hardening/run-continuity-evals.mjs",
     "eval:verify": "node ./scripts/agent-hardening/check-evals.mjs",
     "harness:verify": "node ./scripts/automation/check-harness-alignment.mjs",
+    "plans:compile": "node ./scripts/automation/compile-program-children.mjs --write true",
     "plans:verify": "node ./scripts/automation/check-plan-metadata.mjs",
     "verify:fast": "node ./scripts/automation/verify-fast.mjs",
     "verify:full": "node ./scripts/automation/verify-full.mjs",
