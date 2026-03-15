@@ -56,6 +56,29 @@ test('harness-sync update restores managed files when invoked outside the harnes
   assert.match(readme, /This file is intended to become the adopted repository's root `README.md`/);
 });
 
+test('harness-sync preserves downstream .gitignore content', async () => {
+  const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harness-sync-gitignore-'));
+  await fs.writeFile(
+    path.join(targetDir, '.gitignore'),
+    'node_modules\ncustom-cache\n',
+    'utf8'
+  );
+
+  const result = run(['install', '--target', targetDir]);
+  assert.equal(result.status, 0);
+
+  const gitignore = await fs.readFile(path.join(targetDir, '.gitignore'), 'utf8');
+  assert.equal(gitignore, 'node_modules\ncustom-cache\n');
+
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(targetDir, 'docs', 'ops', 'automation', 'harness-manifest.json'), 'utf8')
+  );
+  assert.equal(
+    manifest.managedFiles.some((entry) => entry.targetPath === '.gitignore'),
+    false
+  );
+});
+
 test('harness-sync drift reports unexpected managed files from the downstream manifest', async () => {
   const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), 'harness-sync-unexpected-'));
   assert.equal(run(['install', '--target', targetDir]).status, 0);

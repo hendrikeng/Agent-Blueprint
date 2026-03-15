@@ -71,6 +71,28 @@ async function walkFiles(baseDir, currentDir = baseDir) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
+function normalizePattern(value) {
+  return toPosix(String(value ?? '').trim()).replace(/^\.?\//, '');
+}
+
+function matchesExcludePattern(relativePath, pattern) {
+  const normalizedPath = normalizePattern(relativePath);
+  const normalizedPattern = normalizePattern(pattern);
+  if (!normalizedPattern) {
+    return false;
+  }
+  if (normalizedPattern.startsWith('**/')) {
+    const suffix = normalizedPattern.slice(3);
+    return normalizedPath === suffix || normalizedPath.endsWith(`/${suffix}`);
+  }
+  return normalizedPath === normalizedPattern || normalizedPath.endsWith(`/${normalizedPattern}`);
+}
+
+function isExcluded(relativePath, manifest) {
+  const patterns = Array.isArray(manifest?.excludeGlobs) ? manifest.excludeGlobs : [];
+  return patterns.some((pattern) => matchesExcludePattern(relativePath, pattern));
+}
+
 async function sha256(filePath) {
   const buffer = await fs.readFile(filePath);
   return createHash('sha256').update(buffer).digest('hex');
@@ -95,6 +117,9 @@ async function collectSourceFiles(manifest) {
   const entries = [];
   for (const absPath of files) {
     const relFromSource = toPosix(path.relative(sourceRoot, absPath));
+    if (isExcluded(relFromSource, manifest)) {
+      continue;
+    }
     const stat = await fs.stat(absPath);
     entries.push({
       sourcePath: toPosix(path.relative(rootDir, absPath)),
