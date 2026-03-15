@@ -97,14 +97,16 @@ function toRunId(event) {
   return nested || null;
 }
 
-function toSessionKey(event) {
+function toArtifactSessionKey(event) {
   const details = eventDetails(event);
-  const artifactKey = String(
+  const value = String(
     details.commandLogPath ?? details.resultPath ?? details.executorLogPath ?? details.logPath ?? ''
   ).trim();
-  if (artifactKey) {
-    return artifactKey;
-  }
+  return value || null;
+}
+
+function toLogicalSessionKey(event) {
+  const details = eventDetails(event);
   const runId = toRunId(event) ?? 'unknown-run';
   const planId = toPlanId(event) ?? 'unknown-plan';
   const session = String(event?.session ?? details.session ?? '').trim();
@@ -113,6 +115,34 @@ function toSessionKey(event) {
     return null;
   }
   return [runId, planId, session, role || 'unknown-role'].join('::');
+}
+
+function logicalOutcomeRecords(map, logicalKey) {
+  if (!logicalKey) {
+    return [];
+  }
+  if (!map.has(logicalKey)) {
+    map.set(logicalKey, []);
+  }
+  return map.get(logicalKey);
+}
+
+function attachCheckpointOutcomeKeys(record, artifactKey, logicalKey, recordsByArtifactKey, recordsByLogicalKey) {
+  if (artifactKey && !record.artifactKey) {
+    record.artifactKey = artifactKey;
+  }
+  if (logicalKey && !record.logicalKey) {
+    record.logicalKey = logicalKey;
+  }
+  if (artifactKey && !recordsByArtifactKey.has(artifactKey)) {
+    recordsByArtifactKey.set(artifactKey, record);
+  }
+  if (logicalKey) {
+    const records = logicalOutcomeRecords(recordsByLogicalKey, logicalKey);
+    if (!records.includes(record)) {
+      records.push(record);
+    }
+  }
 }
 
 function mean(values) {
@@ -157,11 +187,9 @@ async function main() {
   const planStats = new Map();
   let sessionFinishedCount = 0;
   let continuityDerivedSessions = 0;
-  let fallbackContinuityDegradedSessions = 0;
-  let fallbackResumeSafeCheckpointSessions = 0;
-  let explicitCheckpointAssessments = 0;
-  let explicitContinuityDegradedSessions = 0;
-  let explicitResumeSafeCheckpointSessions = 0;
+  const checkpointOutcomeRecords = [];
+  const checkpointOutcomeByArtifactKey = new Map();
+  const checkpointOutcomeByLogicalKey = new Map();
   let contactPackSessions = 0;
   let contactPackGeneratedSessions = 0;
   let contactPackCacheHitSessions = 0;
@@ -343,21 +371,75 @@ async function main() {
         ) {
           stats.firstWorkerEditSeconds = (timestampMs - stats.firstSeenMs) / 1000;
         }
-        if (details.continuityDegraded === true) {
-          fallbackContinuityDegradedSessions += 1;
+        const artifactKey = toArtifactSessionKey(event);
+        const logicalKey = toLogicalSessionKey(event);
+        let outcome = artifactKey ? checkpointOutcomeByArtifactKey.get(artifactKey) ?? null : null;
+        if (!outcome && logicalKey) {
+          outcome = logicalOutcomeRecords(checkpointOutcomeByLogicalKey, logicalKey).find(
+            (candidate) => candidate.sawFinished !== true
+          ) ?? null;
         }
-        if (details.checkpointResumeSafe === true) {
-          fallbackResumeSafeCheckpointSessions += 1;
+        if (!outcome) {
+          outcome = {
+            artifactKey: null,
+            logicalKey: null,
+            sawFinished: false,
+            explicitSeen: false,
+            fallbackContinuityDegraded: false,
+            fallbackCheckpointResumeSafe: false,
+            explicitContinuityDegraded: false,
+            explicitCheckpointResumeSafe: false
+          };
+          checkpointOutcomeRecords.push(outcome);
         }
+        attachCheckpointOutcomeKeys(
+          outcome,
+          artifactKey,
+          logicalKey,
+          checkpointOutcomeByArtifactKey,
+          checkpointOutcomeByLogicalKey
+        );
+        outcome.sawFinished = true;
+        outcome.fallbackContinuityDegraded = details.continuityDegraded === true;
+        outcome.fallbackCheckpointResumeSafe = details.checkpointResumeSafe === true;
       }
       if (typeLower === 'session_checkpoint_assessed') {
-        explicitCheckpointAssessments += 1;
-        if (details.continuityDegraded === true) {
-          explicitContinuityDegradedSessions += 1;
+        const artifactKey = toArtifactSessionKey(event);
+        const logicalKey = toLogicalSessionKey(event);
+        let outcome = artifactKey ? checkpointOutcomeByArtifactKey.get(artifactKey) ?? null : null;
+        if (!outcome && logicalKey) {
+          const logicalRecords = logicalOutcomeRecords(checkpointOutcomeByLogicalKey, logicalKey);
+          for (let index = logicalRecords.length - 1; index >= 0; index -= 1) {
+            const candidate = logicalRecords[index];
+            if (!candidate.explicitSeen) {
+              outcome = candidate;
+              break;
+            }
+          }
         }
-        if (details.checkpointResumeSafe === true) {
-          explicitResumeSafeCheckpointSessions += 1;
+        if (!outcome) {
+          outcome = {
+            artifactKey: null,
+            logicalKey: null,
+            sawFinished: false,
+            explicitSeen: false,
+            fallbackContinuityDegraded: false,
+            fallbackCheckpointResumeSafe: false,
+            explicitContinuityDegraded: false,
+            explicitCheckpointResumeSafe: false
+          };
+          checkpointOutcomeRecords.push(outcome);
         }
+        attachCheckpointOutcomeKeys(
+          outcome,
+          artifactKey,
+          logicalKey,
+          checkpointOutcomeByArtifactKey,
+          checkpointOutcomeByLogicalKey
+        );
+        outcome.explicitSeen = true;
+        outcome.explicitContinuityDegraded = details.continuityDegraded === true;
+        outcome.explicitCheckpointResumeSafe = details.checkpointResumeSafe === true;
       }
 
       if (typeLower.includes('validation')) {
@@ -372,12 +454,25 @@ async function main() {
     }
   }
 
-  const continuityDegradedSessions =
-    explicitCheckpointAssessments > 0 ? explicitContinuityDegradedSessions : fallbackContinuityDegradedSessions;
-  const resumeSafeCheckpointSessions =
-    explicitCheckpointAssessments > 0
-      ? explicitResumeSafeCheckpointSessions
-      : fallbackResumeSafeCheckpointSessions;
+  let continuityDegradedSessions = 0;
+  let resumeSafeCheckpointSessions = 0;
+  for (const outcome of checkpointOutcomeRecords) {
+    if (!outcome.sawFinished) {
+      continue;
+    }
+    const continuityDegraded = outcome.explicitSeen
+      ? outcome.explicitContinuityDegraded
+      : outcome.fallbackContinuityDegraded;
+    const checkpointResumeSafe = outcome.explicitSeen
+      ? outcome.explicitCheckpointResumeSafe
+      : outcome.fallbackCheckpointResumeSafe;
+    if (continuityDegraded) {
+      continuityDegradedSessions += 1;
+    }
+    if (checkpointResumeSafe) {
+      resumeSafeCheckpointSessions += 1;
+    }
+  }
 
   const leadTimesSeconds = [];
   let completedPlans = 0;
