@@ -90,6 +90,7 @@ import {
   classifyValidationFailureScope,
   createValidationCompletionOps
 } from './lib/validation-completion.mjs';
+import { deriveProgramStates } from './lib/program-state.mjs';
 
 const DEFAULT_CONTEXT_THRESHOLD = 10000;
 const DEFAULT_CONTEXT_SOFT_USED_RATIO = 0.65;
@@ -3656,7 +3657,7 @@ async function persistSecurityApproval(plan, securityApprovalField, securityAppr
 
 function createInitialState(runId, requestedMode, effectiveMode) {
   return {
-    version: 6,
+    version: 7,
     runId,
     requestedMode,
     effectiveMode,
@@ -3680,6 +3681,7 @@ function createInitialState(runId, requestedMode, effectiveMode) {
     sessionState: {},
     evidenceState: {},
     implementationState: {},
+    programState: {},
     roleState: {},
     parallelState: {
       activeWorkers: {},
@@ -3720,6 +3722,10 @@ function normalizePersistedState(state) {
   normalized.implementationState =
     normalized.implementationState && typeof normalized.implementationState === 'object'
       ? normalized.implementationState
+      : {};
+  normalized.programState =
+    normalized.programState && typeof normalized.programState === 'object'
+      ? normalized.programState
       : {};
   normalized.roleState =
     normalized.roleState && typeof normalized.roleState === 'object' ? normalized.roleState : {};
@@ -8494,6 +8500,92 @@ async function collectPlanCatalog(paths) {
   };
 }
 
+function deriveProgramStateSnapshot(catalog, compilationIssuesByParent = new Map()) {
+  return deriveProgramStates(catalog, {
+    compilationIssuesByParent
+  });
+}
+
+async function collectProgramCompilationIssues(paths, catalog) {
+  const issuesByParent = new Map();
+  for (const parent of [...(catalog.active ?? []), ...(catalog.future ?? [])]) {
+    if (!isProgramPlan(parent)) {
+      continue;
+    }
+    const compileCheck = await compileProgramChildren(paths.rootDir, {
+      write: false,
+      dryRun: true,
+      planId: parent.planId
+    });
+    if (compileCheck.issues.length > 0) {
+      issuesByParent.set(parent.planId, compileCheck.issues);
+    }
+  }
+  return issuesByParent;
+}
+
+async function refreshProgramState(paths, state, catalog) {
+  const compilationIssuesByParent = await collectProgramCompilationIssues(paths, catalog);
+  state.programState = deriveProgramStateSnapshot(catalog, compilationIssuesByParent);
+  return state.programState;
+}
+
+async function closeEligibleProgramParents(paths, state, options, config, catalog) {
+  const programStates = await refreshProgramState(paths, state, catalog);
+  const closed = [];
+
+  for (const summary of Object.values(programStates).sort((left, right) => left.planId.localeCompare(right.planId))) {
+    if (summary.closeoutEligible !== true) {
+      continue;
+    }
+
+    const parent = catalog.byId.get(summary.planId);
+    if (!parent || parent.phase !== 'active' || !isProgramPlan(parent)) {
+      continue;
+    }
+
+    if (summary.childCompilationCurrent !== true) {
+      continue;
+    }
+
+    const validationEvidence = [
+      `Program closeout derived from child graph state: ${summary.summary}`,
+      `Completed child plans: ${summary.completedChildren}/${summary.totalChildren}`,
+      `Unresolved dependencies: ${summary.unresolvedDependencies.length > 0 ? summary.unresolvedDependencies.join(', ') : 'none'}`
+    ];
+    const targetPath = await finalizeCompletedPlan(parent, paths, state, validationEvidence, options, config, {
+      sessionsExecuted: 0,
+      rollovers: 0,
+      hostValidationProvider: 'none',
+      declaredRiskTier: parent.riskTier ?? 'low',
+      effectiveRiskTier: parent.riskTier ?? 'low',
+      rolePipeline: 'program-closeout',
+      planStartedAt: state.startedAt
+    });
+    const completedRel = toPosix(path.relative(paths.rootDir, targetPath));
+    delete state.roleState[parent.planId];
+    clearPlanRecoveryState(state, parent.planId);
+    clearPlanContinuationState(state, parent.planId);
+    if (!state.completedPlanIds.includes(parent.planId)) {
+      state.completedPlanIds.push(parent.planId);
+    }
+    await logEvent(paths, state, 'program_parent_closed', {
+      planId: parent.planId,
+      completedPath: completedRel,
+      totalChildren: summary.totalChildren,
+      completedChildren: summary.completedChildren,
+      summary: summary.summary
+    }, options.dryRun);
+    progressLog(options, `program closeout ${parent.planId}: ${summary.summary}`);
+    closed.push({
+      planId: parent.planId,
+      completedPath: completedRel
+    });
+  }
+
+  return closed;
+}
+
 function reconcileOutcomeTracking(state, catalog) {
   const completedIds = new Set([
     ...state.completedPlanIds,
@@ -8519,8 +8611,14 @@ async function runLoop(paths, state, options, config, runMode) {
   const recoveryAnnounced = new Set();
 
   while (processed < maxPlans) {
-    const catalog = await collectPlanCatalog(paths);
+    let catalog = await collectPlanCatalog(paths);
     reconcileOutcomeTracking(state, catalog);
+    const programCloseouts = await closeEligibleProgramParents(paths, state, options, config, catalog);
+    if (programCloseouts.length > 0) {
+      catalog = await collectPlanCatalog(paths);
+      reconcileOutcomeTracking(state, catalog);
+      await refreshProgramState(paths, state, catalog);
+    }
     const completedIds = new Set(state.completedPlanIds);
     const recoverable = classifyRecoverablePlans(catalog.active, completedIds, state, options, config);
     const recoverablePlanIds = new Set([
@@ -8705,6 +8803,13 @@ async function runLoop(paths, state, options, config, runMode) {
         progressLog(options, `next steps ${nextPlan.planId}: ${nextSteps.join(' | ')}`);
       }
     }
+
+    catalog = await collectPlanCatalog(paths);
+    reconcileOutcomeTracking(state, catalog);
+    await closeEligibleProgramParents(paths, state, options, config, catalog);
+    catalog = await collectPlanCatalog(paths);
+    reconcileOutcomeTracking(state, catalog);
+    await refreshProgramState(paths, state, catalog);
 
     await saveState(paths, state, options.dryRun);
     processed += 1;
@@ -9732,6 +9837,15 @@ async function auditCommand(paths, options) {
     planStatuses: [...latestPerPlan.values()].sort((a, b) => a.planId.localeCompare(b.planId))
   };
 
+  try {
+    const catalog = await collectPlanCatalog(paths);
+    const compilationIssuesByParent = await collectProgramCompilationIssues(paths, catalog);
+    payload.programStatuses = Object.values(deriveProgramStateSnapshot(catalog, compilationIssuesByParent))
+      .sort((a, b) => a.planId.localeCompare(b.planId));
+  } catch {
+    payload.programStatuses = [];
+  }
+
   if (asBoolean(options.json, false)) {
     console.log(JSON.stringify(payload, null, 2));
     return;
@@ -9749,6 +9863,17 @@ async function auditCommand(paths, options) {
   for (const status of payload.planStatuses) {
     const reasonSuffix = status.reason ? ` (${status.reason})` : '';
     console.log(`  - ${status.planId}: ${status.type} @ ${status.timestamp}${reasonSuffix}`);
+  }
+  if (Array.isArray(payload.programStatuses) && payload.programStatuses.length > 0) {
+    console.log('- derived program status:');
+    for (const status of payload.programStatuses) {
+      const blocked = status.closeoutBlockedReasons.length > 0
+        ? ` blocked=${status.closeoutBlockedReasons.slice(0, 2).join(' | ')}`
+        : '';
+      console.log(
+        `  - ${status.planId}: ${status.summary}; closeoutEligible=${status.closeoutEligible ? 'yes' : 'no'}${blocked}`
+      );
+    }
   }
 }
 

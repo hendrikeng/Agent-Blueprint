@@ -67,6 +67,7 @@ Create or update a future blueprint as `Status: draft` only when these checks pa
 - [ ] `## Prior Completed Plan Reconciliation` classifies relevant completed plans as `kept-as-baseline`, `kept-but-refactored`, `superseded`, `obsolete`, or `reopened`.
 - [ ] `## Promotion Blockers` lists the unresolved decisions, approvals, or external gates that still block safe promotion.
 - [ ] Future `Execution-Scope: program` plans that want automation use `## Child Slice Definitions`; legacy `## Remaining Execution Slices` / `## Portfolio Units` headings are compatibility-only and do not trigger child compilation.
+- [ ] Use `node ./scripts/automation/migrate-program-children.mjs --plan-file <path>` to turn legacy `## Remaining Execution Slices` / `## Portfolio Units` headings into reviewable `## Child Slice Definitions` before expecting automatic child compilation.
 - [ ] `npm run plans:verify` passes.
 
 ## Promotion Gate (`draft` -> `ready-for-promotion`)

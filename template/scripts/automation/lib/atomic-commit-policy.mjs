@@ -208,15 +208,24 @@ export function hasRecordedImplementationEvidence(state, plan, rootDir) {
   return implementationEvidencePaths(state, plan, rootDir).length > 0;
 }
 
+function touchedPathCoversImplementationRoot(touchedPath, implementationRoot) {
+  return (
+    pathMatchesRootPrefix(touchedPath, implementationRoot) ||
+    pathMatchesRootPrefix(implementationRoot, touchedPath)
+  );
+}
+
 export function recordImplementationEvidence(state, ensurePlanImplementationState, rootDir, plan, touchedPaths = [], metadata = {}) {
   const implementationRoots = implementationTargetRoots(plan, { sourceOnly: true });
   if (implementationRoots.length === 0) {
     return { recorded: false, matchedPaths: [] };
   }
 
-  const matchedPaths = normalizeTouchedPathList(touchedPaths).filter((entry) =>
-    implementationRoots.some((root) => pathMatchesRootPrefix(entry, root))
-  );
+  const matchedPaths = [...new Set(
+    normalizeTouchedPathList(touchedPaths).flatMap((entry) => (
+      implementationRoots.filter((root) => touchedPathCoversImplementationRoot(entry, root))
+    ))
+  )];
   if (matchedPaths.length === 0) {
     return { recorded: false, matchedPaths: [] };
   }
@@ -232,10 +241,14 @@ export function recordImplementationEvidence(state, ensurePlanImplementationStat
   const mergedPaths = [...new Set([...(Array.isArray(current.touchedPaths) ? current.touchedPaths : []), ...matchedPaths])];
   const recordedAt = nowIso();
   for (const filePath of matchedPaths) {
+    const existingRecord = pathRecords[filePath] && typeof pathRecords[filePath] === 'object'
+      ? pathRecords[filePath]
+      : {};
     const baselineFingerprint = String(
-      Object.prototype.hasOwnProperty.call(baselineFingerprints, filePath)
+      existingRecord.baselineFingerprint ||
+      (Object.prototype.hasOwnProperty.call(baselineFingerprints, filePath)
         ? baselineFingerprints[filePath]
-        : 'missing'
+        : 'missing')
     ).trim();
     const recordedFingerprint = implementationEvidenceFingerprint(rootDir, filePath);
     pathRecords[filePath] = {

@@ -141,11 +141,18 @@ Canonical policy and lifecycle docs:
 
 ## Bootstrap Steps
 
-1. Copy `template/` contents into a new repository root.
-2. Replace placeholders from `PLACEHOLDERS.md`.
-3. Add the required scripts from `template/package.scripts.fragment.json` to `package.json`.
-4. Run `./scripts/check-template-placeholders.sh`.
-5. Run `./scripts/bootstrap-verify.sh`.
+1. Preferred: run `node ./scripts/harness-sync.mjs install --target /path/to/target-repo`.
+2. Fallback: copy `template/` contents into a new repository root manually.
+3. Replace placeholders from `PLACEHOLDERS.md`.
+4. Add the required scripts from `template/package.scripts.fragment.json` to `package.json`.
+5. Run `./scripts/check-template-placeholders.sh`.
+6. Run `./scripts/bootstrap-verify.sh`.
+
+Harness distribution/update commands:
+- Install the harness into a downstream repo: `node ./scripts/harness-sync.mjs install --target /path/to/repo`
+- Update an existing downstream repo to the current harness revision: `node ./scripts/harness-sync.mjs update --target /path/to/repo`
+- Report downstream drift without rewriting files: `node ./scripts/harness-sync.mjs drift --target /path/to/repo`
+- Install/update writes a downstream ownership record at `docs/ops/automation/harness-manifest.json` with the managed file list, hashes, and source revision used for the sync.
 
 ## README Lifecycle
 
@@ -164,7 +171,7 @@ Use this before copying `template/` into a new repository. At this stage, the ro
 1. Start the agent in plan mode from this repository before any file edits.
 2. Lock product scope, users, stack/runtime/tooling, core invariants, first slices, and acceptance criteria.
 3. Approve the plan before copying files into the target repository.
-4. After approval, execute bootstrap: copy `template/` into the new repository root, replace placeholders, wire scripts, seed plans, and run the bootstrap checks.
+4. After approval, execute bootstrap: run `node ./scripts/harness-sync.mjs install --target /path/to/target-repo` or copy `template/` into the new repository root, replace placeholders, wire scripts, seed plans, and run the bootstrap checks.
 5. Once bootstrapped, rely on the adopted repository's `README.md`, `AGENTS.md`, and `docs/*` as the new canonical operating surface.
 
 Prompt 1 (planning kickoff, before any file copy):
@@ -185,7 +192,7 @@ Prompt 2 (bootstrap + execution handoff, after planning approval):
 
 ```text
 Approved. Execute bootstrap now:
-1) copy template files into repository root,
+1) install the harness with node ./scripts/harness-sync.mjs install --target /path/to/repo or copy template files into repository root,
 2) replace placeholders from PLACEHOLDERS.md,
 3) wire required package scripts,
 4) seed strategic plans in docs/future and quick fixes in docs/exec-plans/active as appropriate,

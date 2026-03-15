@@ -55,6 +55,7 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `Execution-Scope: program` plans stay active as non-executable parent contracts. `Execution-Scope: slice` plans are the only plans that enter worker/reviewer/validation lanes directly.
 - Program parents that want automatic child generation must declare `## Child Slice Definitions`; orchestration/compiler materializes those child slices before promotion and queue selection.
 - Compiled child slices must declare `Validation-Lanes` and include `## Validation Contract` so proof references bind to configured validation IDs instead of free-form command text.
+- Legacy program parents that still use `## Remaining Execution Slices` or `## Portfolio Units` must be migrated to `## Child Slice Definitions` before automatic child compilation is allowed; use `node ./scripts/automation/migrate-program-children.mjs --plan-file <path>` for a dry-run preview.
 - Product slices must declare `Implementation-Targets`; those roots are the authoritative implementation evidence boundary. Worker sessions must not edit source/tests/config files outside those roots without first updating plan scope. `Spec-Targets` remain the broader impact list.
 - Future blueprints and active program parents must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
 
@@ -81,6 +82,7 @@ Use the manual path when any of these are true:
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
 - `node ./scripts/automation/orchestrator.mjs curate-evidence [--scope active|completed|all] [--plan-id <value>]`
 - `node ./scripts/automation/compile-program-children.mjs --write true [--plan-id <value>]`
+- `node ./scripts/automation/migrate-program-children.mjs --plan-file <path> [--write true]`
 - Optional continuation controls:
   - `--max-sessions-per-plan <n>` (default `12`)
   - `--max-rollovers <n>` (default `20`)

@@ -1,0 +1,457 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { spawnSync } from 'node:child_process';
+
+const repoRoot = '/Users/hendrik/Projects/agent-orchestration-harness';
+const templateRoot = path.join(repoRoot, 'template');
+
+async function copyTemplate(targetDir) {
+  await fs.cp(templateRoot, targetDir, { recursive: true });
+}
+
+function run(command, args, cwd, env = {}) {
+  return spawnSync(command, args, {
+    cwd,
+    env: { ...process.env, ...env },
+    stdio: 'pipe'
+  });
+}
+
+async function initGitRepo(rootDir) {
+  assert.equal(run('git', ['init'], rootDir).status, 0);
+  assert.equal(run('git', ['config', 'user.email', 'fixture@example.com'], rootDir).status, 0);
+  assert.equal(run('git', ['config', 'user.name', 'Fixture'], rootDir).status, 0);
+  assert.equal(run('git', ['add', '.'], rootDir).status, 0);
+  assert.equal(run('git', ['commit', '-m', 'fixture baseline'], rootDir).status, 0);
+}
+
+async function configureFixtureRepo(rootDir, scenario) {
+  await copyTemplate(rootDir);
+  await fs.mkdir(path.join(rootDir, 'docs', 'product-specs'), { recursive: true });
+  await fs.mkdir(path.join(rootDir, 'src'), { recursive: true });
+  await fs.writeFile(path.join(rootDir, 'docs', 'spec.md'), '# Spec\n', 'utf8');
+  await fs.writeFile(path.join(rootDir, 'docs', 'product-specs', 'CURRENT-STATE.md'), '# Current State\n', 'utf8');
+  await fs.writeFile(path.join(rootDir, 'src', 'feature-a.js'), 'export const featureA = "baseline";\n', 'utf8');
+  await fs.writeFile(path.join(rootDir, 'src', 'feature-b.js'), 'export const featureB = "baseline";\n', 'utf8');
+  await fs.writeFile(path.join(rootDir, 'src', 'dirty-feature.js'), 'export const dirtyFeature = "baseline";\n', 'utf8');
+
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  config.executor.provider = 'fixture';
+  config.executor.providers.fixture = {
+    command: 'node ./scripts/automation/fixtures/stub-provider.mjs --result-path {result_path} --plan-file {plan_file} --plan-id {plan_id} --role {role} --session {session} --stage-index {stage_index} --stage-total {stage_total} --run-id {run_id} --role-model {role_model} --prompt {prompt}'
+  };
+  config.validation.always = [
+    { id: 'fixture:always', command: 'node ./scripts/automation/fixtures/stub-host-validation.mjs', type: 'integration' }
+  ];
+  config.validation.hostRequired = [
+    { id: 'fixture:host', command: 'node ./scripts/automation/fixtures/stub-host-validation.mjs', type: 'host-required' }
+  ];
+  config.validation.host = {
+    mode: 'local',
+    local: {
+      command: 'node ./scripts/automation/fixtures/stub-host-validation.mjs'
+    }
+  };
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'ops', 'automation', 'fixture-scenario.json'),
+    `${JSON.stringify(scenario, null, 2)}\n`,
+    'utf8'
+  );
+}
+
+function programParentDocument(options = {}) {
+  const includeChildB = options.includeChildB !== false;
+  const childAHostRequired = options.childAHostRequired === true;
+  const childASourceTarget = options.childASourceTarget ?? 'src/feature-a.js';
+  return `# Parent Program
+
+Status: ready-for-promotion
+Validation-Ready: no
+
+## Metadata
+
+- Plan-ID: parent-program
+- Status: ready-for-promotion
+- Priority: p1
+- Owner: planner
+- Acceptance-Criteria: Close the child graph and parent contract.
+- Delivery-Class: product
+- Execution-Scope: program
+- Dependencies: none
+- Autonomy-Allowed: guarded
+- Risk-Tier: medium
+- Security-Approval: not-required
+- Spec-Targets: docs/spec.md
+- Done-Evidence: pending
+
+## Already-True Baseline
+
+- Parent program exists.
+
+## Must-Land Checklist
+
+- [ ] Keep parent progress derived from children.
+
+## Deferred Follow-Ons
+
+- None.
+
+## Master Plan Coverage
+
+| Capability | Current Status | This Plan | Later |
+| --- | --- | --- | --- |
+| Parent queue | foundation only | yes | no |
+
+## Prior Completed Plan Reconciliation
+
+- Reviewed.
+
+## Promotion Blockers
+
+- None.
+
+## Child Slice Definitions
+
+### child-a
+- Title: Child A
+- Dependencies: none
+- Spec-Targets: docs/spec.md, ${childASourceTarget}
+- Implementation-Targets: ${childASourceTarget}
+- Validation-Lanes: ${childAHostRequired ? 'always, host-required' : 'always'}
+- Risk-Tier: medium
+
+#### Must-Land Checklist
+- [ ] \`ml-child-a\` Ship child A
+
+#### Already-True Baseline
+- Child A baseline exists.
+
+#### Deferred Follow-Ons
+- None.
+
+#### Capability Proof Map
+| Capability ID | Must-Land IDs | Claim | Required Strength |
+| --- | --- | --- | --- |
+| cap-child-a | ml-child-a | Child A is delivered. | strong |
+
+| Proof ID | Capability ID | Type | Lane | Validation ID / Artifact | Freshness |
+| --- | --- | --- | --- | --- | --- |
+| proof-child-a | cap-child-a | integration | always | fixture:always | same-run |
+${childAHostRequired ? '| proof-child-a-host | cap-child-a | host-required | host-required | fixture:host | same-run |' : ''}
+${includeChildB ? `
+### child-b
+- Title: Child B
+- Dependencies: child-a
+- Spec-Targets: docs/spec.md, src/feature-b.js
+- Implementation-Targets: src/feature-b.js
+- Validation-Lanes: always, host-required
+- Risk-Tier: medium
+
+#### Must-Land Checklist
+- [ ] \`ml-child-b\` Ship child B
+
+#### Already-True Baseline
+- Child B baseline exists.
+
+#### Deferred Follow-Ons
+- None.
+
+#### Capability Proof Map
+| Capability ID | Must-Land IDs | Claim | Required Strength |
+| --- | --- | --- | --- |
+| cap-child-b | ml-child-b | Child B is delivered. | strong |
+
+| Proof ID | Capability ID | Type | Lane | Validation ID / Artifact | Freshness |
+| --- | --- | --- | --- | --- | --- |
+| proof-child-b-always | cap-child-b | integration | always | fixture:always | same-run |
+| proof-child-b-host | cap-child-b | host-required | host-required | fixture:host | same-run |
+` : ''}
+`;
+}
+
+async function writeFutureParent(rootDir, options = {}) {
+  const filePath = path.join(rootDir, 'docs', 'future', '2026-03-16-parent-program.md');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, programParentDocument(options), 'utf8');
+}
+
+async function findPlanFile(rootDir, phase, planId) {
+  const dir = path.join(rootDir, 'docs', 'exec-plans', phase);
+  const entries = await fs.readdir(dir);
+  for (const entry of entries) {
+    if (!entry.endsWith('.md')) {
+      continue;
+    }
+    const filePath = path.join(dir, entry);
+    const content = await fs.readFile(filePath, 'utf8');
+    if (content.includes(`- Plan-ID: ${planId}`)) {
+      return filePath;
+    }
+  }
+  return null;
+}
+
+function orchestratorArgs(subcommand, maxPlans) {
+  return [
+    './scripts/automation/orchestrator.mjs',
+    subcommand,
+    '--mode',
+    'guarded',
+    '--retry-failed',
+    'true',
+    '--auto-unblock',
+    'true',
+    '--max-failed-retries',
+    '2',
+    '--output',
+    'minimal',
+    '--allow-dirty',
+    'false',
+    '--commit',
+    'false',
+    '--max-plans',
+    String(maxPlans)
+  ];
+}
+
+function orchestratorArgsAllowDirty(subcommand, maxPlans) {
+  const args = orchestratorArgs(subcommand, maxPlans);
+  const allowDirtyIndex = args.findIndex((entry) => entry === '--allow-dirty');
+  if (allowDirtyIndex !== -1) {
+    args[allowDirtyIndex + 1] = 'true';
+  }
+  return args;
+}
+
+test('orchestrator end-to-end fixture covers resume, retry, host pending/pass, stale child recompilation, and parent closeout', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orchestrator-e2e-'));
+  const scenario = {
+    providerActions: {
+      'child-a': {
+        planner: [{ status: 'completed', summary: 'Planner complete for child-a.' }],
+        worker: [
+          {
+            status: 'pending',
+            summary: 'Child A implementation started.',
+            reason: 'Continue child A implementation.',
+            writeFiles: [{ path: 'src/feature-a.js', content: 'export const featureA = "pending";\n' }]
+          },
+          {
+            status: 'completed',
+            summary: 'Child A implementation complete.',
+            writeFiles: [{ path: 'src/feature-a.js', content: 'export const featureA = "done";\n' }],
+            plan: {
+              checkMustLand: true,
+              status: 'validation',
+              validationReady: 'yes',
+              validationEvidence: ['fixture child-a ready']
+            }
+          }
+        ],
+        reviewer: [{ status: 'completed', summary: 'Reviewer complete for child-a.' }]
+      },
+      'child-b': {
+        planner: [{ status: 'completed', summary: 'Planner complete for child-b.' }],
+        worker: [
+          {
+            status: 'failed',
+            summary: 'Transient worker failure for child-b.',
+            reason: 'simulated transient worker failure',
+            writeFiles: [{ path: 'src/feature-b.js', content: 'export const featureB = "draft";\n' }]
+          },
+          {
+            status: 'completed',
+            summary: 'Child B implementation complete.',
+            writeFiles: [{ path: 'src/feature-b.js', content: 'export const featureB = "ready";\n' }],
+            plan: {
+              checkMustLand: true,
+              status: 'validation',
+              validationReady: 'host-required-only',
+              validationEvidence: ['fixture child-b ready']
+            }
+          }
+        ],
+        reviewer: [{ status: 'completed', summary: 'Reviewer complete for child-b.' }]
+      }
+    },
+    hostValidationActions: {
+      'child-b': [
+        { status: 'pending', reason: 'host validation pending', evidence: ['host pending'] },
+        { status: 'passed', reason: null, evidence: ['host passed'], results: [{ validationId: 'fixture:host', status: 'passed' }] }
+      ]
+    }
+  };
+
+  await configureFixtureRepo(rootDir, scenario);
+  await writeFutureParent(rootDir);
+  await initGitRepo(rootDir);
+
+  let result = run('node', orchestratorArgs('run', 1), rootDir, { ORCH_APPROVED_MEDIUM: '1' });
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.equal(run('git', ['add', '.'], rootDir).status, 0);
+  assert.equal(run('git', ['commit', '-m', 'after run one'], rootDir).status, 0);
+
+  const activeParentPath = await findPlanFile(rootDir, 'active', 'parent-program');
+  assert.ok(activeParentPath, 'expected promoted active parent');
+  const activeParentContent = await fs.readFile(activeParentPath, 'utf8');
+  const updatedParent = activeParentContent.replace('Child B', 'Child B Updated');
+  await fs.writeFile(activeParentPath, updatedParent, 'utf8');
+  assert.equal(run('git', ['add', '.'], rootDir).status, 0);
+  assert.equal(run('git', ['commit', '-m', 'update parent child definitions'], rootDir).status, 0);
+
+  result = run('node', orchestratorArgsAllowDirty('resume', 3), rootDir, { ORCH_APPROVED_MEDIUM: '1' });
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const childBActivePath = await findPlanFile(rootDir, 'active', 'child-b');
+  assert.ok(childBActivePath, 'expected active child-b while host validation is pending');
+  const childBActiveContent = await fs.readFile(childBActivePath, 'utf8');
+  assert.match(childBActiveContent, /^# Child B Updated$/m);
+
+  const auditPending = run('node', ['./scripts/automation/orchestrator.mjs', 'audit', '--json', 'true'], rootDir);
+  assert.equal(auditPending.status, 0);
+  const auditPendingPayload = JSON.parse(String(auditPending.stdout));
+  const pendingProgram = auditPendingPayload.programStatuses.find((entry) => entry.planId === 'parent-program');
+  assert.ok(pendingProgram);
+  assert.equal(pendingProgram.completedChildren, 1);
+  assert.equal(pendingProgram.validationChildren, 1);
+
+  result = run('node', orchestratorArgsAllowDirty('resume', 3), rootDir, { ORCH_APPROVED_MEDIUM: '1' });
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const completedParentPath = await findPlanFile(rootDir, 'completed', 'parent-program');
+  assert.ok(completedParentPath, 'expected parent closeout');
+  const completedParentContent = await fs.readFile(completedParentPath, 'utf8');
+  assert.match(completedParentContent, /Role Pipeline: program-closeout/);
+  assert.match(completedParentContent, /Program closeout derived from child graph state/);
+
+  const runState = JSON.parse(await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-state.json'), 'utf8'));
+  assert.equal(runState.programState['parent-program'].completedChildren, 2);
+  assert.equal(runState.programState['parent-program'].childCompilationCurrent, true);
+
+  const auditCompleted = run('node', ['./scripts/automation/orchestrator.mjs', 'audit', '--json', 'true'], rootDir);
+  assert.equal(auditCompleted.status, 0);
+  const auditCompletedPayload = JSON.parse(String(auditCompleted.stdout));
+  const completedProgram = auditCompletedPayload.programStatuses.find((entry) => entry.planId === 'parent-program');
+  assert.ok(completedProgram);
+  assert.equal(completedProgram.percentComplete, 100);
+});
+
+test('host validation failure keeps parent incomplete and surfaces derived blockers', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orchestrator-host-fail-'));
+  const scenario = {
+    providerActions: {
+      'child-a': {
+        planner: [{ status: 'completed', summary: 'Planner complete for child-a.' }],
+        worker: [{
+          status: 'completed',
+          summary: 'Child A implementation complete.',
+          writeFiles: [{ path: 'src/feature-a.js', content: 'export const featureA = "done";\n' }],
+          plan: {
+            checkMustLand: true,
+            status: 'validation',
+            validationReady: 'host-required-only',
+            validationEvidence: ['fixture child-a ready']
+          }
+        }],
+        reviewer: [{ status: 'completed', summary: 'Reviewer complete for child-a.' }]
+      }
+    },
+    hostValidationActions: {
+      'child-a': [
+        { status: 'failed', reason: 'fixture host validation failed', evidence: ['host failed'], results: [] }
+      ]
+    }
+  };
+
+  await configureFixtureRepo(rootDir, scenario);
+  await writeFutureParent(rootDir, { includeChildB: false, childAHostRequired: true });
+  await initGitRepo(rootDir);
+
+  const result = run('node', orchestratorArgs('run', 3), rootDir, { ORCH_APPROVED_MEDIUM: '1' });
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const failedRunState = JSON.parse(await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-state.json'), 'utf8'));
+  assert.equal(failedRunState.failedPlanIds.includes('child-a'), true);
+
+  const audit = run('node', ['./scripts/automation/orchestrator.mjs', 'audit', '--json', 'true'], rootDir);
+  const payload = JSON.parse(String(audit.stdout));
+  const parentStatus = payload.programStatuses.find((entry) => entry.planId === 'parent-program');
+  assert.ok(parentStatus.closeoutBlockedReasons.some((entry) => entry.includes('Incomplete child slices remain')));
+});
+
+test('supervisor dirty recovery continues unresolved work on a dirty workspace', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orchestrator-dirty-recovery-'));
+  const scenario = {
+    providerActions: {
+      'child-a': {
+        planner: [{ status: 'completed', summary: 'Planner complete for child-a.' }],
+        worker: [
+          {
+            status: 'pending',
+            summary: 'Dirty workspace continuation required.',
+            reason: 'Continue with dirty recovery.',
+            writeFiles: [{ path: 'src/dirty-feature.js', content: 'export const dirtyFeature = "dirty";\n' }]
+          },
+          {
+            status: 'completed',
+            summary: 'Dirty recovery complete.',
+            writeFiles: [{ path: 'src/dirty-feature.js', content: 'export const dirtyFeature = "done";\n' }],
+            plan: {
+              checkMustLand: true,
+              status: 'validation',
+              validationReady: 'yes',
+              validationEvidence: ['dirty recovery complete']
+            }
+          }
+        ],
+        reviewer: [{ status: 'completed', summary: 'Reviewer complete for child-a.' }]
+      }
+    }
+  };
+
+  await configureFixtureRepo(rootDir, scenario);
+  await writeFutureParent(rootDir, { includeChildB: false, childASourceTarget: 'src/dirty-feature.js' });
+  await initGitRepo(rootDir);
+
+  const result = run(
+    'node',
+    [
+      './scripts/automation/supervise-orchestrator.mjs',
+      'run',
+      '--mode',
+      'guarded',
+      '--retry-failed',
+      'true',
+      '--auto-unblock',
+      'true',
+      '--max-failed-retries',
+      '1',
+      '--output',
+      'minimal',
+      '--allow-dirty',
+      'false',
+      '--commit',
+      'false',
+      '--max-plans',
+      '1'
+    ],
+    rootDir,
+    {
+      ORCH_APPROVED_MEDIUM: '1',
+      ORCH_SUPERVISOR_ALLOW_DIRTY_RECOVERY: '1',
+      ORCH_SUPERVISOR_MAX_CYCLES: '4',
+      ORCH_SUPERVISOR_STABLE_LIMIT: '2'
+    }
+  );
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const combined = `${result.stdout}\n${result.stderr}`;
+  assert.match(combined, /enabling dirty recovery mode/);
+  const completedChildPath = await findPlanFile(rootDir, 'completed', 'child-a');
+  assert.ok(completedChildPath);
+});

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "description": "Root-level distribution manifest for syncing the template payload into downstream repositories.",
+  "sourceRoot": "template",
+  "targetRoot": ".",
+  "ownershipMode": "template-sync",
+  "downstreamManifestPath": "docs/ops/automation/harness-manifest.json",
+  "managedGlobs": [
+    "**/*"
+  ],
+  "excludeGlobs": []
+}
