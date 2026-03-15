@@ -31,7 +31,13 @@ import {
   todayIsoDate,
   inferPlanId
 } from './lib/plan-metadata.mjs';
-import { disallowedWorkerTouchedPaths } from './lib/plan-scope.mjs';
+import {
+  disallowedWorkerTouchedPaths,
+  implementationTargetRoots,
+  isTransientAutomationPath,
+  normalizeTouchedPathList,
+  pathMatchesRootPrefix
+} from './lib/plan-scope.mjs';
 
 const DEFAULT_CONTEXT_THRESHOLD = 10000;
 const DEFAULT_CONTEXT_SOFT_USED_RATIO = 0.65;
@@ -196,14 +202,6 @@ const EVIDENCE_NOISE_TOKENS = new Set([
   'step',
   'up'
 ]);
-const TRANSIENT_AUTOMATION_FILES = new Set([
-  'docs/ops/automation/run-state.json',
-  'docs/ops/automation/run-events.jsonl'
-]);
-const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
-  'docs/ops/automation/runtime/',
-  'docs/ops/automation/handoffs/'
-];
 const SAFE_PLAN_RELATIVE_PATH_REGEX = /^[A-Za-z0-9._/-]+$/;
 const REDACTED_VALUE = '[REDACTED]';
 const SENSITIVE_KEY_REGEX = /(token|secret|password|passphrase|api[-_]?key|authorization|cookie|session)/i;
@@ -4786,7 +4784,7 @@ async function promoteFuturePlans(paths, state, options) {
       'Done-Evidence': future.doneEvidence.length > 0 ? future.doneEvidence.join(', ') : 'pending'
     };
 
-    const promotedContent = setMetadataFields(future.content, promotedMetadata);
+    const promotedContent = setPlanDocumentFields(future.content, promotedMetadata);
     if (!options.dryRun) {
       await fs.writeFile(targetPath, promotedContent, 'utf8');
       await fs.unlink(future.filePath);
@@ -4930,7 +4928,7 @@ async function setPlanStatus(planPath, status, dryRun) {
   if (dryRun) return;
 
   const content = await fs.readFile(planPath, 'utf8');
-  const updated = setMetadataFields(content, { Status: status });
+  const updated = setPlanDocumentFields(content, { Status: status });
   await fs.writeFile(planPath, updated, 'utf8');
 }
 
@@ -5853,6 +5851,17 @@ function updateSimpleMetadataField(content, field, value) {
   return `${content.trimEnd()}\n${field}: ${value}\n`;
 }
 
+function setPlanDocumentFields(content, fields = {}) {
+  let updated = setMetadataFields(content, fields);
+  if (Object.prototype.hasOwnProperty.call(fields, 'Status')) {
+    updated = updateSimpleMetadataField(updated, 'Status', fields.Status);
+  }
+  if (Object.prototype.hasOwnProperty.call(fields, 'Validation-Ready')) {
+    updated = updateSimpleMetadataField(updated, 'Validation-Ready', fields['Validation-Ready']);
+  }
+  return updated;
+}
+
 function documentStatusValue(content) {
   const metadata = parseMetadata(content);
   const metadataStatus = normalizeStatus(metadataValue(metadata, 'Status'));
@@ -6011,7 +6020,7 @@ async function maybeAutoPromoteCompletionGate(planPath, currentRole, sessionResu
   }
 
   if (!options.dryRun) {
-    const updatedPlan = setMetadataFields(content, {
+    const updatedPlan = setPlanDocumentFields(content, {
       Status: 'validation',
       'Validation-Ready': 'host-required-only'
     });
@@ -7017,14 +7026,6 @@ function evidenceMaintenanceRootsForPlan(plan) {
   ];
 }
 
-function normalizeTouchedPathList(paths = []) {
-  return [...new Set(
-    (Array.isArray(paths) ? paths : [])
-      .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, ''))
-      .filter(Boolean)
-  )];
-}
-
 function hasPlanEvidencePathChanges(plan, touchedPaths = []) {
   const roots = evidenceMaintenanceRootsForPlan(plan);
   return normalizeTouchedPathList(touchedPaths).some((filePath) => (
@@ -7673,7 +7674,7 @@ async function canonicalizeCompletedPlanEvidence(plan, paths, options, config) {
     return { updated: false, indexPath: null };
   }
 
-  let updated = setMetadataFields(raw, {
+  let updated = setPlanDocumentFields(raw, {
     Status: 'completed',
     'Done-Evidence': indexResult.indexPath
   });
@@ -7781,22 +7782,6 @@ function parseGitPorcelainZPaths(stdout) {
   return paths;
 }
 
-function isTransientAutomationPath(pathValue) {
-  if (TRANSIENT_AUTOMATION_FILES.has(pathValue)) {
-    return true;
-  }
-  return TRANSIENT_AUTOMATION_DIR_PREFIXES.some((prefix) => pathValue.startsWith(prefix));
-}
-
-function pathMatchesRootPrefix(filePath, rootPrefix) {
-  const normalizedFile = toPosix(String(filePath ?? '').trim()).replace(/^\.?\//, '');
-  const normalizedRoot = toPosix(String(rootPrefix ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, '');
-  if (!normalizedFile || !normalizedRoot) {
-    return false;
-  }
-  return normalizedFile === normalizedRoot || normalizedFile.startsWith(`${normalizedRoot}/`);
-}
-
 function isProgramPlan(plan) {
   return String(plan?.executionScope ?? '').trim().toLowerCase() === 'program';
 }
@@ -7807,29 +7792,6 @@ function isProductPlan(plan) {
 
 function isArtifactSlicePlan(plan) {
   return !isProgramPlan(plan) && !isProductPlan(plan);
-}
-
-function implementationTargetRoots(plan, options = {}) {
-  const implementationTargets = Array.isArray(plan?.implementationTargets) ? plan.implementationTargets : [];
-  const sourceOnly = options && options.sourceOnly === true;
-  return [...new Set(
-    implementationTargets
-      .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, ''))
-      .filter(Boolean)
-      .filter((entry) => {
-        const category = classifyTouchedPath(entry);
-        if (
-          category !== 'source' &&
-          category !== 'tests' &&
-          category !== 'scripts' &&
-          category !== 'configs' &&
-          category !== 'lockfiles'
-        ) {
-          return false;
-        }
-        return sourceOnly ? category === 'source' : true;
-      })
-  )];
 }
 
 function planRequiresImplementationEvidence(plan) {
@@ -8205,7 +8167,7 @@ async function finalizeCompletedPlan(plan, paths, state, validationEvidence, opt
   const raw = await fs.readFile(plan.filePath, 'utf8');
   const indexResult = await writeEvidenceIndex(paths, plan, raw, options, config, { sourcePlanRel: completedRel });
   const doneEvidenceValue = indexResult?.indexPath ?? (validationEvidence.length > 0 ? validationEvidence.join(', ') : 'none');
-  const updatedMetadata = setMetadataFields(raw, {
+  const updatedMetadata = setPlanDocumentFields(raw, {
     Status: 'completed',
     'Done-Evidence': doneEvidenceValue
   });

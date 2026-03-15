@@ -136,7 +136,7 @@ Use the manual path when any of these are true:
   - `"parallel.openPullRequests": true` with `"parallel.pullRequest.createCommand"` can open PRs per completed worker branch.
   - `"parallel.pullRequest.mergeCommand"` can enqueue or merge generated PRs after creation (for merge queues).
   - `pullRequest.createCommand` token support: `{plan_id}`, `{branch}`, `{base_ref}`, `{git_remote}`, `{run_id}`, `{head_sha}`, `{worktree}`.
-  - `executor.promptTemplate` is provider-agnostic and reused across Codex and Claude Code adapters.
+  - `executor.promptTemplate` should stay set to `@canonical-executor-prompt`; the canonical policy text now lives in `scripts/automation/lib/executor-policy.mjs` and is reused across Codex and Claude Code adapters.
   - Keep the static instruction prefix at the start of `executor.promptTemplate` so repeated sessions get better prompt-cache reuse; push plan-specific identifiers later in the prompt.
 - Role orchestration:
   - `roleOrchestration.enabled: true` enables risk-adaptive role routing.

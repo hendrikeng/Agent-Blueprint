@@ -392,7 +392,10 @@ async function scanPhase(phase, directoryPath) {
     const inferredPlanId = parsedPlanId ?? inferPlanId(content, filePath);
     const topLevelStatusMatch = content.match(/^Status:\s*(.+)$/m);
     const topLevelStatus = normalizeStatus(topLevelStatusMatch?.[1] ?? '');
+    const topLevelValidationReadyMatch = content.match(/^Validation-Ready:\s*(.+)$/m);
+    const topLevelValidationReady = normalizeStatus(topLevelValidationReadyMatch?.[1] ?? '');
     const metadataStatus = normalizeStatus(metadataValue(metadata, 'Status'));
+    const metadataValidationReady = normalizeStatus(metadataValue(metadata, 'Validation-Ready'));
     const scopedRepairPlanId = scanPhase.scopedRepairPlanId ?? null;
     const inRepairScope = !scopedRepairPlanId || inferredPlanId === scopedRepairPlanId;
     const autoHealEnabled = scanPhase.autoHealEnabled === true;
@@ -409,6 +412,21 @@ async function scanPhase(phase, directoryPath) {
       if (updatedContent !== content) {
         await fs.writeFile(filePath, updatedContent, 'utf8');
         addAutoHeal(rel, topLevelStatus, metadataStatus);
+        content = updatedContent;
+        metadata = parseMetadata(content);
+      }
+    }
+    if (
+      autoHealEnabled &&
+      inRepairScope &&
+      topLevelValidationReadyMatch &&
+      topLevelValidationReady &&
+      metadataValidationReady &&
+      topLevelValidationReady !== metadataValidationReady
+    ) {
+      const updatedContent = content.replace(/^Validation-Ready:\s*.+$/m, `Validation-Ready: ${metadataValidationReady}`);
+      if (updatedContent !== content) {
+        await fs.writeFile(filePath, updatedContent, 'utf8');
         content = updatedContent;
         metadata = parseMetadata(content);
       }
@@ -451,14 +469,10 @@ async function scanPhase(phase, directoryPath) {
     }
 
     const normalizedTopLevelStatus = normalizeStatus(content.match(/^Status:\s*(.+)$/m)?.[1] ?? '');
-    if (
-      phase === 'active' &&
-      normalizedTopLevelStatus === 'completed' &&
-      (status === 'blocked' || status === 'failed')
-    ) {
+    if (phase === 'active' && normalizedTopLevelStatus && status && normalizedTopLevelStatus !== status) {
       addFinding(
         'CONTRADICTORY_STATUS',
-        `Top-level Status is 'completed' while metadata Status is '${status}'. Resolve status mismatch before orchestration.`,
+        `Top-level Status is '${normalizedTopLevelStatus}' while metadata Status is '${status}'. Resolve status mismatch before orchestration.`,
         rel
       );
     }

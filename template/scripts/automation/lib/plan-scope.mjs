@@ -14,7 +14,7 @@ function toPosix(value) {
   return String(value).split(path.sep).join('/');
 }
 
-function classifyTouchedPath(filePath) {
+export function classifyTouchedPath(filePath) {
   const value = toPosix(String(filePath ?? '').trim()).replace(/^\.?\//, '');
   const baseName = path.posix.basename(value).toLowerCase();
 

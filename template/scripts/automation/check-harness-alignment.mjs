@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import {
+  CANONICAL_EXECUTOR_PROMPT_TEMPLATE_REF,
+  DEFAULT_EXECUTOR_PROMPT_TEMPLATE,
+  resolveExecutorPromptTemplate
+} from './lib/executor-policy.mjs';
 
 const rootDir = process.cwd();
 const findings = [];
@@ -9,6 +14,7 @@ const advisories = [];
 const requiredPaths = {
   orchestrator: path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
   wrapper: path.join(rootDir, 'scripts', 'automation', 'executor-wrapper.mjs'),
+  executorPolicy: path.join(rootDir, 'scripts', 'automation', 'lib', 'executor-policy.mjs'),
   config: path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json'),
   contextCompiler: path.join(rootDir, 'scripts', 'automation', 'compile-runtime-context.mjs'),
   contactPackCompiler: path.join(rootDir, 'scripts', 'automation', 'compile-task-contact-pack.mjs'),
@@ -71,7 +77,7 @@ function codexCommandIncludesRoleReasoning(command) {
   return value.includes('{role_reasoning_effort}');
 }
 
-function ensureScriptSignatures(orchestratorRaw, wrapperRaw, contextCompilerRaw, contactPackCompilerRaw) {
+function ensureScriptSignatures(orchestratorRaw, wrapperRaw, executorPolicyRaw, contextCompilerRaw, contactPackCompilerRaw) {
   if (!orchestratorRaw.includes("const DEFAULT_OUTPUT_MODE = 'pretty';")) {
     addFinding(
       'MISSING_PRETTY_DEFAULT',
@@ -114,39 +120,46 @@ function ensureScriptSignatures(orchestratorRaw, wrapperRaw, contextCompilerRaw,
       'scripts/automation/executor-wrapper.mjs'
     );
   }
-  if (!wrapperRaw.includes('Must-Land Checklist')) {
+  if (!wrapperRaw.includes('./lib/executor-policy.mjs')) {
+    addFinding(
+      'MISSING_SHARED_EXECUTOR_POLICY_IMPORT',
+      'scripts/automation/executor-wrapper.mjs must import the shared executor policy module.',
+      'scripts/automation/executor-wrapper.mjs'
+    );
+  }
+  if (!executorPolicyRaw.includes('Must-Land Checklist')) {
     addFinding(
       'MISSING_MUST_LAND_PROMPT_POLICY',
-      "scripts/automation/executor-wrapper.mjs must instruct executors to honor '## Must-Land Checklist' as the completion contract.",
-      'scripts/automation/executor-wrapper.mjs'
+      "scripts/automation/lib/executor-policy.mjs must instruct executors to honor '## Must-Land Checklist' as the completion contract.",
+      'scripts/automation/lib/executor-policy.mjs'
     );
   }
-  if (!wrapperRaw.includes('Prior Completed Plan Reconciliation')) {
+  if (!executorPolicyRaw.includes('Prior Completed Plan Reconciliation')) {
     addFinding(
       'MISSING_RECONCILIATION_PROMPT_POLICY',
-      "scripts/automation/executor-wrapper.mjs must instruct executors to honor '## Prior Completed Plan Reconciliation' for future blueprints and strategic phase plans.",
-      'scripts/automation/executor-wrapper.mjs'
+      "scripts/automation/lib/executor-policy.mjs must instruct executors to honor '## Prior Completed Plan Reconciliation' for future blueprints and strategic phase plans.",
+      'scripts/automation/lib/executor-policy.mjs'
     );
   }
-  if (!wrapperRaw.includes('Delivery-Class') || !wrapperRaw.includes('Execution-Scope')) {
+  if (!executorPolicyRaw.includes('Delivery-Class') || !executorPolicyRaw.includes('Execution-Scope')) {
     addFinding(
       'MISSING_PLAN_CLASS_PROMPT_POLICY',
-      "scripts/automation/executor-wrapper.mjs must instruct executors to honor 'Delivery-Class' and 'Execution-Scope'.",
-      'scripts/automation/executor-wrapper.mjs'
+      "scripts/automation/lib/executor-policy.mjs must instruct executors to honor 'Delivery-Class' and 'Execution-Scope'.",
+      'scripts/automation/lib/executor-policy.mjs'
     );
   }
-  if (!wrapperRaw.includes('Implementation-Targets')) {
+  if (!executorPolicyRaw.includes('Implementation-Targets')) {
     addFinding(
       'MISSING_IMPLEMENTATION_TARGETS_PROMPT_POLICY',
-      "scripts/automation/executor-wrapper.mjs must instruct product slices to honor 'Implementation-Targets'.",
-      'scripts/automation/executor-wrapper.mjs'
+      "scripts/automation/lib/executor-policy.mjs must instruct product slices to honor 'Implementation-Targets'.",
+      'scripts/automation/lib/executor-policy.mjs'
     );
   }
-  if (!wrapperRaw.includes('currentSubtask') || !wrapperRaw.includes('stateDelta')) {
+  if (!executorPolicyRaw.includes('currentSubtask') || !executorPolicyRaw.includes('stateDelta')) {
     addFinding(
       'MISSING_STRUCTURED_CONTINUITY_PROMPT_POLICY',
-      'scripts/automation/executor-wrapper.mjs must require structured continuity fields in ORCH_RESULT_PATH payloads.',
-      'scripts/automation/executor-wrapper.mjs'
+      'scripts/automation/lib/executor-policy.mjs must require structured continuity fields in ORCH_RESULT_PATH payloads.',
+      'scripts/automation/lib/executor-policy.mjs'
     );
   }
   if (!contextCompilerRaw.includes('## Memory Posture')) {
@@ -276,7 +289,22 @@ function ensureConfigPolicy(config, configPath) {
       rel(configPath)
     );
   }
-  const promptTemplate = String(config?.executor?.promptTemplate ?? '').trim();
+  const rawPromptTemplate = String(config?.executor?.promptTemplate ?? '').trim();
+  const promptTemplate = resolveExecutorPromptTemplate(rawPromptTemplate);
+  if (rawPromptTemplate !== CANONICAL_EXECUTOR_PROMPT_TEMPLATE_REF) {
+    addFinding(
+      'EXECUTOR_PROMPT_TEMPLATE_NOT_CANONICAL',
+      `executor.promptTemplate must be '${CANONICAL_EXECUTOR_PROMPT_TEMPLATE_REF}' so the canonical policy lives in one shared source.`,
+      rel(configPath)
+    );
+  }
+  if (promptTemplate !== DEFAULT_EXECUTOR_PROMPT_TEMPLATE) {
+    addFinding(
+      'EXECUTOR_PROMPT_TEMPLATE_MISMATCH',
+      'Resolved executor prompt template does not match the canonical shared policy text.',
+      rel(configPath)
+    );
+  }
   if (!promptTemplate.includes('{contact_pack_file}')) {
     addFinding(
       'MISSING_CONTACT_PACK_PROMPT_PLACEHOLDER',
@@ -674,9 +702,10 @@ async function main() {
     process.exit(1);
   }
 
-  const [orchestratorRaw, wrapperRaw, contextCompilerRaw, contactPackCompilerRaw, config, manifest, manifestRaw, schemaRaw] = await Promise.all([
+  const [orchestratorRaw, wrapperRaw, executorPolicyRaw, contextCompilerRaw, contactPackCompilerRaw, config, manifest, manifestRaw, schemaRaw] = await Promise.all([
     fs.readFile(requiredPaths.orchestrator, 'utf8'),
     fs.readFile(requiredPaths.wrapper, 'utf8'),
+    fs.readFile(requiredPaths.executorPolicy, 'utf8'),
     fs.readFile(requiredPaths.contextCompiler, 'utf8'),
     fs.readFile(requiredPaths.contactPackCompiler, 'utf8'),
     readJsonStrict(requiredPaths.config)
@@ -686,7 +715,7 @@ async function main() {
     fs.readFile(requiredPaths.policySchema, 'utf8')
   ]);
 
-  ensureScriptSignatures(orchestratorRaw, wrapperRaw, contextCompilerRaw, contactPackCompilerRaw);
+  ensureScriptSignatures(orchestratorRaw, wrapperRaw, executorPolicyRaw, contextCompilerRaw, contactPackCompilerRaw);
   ensureManifestPolicy(manifest, manifestRaw, schemaRaw, requiredPaths.policyManifest, requiredPaths.policySchema);
   ensureConfigPolicy(config, requiredPaths.config);
   await ensurePragmaticScaffold();
