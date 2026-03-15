@@ -8,6 +8,18 @@ export const RISK_TIERS = new Set(['low', 'medium', 'high']);
 export const SECURITY_APPROVAL_VALUES = new Set(['not-required', 'pending', 'approved']);
 export const DELIVERY_CLASSES = new Set(['product', 'docs', 'ops', 'reconciliation']);
 export const EXECUTION_SCOPES = new Set(['slice', 'program']);
+export const CAPABILITY_PROOF_MAP_SECTION = 'Capability Proof Map';
+export const PROOF_TYPES = new Set([
+  'unit',
+  'integration',
+  'contract',
+  'end-to-end',
+  'host-required',
+  'manual',
+  'approved-exception'
+]);
+export const PROOF_LANES = new Set(['always', 'host-required', 'manual']);
+export const PROOF_FRESHNESS_VALUES = new Set(['same-run', 'same-head', 'manual']);
 export const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const COVERAGE_SECTION_TITLES = ['Master Plan Coverage', 'Capability Coverage Matrix'];
 export const UNFINISHED_COVERAGE_STATUS_PATTERNS = [
@@ -170,6 +182,95 @@ function isMarkdownTableSeparator(cells) {
   return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
 }
 
+function normalizeProofHeader(cell) {
+  return String(cell ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/`/g, '')
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function splitCommaList(value) {
+  return String(value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function checklistItemMatch(line) {
+  return String(line ?? '').trim().match(/^-\s+\[([ xX])\]\s+(.*)$/);
+}
+
+function parseChecklistItemLine(line) {
+  const match = checklistItemMatch(line);
+  if (!match) {
+    return null;
+  }
+  const remainder = match[2].trim();
+  const idMatch = remainder.match(/^`([a-z0-9]+(?:-[a-z0-9]+)*)`\s+(.*)$/);
+  return {
+    line: String(line ?? '').trim(),
+    checked: match[1].toLowerCase() === 'x',
+    id: idMatch ? idMatch[1] : null,
+    text: (idMatch ? idMatch[2] : remainder).trim()
+  };
+}
+
+function parseMarkdownTables(sectionContent) {
+  if (!sectionContent) {
+    return [];
+  }
+
+  const lines = String(sectionContent).split(/\r?\n/);
+  const tables = [];
+
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const headerCells = parseMarkdownTableRow(lines[index]);
+    const separatorCells = parseMarkdownTableRow(lines[index + 1]);
+    if (headerCells.length === 0 || !isMarkdownTableSeparator(separatorCells)) {
+      continue;
+    }
+
+    const rows = [];
+    let rowIndex = index + 2;
+    for (; rowIndex < lines.length; rowIndex += 1) {
+      const rowCells = parseMarkdownTableRow(lines[rowIndex]);
+      if (rowCells.length === 0) {
+        if (String(lines[rowIndex] ?? '').trim()) {
+          break;
+        }
+        break;
+      }
+      if (isMarkdownTableSeparator(rowCells)) {
+        continue;
+      }
+      rows.push(rowCells);
+    }
+
+    tables.push({
+      headers: headerCells,
+      rows
+    });
+    index = rowIndex;
+  }
+
+  return tables;
+}
+
+function tableRowsToObjects(table) {
+  if (!table || !Array.isArray(table.headers) || !Array.isArray(table.rows)) {
+    return [];
+  }
+  const normalizedHeaders = table.headers.map((header) => normalizeProofHeader(header));
+  return table.rows.map((cells) => {
+    const row = {};
+    normalizedHeaders.forEach((header, index) => {
+      row[header] = String(cells[index] ?? '').trim();
+    });
+    return row;
+  });
+}
+
 export function collectUnfinishedCoverageRows(content, sectionTitles = COVERAGE_SECTION_TITLES) {
   const coverageSection = firstSectionBody(content, sectionTitles);
   if (!coverageSection.body) {
@@ -225,6 +326,75 @@ export function collectUnfinishedCoverageRows(content, sectionTitles = COVERAGE_
   }
 
   return findings;
+}
+
+export function parseChecklistItems(sectionContent) {
+  if (!sectionContent) {
+    return [];
+  }
+  return String(sectionContent)
+    .split(/\r?\n/)
+    .map((line) => parseChecklistItemLine(line))
+    .filter(Boolean);
+}
+
+export function parseMustLandChecklist(content) {
+  return parseChecklistItems(sectionBody(content, 'Must-Land Checklist'));
+}
+
+export function parseCapabilityProofMap(content) {
+  const body = sectionBody(content, CAPABILITY_PROOF_MAP_SECTION);
+  if (!body) {
+    return {
+      capabilities: [],
+      proofs: [],
+      errors: []
+    };
+  }
+
+  const tables = parseMarkdownTables(body);
+  if (tables.length < 2) {
+    return {
+      capabilities: [],
+      proofs: [],
+      errors: ['Capability Proof Map must contain a capability table followed by a proof table.']
+    };
+  }
+
+  const capabilityRows = tableRowsToObjects(tables[0]).map((row) => ({
+    capabilityId: row.capabilityid ?? '',
+    mustLandIds: splitCommaList(row.mustlandids ?? ''),
+    claim: row.claim ?? '',
+    requiredStrength: (row.requiredstrength ?? '').trim().toLowerCase()
+  }));
+  const proofRows = tableRowsToObjects(tables[1]).map((row) => ({
+    proofId: row.proofid ?? '',
+    capabilityId: row.capabilityid ?? '',
+    type: (row.type ?? '').trim().toLowerCase(),
+    lane: (row.lane ?? '').trim().toLowerCase(),
+    validationRef: row.validationidartifact ?? '',
+    freshness: (row.freshness ?? '').trim().toLowerCase()
+  }));
+
+  const errors = [];
+  const capabilityHeaders = new Set((tables[0]?.headers ?? []).map((header) => normalizeProofHeader(header)));
+  const proofHeaders = new Set((tables[1]?.headers ?? []).map((header) => normalizeProofHeader(header)));
+  for (const header of ['capabilityid', 'mustlandids', 'claim', 'requiredstrength']) {
+    if (!capabilityHeaders.has(header)) {
+      errors.push(`Capability Proof Map capability table is missing '${header}'.`);
+    }
+  }
+  for (const header of ['proofid', 'capabilityid', 'type', 'lane', 'validationidartifact', 'freshness']) {
+    if (!proofHeaders.has(header)) {
+      errors.push(`Capability Proof Map proof table is missing '${header}'.`);
+    }
+  }
+
+  return {
+    capabilities: capabilityRows,
+    proofs: proofRows,
+    errors
+  };
 }
 
 function compareMetadataKeys(a, b) {

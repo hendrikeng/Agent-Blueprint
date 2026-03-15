@@ -14,6 +14,7 @@ Each active plan must include:
 - `Status` set to one of: `queued`, `in-progress`, `blocked`, `validation`, `completed`, `failed`.
 - Explicit acceptance criteria before implementation begins.
 - `## Must-Land Checklist` with the exact completion contract for the current plan.
+- Product slices should prefix must-land items with stable backticked IDs and maintain `## Capability Proof Map`.
 - Scope separation via `## Already-True Baseline` and `## Deferred Follow-Ons` when the plan references broader target state.
 - `## Prior Completed Plan Reconciliation` when the active plan is a non-executable `Execution-Scope: program` parent or another major current-state reset that overlaps earlier completed plans.
 

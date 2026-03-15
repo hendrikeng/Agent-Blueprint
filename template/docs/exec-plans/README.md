@@ -40,9 +40,11 @@ Optional fields:
 Every executable plan must also include:
 
 - `## Must-Land Checklist`: markdown checkboxes for the exact deliverables this plan must land before validation/completion.
+- `Delivery-Class: product` plus `Execution-Scope: slice` should prefix each must-land checkbox with a stable backticked ID such as `` `ml-example-capability` `` so proof coverage can map to explicit claims.
 - `## Already-True Baseline`: facts that are already true before the plan starts.
 - `## Deferred Follow-Ons`: broader target state or later-phase items that are intentionally not part of this plan's completion gate.
 - `## Prior Completed Plan Reconciliation`: required for future blueprints and strategic active phase plans so overlapping completed plans are classified instead of silently assumed.
+- `## Capability Proof Map`: required when semantic proof mode is `required`; recommended in advisory mode for product slices so must-land claims map to explicit proof obligations.
 
 Reconciliation lowers omission and stale-scope risk, but it does not replace planner or reviewer judgment.
 
@@ -53,6 +55,7 @@ Reconciliation lowers omission and stale-scope risk, but it does not replace pla
 - `Execution-Scope: slice` means the plan is directly executable by orchestration.
 - `Execution-Scope: program` means the plan is a non-executable parent contract or portfolio. Keep it active while child slices execute; do not send it directly to validation.
 - `Implementation-Targets` are the authoritative code roots for product slices. `Spec-Targets` remain the broader impact/documentation list and do not replace implementation evidence.
+- `## Capability Proof Map` maps must-land IDs to capability claims and proof rows. Proof rows should reference explicit validation IDs or artifact paths, not inferred test names.
 
 ## Status Conventions
 

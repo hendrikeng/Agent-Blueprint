@@ -3,17 +3,23 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   ACTIVE_STATUSES,
+  CAPABILITY_PROOF_MAP_SECTION,
   COMPLETED_STATUSES,
   COVERAGE_SECTION_TITLES,
   DELIVERY_CLASSES,
   EXECUTION_SCOPES,
   FUTURE_STATUSES,
+  PROOF_FRESHNESS_VALUES,
+  PROOF_LANES,
+  PROOF_TYPES,
   REQUIRED_METADATA_FIELDS,
   RISK_TIERS,
   SECURITY_APPROVAL_VALUES,
   collectUnfinishedCoverageRows,
   listMarkdownFiles,
   metadataValue,
+  parseCapabilityProofMap,
+  parseMustLandChecklist,
   parseDeliveryClass,
   parseExecutionScope,
   parseListField,
@@ -25,6 +31,7 @@ import {
 
 const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rootDir = process.cwd();
+const validationResultPath = String(process.env.ORCH_VALIDATION_RESULT_PATH ?? '').trim();
 const directories = {
   future: path.join(rootDir, 'docs', 'future'),
   active: path.join(rootDir, 'docs', 'exec-plans', 'active'),
@@ -32,6 +39,7 @@ const directories = {
 };
 
 const findings = [];
+const advisories = [];
 const autoHeals = [];
 const MUST_LAND_SECTION = 'Must-Land Checklist';
 const DEFERRED_SECTION = 'Deferred Follow-Ons';
@@ -45,6 +53,10 @@ function addFinding(code, message, filePath) {
 
 function addAutoHeal(filePath, fromStatus, toStatus) {
   autoHeals.push({ filePath, fromStatus, toStatus });
+}
+
+function addAdvisory(code, message, filePath) {
+  advisories.push({ code, message, filePath });
 }
 
 function parseArgs(argv) {
@@ -251,6 +263,75 @@ function uncheckedCheckboxLines(lines) {
   return lines.filter((line) => /^-\s+\[\s\]\s+/.test(line));
 }
 
+function normalizeProofMode(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'required') {
+    return 'required';
+  }
+  return 'advisory';
+}
+
+async function loadAutomationConfig() {
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  try {
+    const raw = await fs.readFile(configPath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function collectConfiguredValidationIds(config) {
+  const ids = new Set();
+  const record = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return;
+    }
+    const id = String(entry.id ?? '').trim();
+    if (id) {
+      ids.add(id);
+    }
+  };
+  for (const entry of config?.validation?.always ?? []) {
+    record(entry);
+  }
+  for (const entry of config?.validation?.hostRequired ?? []) {
+    record(entry);
+  }
+  return ids;
+}
+
+function isArtifactValidationReference(value) {
+  const normalized = String(value ?? '').trim();
+  return (
+    normalized.startsWith('docs/') ||
+    normalized.startsWith('apps/') ||
+    normalized.startsWith('packages/') ||
+    normalized.startsWith('scripts/') ||
+    normalized.startsWith('prisma/') ||
+    normalized.endsWith('.md') ||
+    normalized.endsWith('.json') ||
+    normalized.endsWith('.log')
+  );
+}
+
+function reportSemanticProofIssue(proofMode, code, message, filePath, forceError = false) {
+  if (forceError || proofMode === 'required') {
+    addFinding(code, message, filePath);
+    return;
+  }
+  addAdvisory(code, message, filePath);
+}
+
+async function writeValidationResult(payload) {
+  if (!validationResultPath) {
+    return;
+  }
+  const absPath = path.join(rootDir, validationResultPath);
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  await fs.writeFile(absPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
 function candidatePlanScopeIds(plan, targetPlanId) {
   const candidates = new Set();
   if (plan.planId === targetPlanId) {
@@ -403,6 +484,8 @@ async function scanPhase(phase, directoryPath) {
     const implementationTargets = implementationTargetsRaw.map(normalizeTargetPathValue).filter(Boolean);
     const implementationTargetsProvided = implementationTargets.length > 0;
     const productSlicePlan = deliveryClass === 'product' && executionScope === 'slice';
+    const proofMode = scanPhase.proofMode ?? 'advisory';
+    const configuredValidationIds = scanPhase.configuredValidationIds ?? new Set();
     const reconciliationRequired =
       phase === 'future' || (phase === 'active' && executionScope === 'program');
 
@@ -543,6 +626,213 @@ async function scanPhase(phase, directoryPath) {
         "Only 'Delivery-Class: product' plus 'Execution-Scope: slice' plans may declare 'Implementation-Targets'. Use 'none' or remove the field for program/docs/ops/reconciliation plans.",
         rel
       );
+    }
+
+    if (productSlicePlan) {
+      const mustLandEntries = parseMustLandChecklist(content);
+      const mustLandIds = mustLandEntries.map((entry) => entry.id).filter(Boolean);
+      const missingMustLandIds = mustLandEntries.filter((entry) => !entry.id);
+      if (missingMustLandIds.length > 0) {
+        reportSemanticProofIssue(
+          proofMode,
+          'MISSING_MUST_LAND_IDS',
+          "Product slice plans should prefix every `## Must-Land Checklist` checkbox with a stable backticked ID such as `ml-example-capability`.",
+          rel
+        );
+      }
+
+      const proofMap = parseCapabilityProofMap(content);
+      const proofMapPresent = /^##\s+Capability Proof Map\s*$/m.test(content);
+      if (!proofMapPresent) {
+        reportSemanticProofIssue(
+          proofMode,
+          'MISSING_CAPABILITY_PROOF_MAP',
+          `Product slice plans should include '## ${CAPABILITY_PROOF_MAP_SECTION}' so must-land items map to explicit proof obligations.`,
+          rel
+        );
+      } else {
+        for (const error of proofMap.errors) {
+          reportSemanticProofIssue(
+            proofMode,
+            'INVALID_CAPABILITY_PROOF_MAP',
+            error,
+            rel,
+            true
+          );
+        }
+
+        const capabilityIds = new Set();
+        const duplicateCapabilityIds = new Set();
+        for (const capability of proofMap.capabilities) {
+          if (!capability.capabilityId) {
+            reportSemanticProofIssue(
+              proofMode,
+              'MISSING_CAPABILITY_ID',
+              'Capability Proof Map capability rows must set Capability ID.',
+              rel,
+              true
+            );
+            continue;
+          }
+          if (capabilityIds.has(capability.capabilityId)) {
+            duplicateCapabilityIds.add(capability.capabilityId);
+          }
+          capabilityIds.add(capability.capabilityId);
+          if (capability.mustLandIds.length === 0) {
+            reportSemanticProofIssue(
+              proofMode,
+              'EMPTY_CAPABILITY_MUST_LAND_MAP',
+              `Capability '${capability.capabilityId}' must reference at least one must-land ID.`,
+              rel
+            );
+          }
+          if (!capability.claim) {
+            reportSemanticProofIssue(
+              proofMode,
+              'EMPTY_CAPABILITY_CLAIM',
+              `Capability '${capability.capabilityId}' must include a claim.`,
+              rel
+            );
+          }
+          if (capability.requiredStrength !== 'strong' && capability.requiredStrength !== 'weak') {
+            reportSemanticProofIssue(
+              proofMode,
+              'INVALID_CAPABILITY_REQUIRED_STRENGTH',
+              `Capability '${capability.capabilityId}' uses invalid required strength '${capability.requiredStrength || 'missing'}' (expected: strong|weak).`,
+              rel,
+              true
+            );
+          }
+          for (const mustLandId of capability.mustLandIds) {
+            if (!mustLandIds.includes(mustLandId)) {
+              reportSemanticProofIssue(
+                proofMode,
+                'UNKNOWN_MUST_LAND_REFERENCE',
+                `Capability '${capability.capabilityId}' references unknown must-land ID '${mustLandId}'.`,
+                rel,
+                true
+              );
+            }
+          }
+        }
+        for (const duplicateId of duplicateCapabilityIds) {
+          reportSemanticProofIssue(
+            proofMode,
+            'DUPLICATE_CAPABILITY_ID',
+            `Capability Proof Map repeats capability ID '${duplicateId}'.`,
+            rel,
+            true
+          );
+        }
+
+        const proofIds = new Set();
+        const duplicateProofIds = new Set();
+        const proofsByCapability = new Map();
+        for (const proof of proofMap.proofs) {
+          if (!proof.proofId) {
+            reportSemanticProofIssue(
+              proofMode,
+              'MISSING_PROOF_ID',
+              'Capability Proof Map proof rows must set Proof ID.',
+              rel,
+              true
+            );
+            continue;
+          }
+          if (proofIds.has(proof.proofId)) {
+            duplicateProofIds.add(proof.proofId);
+          }
+          proofIds.add(proof.proofId);
+          if (!capabilityIds.has(proof.capabilityId)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'UNKNOWN_PROOF_CAPABILITY',
+              `Proof '${proof.proofId}' references unknown capability '${proof.capabilityId || 'missing'}'.`,
+              rel,
+              true
+            );
+          }
+          if (!PROOF_TYPES.has(proof.type)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'INVALID_PROOF_TYPE',
+              `Proof '${proof.proofId}' uses invalid type '${proof.type || 'missing'}'.`,
+              rel,
+              true
+            );
+          }
+          if (!PROOF_LANES.has(proof.lane)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'INVALID_PROOF_LANE',
+              `Proof '${proof.proofId}' uses invalid lane '${proof.lane || 'missing'}'.`,
+              rel,
+              true
+            );
+          }
+          if (!PROOF_FRESHNESS_VALUES.has(proof.freshness)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'INVALID_PROOF_FRESHNESS',
+              `Proof '${proof.proofId}' uses invalid freshness '${proof.freshness || 'missing'}'.`,
+              rel,
+              true
+            );
+          }
+          if (!proof.validationRef) {
+            reportSemanticProofIssue(
+              proofMode,
+              'MISSING_PROOF_REFERENCE',
+              `Proof '${proof.proofId}' must declare a validation ID or artifact path.`,
+              rel,
+              true
+            );
+          } else if (!configuredValidationIds.has(proof.validationRef) && !isArtifactValidationReference(proof.validationRef)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'UNKNOWN_PROOF_REFERENCE',
+              `Proof '${proof.proofId}' references unknown validation ID or artifact '${proof.validationRef}'.`,
+              rel
+            );
+          }
+          if (!proofsByCapability.has(proof.capabilityId)) {
+            proofsByCapability.set(proof.capabilityId, []);
+          }
+          proofsByCapability.get(proof.capabilityId).push(proof);
+        }
+        for (const duplicateId of duplicateProofIds) {
+          reportSemanticProofIssue(
+            proofMode,
+            'DUPLICATE_PROOF_ID',
+            `Capability Proof Map repeats proof ID '${duplicateId}'.`,
+            rel,
+            true
+          );
+        }
+        for (const capability of proofMap.capabilities) {
+          if (!proofsByCapability.has(capability.capabilityId)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'CAPABILITY_WITHOUT_PROOFS',
+              `Capability '${capability.capabilityId}' does not declare any proof rows.`,
+              rel
+            );
+          }
+        }
+        const coveredMustLandIds = new Set(
+          proofMap.capabilities.flatMap((capability) => capability.mustLandIds)
+        );
+        for (const mustLandId of mustLandIds) {
+          if (!coveredMustLandIds.has(mustLandId)) {
+            reportSemanticProofIssue(
+              proofMode,
+              'UNMAPPED_MUST_LAND_ID',
+              `Must-land item '${mustLandId}' is not referenced by any capability in '## ${CAPABILITY_PROOF_MAP_SECTION}'.`,
+              rel
+            );
+          }
+        }
+      }
     }
 
     if (executionScope === 'program' && parentPlanId) {
@@ -752,9 +1042,14 @@ async function main() {
     process.env.ORCH_PLAN_METADATA_AUTO_HEAL_STATUS,
     !ciMode
   );
+  const automationConfig = await loadAutomationConfig();
+  const proofMode = normalizeProofMode(automationConfig?.semanticProof?.mode);
+  const configuredValidationIds = collectConfiguredValidationIds(automationConfig);
 
   scanPhase.autoHealEnabled = autoHealEnabled;
   scanPhase.scopedRepairPlanId = scopedPlanId;
+  scanPhase.proofMode = proofMode;
+  scanPhase.configuredValidationIds = configuredValidationIds;
 
   const [futurePlans, activePlans, completedPlans] = await Promise.all([
     scanPhase('future', directories.future),
@@ -903,8 +1198,16 @@ async function main() {
       }
       return false;
     });
+    const scopedAdvisories = advisories.filter((advisory) => {
+      if (scopedFiles.has(advisory.filePath)) {
+        return true;
+      }
+      return false;
+    });
     findings.length = 0;
     findings.push(...scopedFindings);
+    advisories.length = 0;
+    advisories.push(...scopedAdvisories);
     scopeSummary = ` scopePlanId=${scopedPlanId}`;
   }
 
@@ -916,7 +1219,25 @@ async function main() {
     }
   }
 
+  if (advisories.length > 0) {
+    console.log(`[plans-verify] advisories (${advisories.length}, semanticProof=${proofMode}).`);
+    for (const advisory of advisories) {
+      console.log(`- [${advisory.code}] ${advisory.message} (${advisory.filePath})`);
+    }
+  }
+
   if (findings.length > 0) {
+    await writeValidationResult({
+      validationId: process.env.ORCH_VALIDATION_ID || 'plans:metadata',
+      type: process.env.ORCH_VALIDATION_TYPE || 'contract',
+      status: 'failed',
+      summary: `[plans-verify] failed (${findings.length} issue(s), ${summary}).`,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      findingFiles: findings.map((finding) => finding.filePath).filter(Boolean),
+      evidenceRefs: [],
+      artifactRefs: []
+    });
     console.error(`[plans-verify] failed (${findings.length} issue(s), ${summary}).`);
     for (const finding of findings) {
       console.error(`- [${finding.code}] ${finding.message} (${finding.filePath})`);
@@ -924,11 +1245,34 @@ async function main() {
     process.exit(1);
   }
 
+  await writeValidationResult({
+    validationId: process.env.ORCH_VALIDATION_ID || 'plans:metadata',
+    type: process.env.ORCH_VALIDATION_TYPE || 'contract',
+    status: 'passed',
+    summary: `[plans-verify] passed (${summary}).`,
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    findingFiles: [],
+    evidenceRefs: [],
+    artifactRefs: []
+  });
   console.log(`[plans-verify] passed (${summary}).`);
 }
 
 main().catch((error) => {
-  console.error('[plans-verify] failed with an unexpected error.');
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exit(1);
+  Promise.resolve(writeValidationResult({
+    validationId: process.env.ORCH_VALIDATION_ID || 'plans:metadata',
+    type: process.env.ORCH_VALIDATION_TYPE || 'contract',
+    status: 'failed',
+    summary: error instanceof Error ? error.message : String(error),
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    findingFiles: [],
+    evidenceRefs: [],
+    artifactRefs: []
+  })).finally(() => {
+    console.error('[plans-verify] failed with an unexpected error.');
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
 });

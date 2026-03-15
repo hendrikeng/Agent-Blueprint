@@ -9,18 +9,22 @@ import { spawn, spawnSync } from 'node:child_process';
 import { compileTaskContactPack } from './compile-task-contact-pack.mjs';
 import {
   ACTIVE_STATUSES,
+  CAPABILITY_PROOF_MAP_SECTION,
   collectUnfinishedCoverageRows,
   isValidPlanId,
   listMarkdownFiles,
   metadataValue,
   normalizeStatus,
+  parseCapabilityProofMap,
   parseDeliveryClass,
   parseExecutionScope,
+  parseMustLandChecklist,
   parsePlanId,
   parseRiskTier,
   parseSecurityApproval,
   parseListField,
   parseMetadata,
+  PROOF_TYPES,
   parsePriority,
   priorityOrder,
   setMetadataFields,
@@ -138,6 +142,7 @@ const DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER = 1;
 const DEFAULT_EVIDENCE_SESSION_CURATION_MODE = 'on-change';
 const DEFAULT_EVIDENCE_SESSION_INDEX_REFRESH_MODE = 'on-change';
 const DEFAULT_CONTACT_PACK_CACHE_MODE = 'run-memory';
+const DEFAULT_SEMANTIC_PROOF_MODE = 'advisory';
 const DEFAULT_ROLE_ORCHESTRATION_ENABLED = true;
 const DEFAULT_RISK_THRESHOLD_MEDIUM = 3;
 const DEFAULT_RISK_THRESHOLD_HIGH = 6;
@@ -2556,6 +2561,9 @@ async function loadConfig(paths) {
         keepMaxPerBlocker: DEFAULT_EVIDENCE_KEEP_MAX_PER_BLOCKER
       }
     },
+    semanticProof: {
+      mode: DEFAULT_SEMANTIC_PROOF_MODE
+    },
     roleOrchestration: {
       enabled: DEFAULT_ROLE_ORCHESTRATION_ENABLED,
       mode: 'risk-adaptive',
@@ -2735,6 +2743,10 @@ async function loadConfig(paths) {
         ...defaultConfig.evidence.lifecycle,
         ...(configured.evidence?.lifecycle ?? {})
       }
+    },
+    semanticProof: {
+      ...defaultConfig.semanticProof,
+      ...(configured.semanticProof ?? {})
     },
     roleOrchestration: {
       ...defaultConfig.roleOrchestration,
@@ -3810,7 +3822,7 @@ async function persistSecurityApproval(plan, securityApprovalField, securityAppr
 
 function createInitialState(runId, requestedMode, effectiveMode) {
   return {
-    version: 5,
+    version: 6,
     runId,
     requestedMode,
     effectiveMode,
@@ -3828,6 +3840,7 @@ function createInitialState(runId, requestedMode, effectiveMode) {
       checkedAt: null
     },
     validationState: {},
+    validationResults: {},
     recoveryState: {},
     continuationState: {},
     sessionState: {},
@@ -3856,6 +3869,8 @@ function normalizePersistedState(state) {
   normalized.failedPlanIds = Array.isArray(normalized.failedPlanIds) ? normalized.failedPlanIds : [];
   normalized.validationState =
     normalized.validationState && typeof normalized.validationState === 'object' ? normalized.validationState : {};
+  normalized.validationResults =
+    normalized.validationResults && typeof normalized.validationResults === 'object' ? normalized.validationResults : {};
   normalized.recoveryState =
     normalized.recoveryState && typeof normalized.recoveryState === 'object' ? normalized.recoveryState : {};
   normalized.continuationState =
@@ -3981,6 +3996,256 @@ function updatePlanValidationState(state, planId, patch) {
     ...patch,
     updatedAt: nowIso()
   };
+}
+
+function planScopedValidationRoots(plan) {
+  return normalizeRelativePrefixList([
+    plan?.rel ?? '',
+    `docs/exec-plans/active/evidence/${plan?.planId ?? ''}.md`,
+    `docs/exec-plans/evidence-index/${plan?.planId ?? ''}.md`,
+    ...(Array.isArray(plan?.specTargets) ? plan.specTargets : []),
+    ...(Array.isArray(plan?.implementationTargets) ? plan.implementationTargets : [])
+  ]);
+}
+
+function classifyValidationFailureScope(failedResult, plan) {
+  const findingFiles = normalizeValidationFindingFiles(failedResult?.findingFiles);
+  if (findingFiles.length === 0) {
+    return 'unknown';
+  }
+  const roots = planScopedValidationRoots(plan);
+  const inScope = findingFiles.filter((filePath) => roots.some((root) => pathMatchesRootPrefix(filePath, root)));
+  if (inScope.length === 0) {
+    return 'external';
+  }
+  if (inScope.length === findingFiles.length) {
+    return 'in-scope';
+  }
+  return 'mixed';
+}
+
+async function setResidualValidationBlockersSection(planPath, failedResult, reason, dryRun) {
+  if (dryRun) {
+    return;
+  }
+  const content = await fs.readFile(planPath, 'utf8');
+  const lines = [
+    `- Status: residual-external`,
+    `- Updated At: ${nowIso()}`,
+    `- Validation ID: ${failedResult?.validationId ?? 'unknown'}`,
+    `- Reason: ${reason}`,
+    `- Finding Files: ${
+      normalizeValidationFindingFiles(failedResult?.findingFiles).length > 0
+        ? normalizeValidationFindingFiles(failedResult?.findingFiles).join(', ')
+        : 'none'
+    }`
+  ];
+  const updated = upsertSection(content, 'Residual Validation Blockers', lines);
+  await fs.writeFile(planPath, updated, 'utf8');
+}
+
+function proofTypeIsStrong(type, validationRef = '') {
+  if (String(validationRef ?? '').trim().startsWith('repo:')) {
+    return false;
+  }
+  return type === 'integration' || type === 'contract' || type === 'end-to-end' || type === 'host-required';
+}
+
+function proofResultMatchesReference(result, reference) {
+  if (!result || !reference) {
+    return false;
+  }
+  if (result.validationId === reference) {
+    return true;
+  }
+  if (result.outputLogPath === reference) {
+    return true;
+  }
+  return (
+    (Array.isArray(result.artifactRefs) && result.artifactRefs.includes(reference)) ||
+    (Array.isArray(result.evidenceRefs) && result.evidenceRefs.includes(reference))
+  );
+}
+
+function semanticProofEvaluationMode(config) {
+  return normalizeSemanticProofMode(config?.semanticProof?.mode);
+}
+
+function evaluateSemanticProofCoverage(plan, state, config) {
+  if (!isProductPlan(plan) || isProgramPlan(plan)) {
+    return {
+      applicable: false,
+      mode: semanticProofEvaluationMode(config),
+      satisfied: true,
+      issues: [],
+      mustLandCoverage: [],
+      proofStatuses: []
+    };
+  }
+
+  const content = plan?.content ?? '';
+  const mustLandEntries = parseMustLandChecklist(content);
+  const proofMap = parseCapabilityProofMap(content);
+  const issues = [];
+  const proofStatuses = [];
+  const mustLandCoverage = [];
+  const mode = semanticProofEvaluationMode(config);
+
+  if (mustLandEntries.some((entry) => !entry.id)) {
+    issues.push('Product slice must-land items are missing stable IDs.');
+  }
+  if (!/^##\s+Capability Proof Map\s*$/m.test(content)) {
+    issues.push(`Plan is missing '## ${CAPABILITY_PROOF_MAP_SECTION}'.`);
+  }
+  for (const error of proofMap.errors) {
+    issues.push(error);
+  }
+
+  const validationResults = state?.validationResults?.[plan.planId] ?? { always: [], 'host-required': [] };
+  const allResults = [
+    ...(Array.isArray(validationResults.always) ? validationResults.always : []),
+    ...(Array.isArray(validationResults['host-required']) ? validationResults['host-required'] : [])
+  ];
+  const implementationRecordedAt = trimmedString(state?.implementationState?.[plan.planId]?.lastRecordedAt);
+  const implementationRecordedAtMs = implementationRecordedAt ? Date.parse(implementationRecordedAt) : Number.NaN;
+  const capabilitiesByMustLand = new Map();
+  const proofsByCapability = new Map();
+
+  for (const capability of proofMap.capabilities) {
+    for (const mustLandId of capability.mustLandIds) {
+      if (!capabilitiesByMustLand.has(mustLandId)) {
+        capabilitiesByMustLand.set(mustLandId, []);
+      }
+      capabilitiesByMustLand.get(mustLandId).push(capability);
+    }
+  }
+  for (const proof of proofMap.proofs) {
+    if (!proofsByCapability.has(proof.capabilityId)) {
+      proofsByCapability.set(proof.capabilityId, []);
+    }
+    proofsByCapability.get(proof.capabilityId).push(proof);
+  }
+
+  const capabilitySatisfied = new Map();
+  for (const capability of proofMap.capabilities) {
+    const proofs = proofsByCapability.get(capability.capabilityId) ?? [];
+    let hasStrongFreshProof = false;
+    let hasAnyFreshProof = false;
+
+    for (const proof of proofs) {
+      const matchedResult = allResults.find((result) => proofResultMatchesReference(result, proof.validationRef));
+      const matched = Boolean(matchedResult) && matchedResult.status === 'passed';
+      const finishedAtMs = matchedResult?.finishedAt ? Date.parse(matchedResult.finishedAt) : Number.NaN;
+      const fresh = !matched
+        ? false
+        : !Number.isFinite(implementationRecordedAtMs) || !Number.isFinite(finishedAtMs) || finishedAtMs >= implementationRecordedAtMs;
+      const strong = proofTypeIsStrong(proof.type, proof.validationRef);
+      if (matched && fresh) {
+        hasAnyFreshProof = true;
+      }
+      if (matched && fresh && strong) {
+        hasStrongFreshProof = true;
+      }
+      proofStatuses.push({
+        proofId: proof.proofId,
+        capabilityId: proof.capabilityId,
+        validationRef: proof.validationRef,
+        type: proof.type,
+        status: !matchedResult
+          ? 'missing'
+          : matchedResult.status !== 'passed'
+            ? matchedResult.status
+            : !fresh
+              ? 'stale'
+              : strong
+                ? 'strong'
+                : 'weak'
+      });
+    }
+
+    const requiredStrong = capability.requiredStrength === 'strong';
+    capabilitySatisfied.set(capability.capabilityId, requiredStrong ? hasStrongFreshProof : hasAnyFreshProof);
+    if (proofs.length === 0) {
+      issues.push(`Capability '${capability.capabilityId}' has no proof rows.`);
+    } else if (!capabilitySatisfied.get(capability.capabilityId)) {
+      issues.push(
+        requiredStrong
+          ? `Capability '${capability.capabilityId}' lacks a fresh strong proof.`
+          : `Capability '${capability.capabilityId}' lacks a fresh proof.`
+      );
+    }
+  }
+
+  for (const mustLandEntry of mustLandEntries) {
+    if (!mustLandEntry.id) {
+      continue;
+    }
+    const mappedCapabilities = capabilitiesByMustLand.get(mustLandEntry.id) ?? [];
+    const satisfied = mappedCapabilities.length > 0 && mappedCapabilities.every((capability) => capabilitySatisfied.get(capability.capabilityId) === true);
+    mustLandCoverage.push({
+      mustLandId: mustLandEntry.id,
+      satisfied,
+      capabilities: mappedCapabilities.map((capability) => capability.capabilityId)
+    });
+    if (mappedCapabilities.length === 0) {
+      issues.push(`Must-land item '${mustLandEntry.id}' is not mapped to any capability.`);
+    }
+  }
+
+  return {
+    applicable: true,
+    mode,
+    satisfied: mustLandCoverage.every((entry) => entry.satisfied) && issues.length === 0,
+    issues: [...new Set(issues)],
+    mustLandCoverage,
+    proofStatuses
+  };
+}
+
+function semanticProofCoverageLines(report) {
+  if (!report?.applicable) {
+    return ['- Semantic proof not required for this plan.'];
+  }
+  const lines = [
+    `- Mode: ${report.mode}`,
+    `- Satisfied: ${report.satisfied ? 'yes' : 'no'}`
+  ];
+  if (report.mustLandCoverage.length === 0) {
+    lines.push('- Must-Land Coverage: none recorded');
+  } else {
+    for (const entry of report.mustLandCoverage) {
+      lines.push(
+        `- Must-Land ${entry.mustLandId}: ${entry.satisfied ? 'covered' : 'uncovered'} (${entry.capabilities.length > 0 ? entry.capabilities.join(', ') : 'no capabilities'})`
+      );
+    }
+  }
+  for (const issue of report.issues.slice(0, 10)) {
+    lines.push(`- Issue: ${issue}`);
+  }
+  return lines;
+}
+
+async function writeSemanticProofManifest(paths, state, plan, report, options) {
+  if (options.dryRun || !state?.runId) {
+    return null;
+  }
+  const baseDir = path.join(paths.runtimeDir, state.runId, 'semantic-proof');
+  const fileName = `${plan.planId}.json`;
+  const targetPath = path.join(baseDir, fileName);
+  await fs.mkdir(baseDir, { recursive: true });
+  const payload = {
+    generatedAt: nowIso(),
+    runId: state.runId,
+    planId: plan.planId,
+    mode: report.mode,
+    applicable: report.applicable,
+    satisfied: report.satisfied,
+    issues: report.issues,
+    mustLandCoverage: report.mustLandCoverage,
+    proofStatuses: report.proofStatuses
+  };
+  await fs.writeFile(targetPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  return toPosix(path.relative(paths.rootDir, targetPath));
 }
 
 function ensurePlanRecoveryState(state, planId) {
@@ -5923,24 +6188,72 @@ function parseValidationCommandList(value) {
     .filter(Boolean);
 }
 
+function normalizeSemanticProofMode(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (normalized === 'required') {
+    return 'required';
+  }
+  return 'advisory';
+}
+
+function validationLaneName(label) {
+  return label.toLowerCase() === 'validation' ? 'always' : 'host-required';
+}
+
+function derivedValidationCommandId(lane, index) {
+  return `${lane}:${index + 1}`;
+}
+
+function normalizeValidationCommandSpec(entry, lane, index) {
+  if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+    const command = String(entry.command ?? '').trim();
+    if (!command) {
+      return null;
+    }
+    const explicitId = String(entry.id ?? '').trim();
+    return {
+      id: explicitId || derivedValidationCommandId(lane, index),
+      command,
+      type: String(entry.type ?? '').trim().toLowerCase(),
+      emitsFindings: asBoolean(entry.emitsFindings, false),
+      emitsArtifacts: asBoolean(entry.emitsArtifacts, false)
+    };
+  }
+
+  const command = String(entry ?? '').trim();
+  if (!command) {
+    return null;
+  }
+  return {
+    id: derivedValidationCommandId(lane, index),
+    command,
+    type: lane === 'host-required' ? 'host-required' : '',
+    emitsFindings: false,
+    emitsArtifacts: false
+  };
+}
+
+function normalizeValidationCommandSpecs(entries, lane) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry, index) => normalizeValidationCommandSpec(entry, lane, index))
+    .filter(Boolean);
+}
+
 function resolveAlwaysValidationCommands(rootDir, options, config) {
   const explicit = parseValidationCommandList(options.validationCommands);
   if (explicit.length > 0) {
-    return explicit;
+    return normalizeValidationCommandSpecs(explicit, 'always');
   }
 
   if (Array.isArray(config.validation?.always) && config.validation.always.length > 0) {
-    return config.validation.always;
+    return normalizeValidationCommandSpecs(config.validation.always, 'always');
   }
 
-  return resolveDefaultValidationCommands(rootDir, config.validationCommands);
+  return normalizeValidationCommandSpecs(resolveDefaultValidationCommands(rootDir, config.validationCommands), 'always');
 }
 
 function resolveHostRequiredValidationCommands(config) {
-  if (!Array.isArray(config.validation?.hostRequired)) {
-    return [];
-  }
-  return config.validation.hostRequired.map((entry) => String(entry ?? '').trim()).filter(Boolean);
+  return normalizeValidationCommandSpecs(config.validation?.hostRequired, 'host-required');
 }
 
 function resolveHostValidationMode(config) {
@@ -5949,6 +6262,73 @@ function resolveHostValidationMode(config) {
     return mode;
   }
   return DEFAULT_HOST_VALIDATION_MODE;
+}
+
+function validationCommandResultPath(paths, state, plan, lane, spec, index) {
+  const runId = state?.runId ?? 'run';
+  const planToken = (plan?.planId ?? 'run').replace(/[^A-Za-z0-9._-]/g, '-');
+  const laneToken = String(lane ?? 'validation').replace(/[^A-Za-z0-9._-]/g, '-');
+  const specToken = String(spec?.id ?? derivedValidationCommandId(lane, index)).replace(/[^A-Za-z0-9._-]/g, '-');
+  const baseDir = path.join(paths.runtimeDir, runId, 'validation-results');
+  const fileName = `${planToken}-${laneToken}-${index + 1}-${specToken}.json`;
+  return {
+    abs: path.join(baseDir, fileName),
+    rel: toPosix(path.relative(paths.rootDir, path.join(baseDir, fileName)))
+  };
+}
+
+function normalizeValidationFindingFiles(value) {
+  return [...new Set(
+    (Array.isArray(value) ? value : [])
+      .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, ''))
+      .filter(Boolean)
+  )];
+}
+
+function normalizeValidationReferenceList(value) {
+  return [...new Set(
+    (Array.isArray(value) ? value : [])
+      .map((entry) => toPosix(String(entry ?? '').trim()))
+      .filter(Boolean)
+  )];
+}
+
+function normalizeValidationResultPayload(payload, spec, lane, command, outputLogPath = null) {
+  const status = String(payload?.status ?? '').trim().toLowerCase();
+  return {
+    validationId: String(payload?.validationId ?? spec.id).trim() || spec.id,
+    command,
+    lane,
+    type: String(payload?.type ?? spec.type ?? '').trim().toLowerCase(),
+    status: status === 'passed' || status === 'failed' || status === 'pending' ? status : '',
+    summary: String(payload?.summary ?? '').trim(),
+    startedAt: trimmedString(payload?.startedAt),
+    finishedAt: trimmedString(payload?.finishedAt),
+    evidenceRefs: normalizeValidationReferenceList(payload?.evidenceRefs),
+    artifactRefs: normalizeValidationReferenceList(payload?.artifactRefs),
+    findingFiles: normalizeValidationFindingFiles(payload?.findingFiles),
+    outputLogPath
+  };
+}
+
+function ensurePlanValidationResults(state, planId) {
+  if (!state.validationResults || typeof state.validationResults !== 'object') {
+    state.validationResults = {};
+  }
+  if (!state.validationResults[planId] || typeof state.validationResults[planId] !== 'object') {
+    state.validationResults[planId] = {
+      always: [],
+      'host-required': [],
+      updatedAt: null
+    };
+  }
+  return state.validationResults[planId];
+}
+
+function updatePlanValidationResults(state, planId, lane, results) {
+  const current = ensurePlanValidationResults(state, planId);
+  current[lane] = Array.isArray(results) ? results : [];
+  current.updatedAt = nowIso();
 }
 
 async function runValidationCommands(paths, commands, options, label, state = null, plan = null) {
@@ -5962,20 +6342,41 @@ async function runValidationCommands(paths, commands, options, label, state = nu
   }
 
   const evidence = [];
+  const results = [];
+  const lane = validationLaneName(label);
   for (let index = 0; index < commands.length; index += 1) {
-    const command = commands[index];
+    const spec = commands[index];
+    const command = spec.command;
     if (options.dryRun) {
       evidence.push(`Dry-run: ${label} command skipped: ${command}`);
+      results.push({
+        validationId: spec.id,
+        command,
+        lane,
+        type: spec.type,
+        status: 'passed',
+        summary: `Dry-run: ${label} command skipped.`,
+        startedAt: nowIso(),
+        finishedAt: nowIso(),
+        evidenceRefs: [],
+        artifactRefs: [],
+        findingFiles: [],
+        outputLogPath: null
+      });
       continue;
     }
 
     const captureOutput = shouldCaptureCommandOutput(options);
+    const resultPath = validationCommandResultPath(paths, state, plan, lane, spec, index);
     const validationEnv = {
       ...process.env,
       ORCH_RUN_ID: state?.runId ?? process.env.ORCH_RUN_ID,
       ORCH_PLAN_ID: plan?.planId ?? process.env.ORCH_PLAN_ID,
       ORCH_PLAN_FILE: plan?.rel ?? process.env.ORCH_PLAN_FILE,
-      ORCH_VALIDATION_LANE: label.toLowerCase()
+      ORCH_VALIDATION_LANE: lane,
+      ORCH_VALIDATION_ID: spec.id,
+      ORCH_VALIDATION_TYPE: spec.type ?? '',
+      ORCH_VALIDATION_RESULT_PATH: resultPath.rel
     };
     const result = await runShellMonitored(
       command,
@@ -5996,7 +6397,7 @@ async function runValidationCommands(paths, commands, options, label, state = nu
     if (captureOutput && state?.runId) {
       const runSessionDir = path.join(paths.runtimeDir, state.runId);
       const planToken = (plan?.planId ?? 'run').replace(/[^A-Za-z0-9._-]/g, '-');
-      const labelToken = label.toLowerCase().replace(/[^A-Za-z0-9._-]/g, '-');
+      const labelToken = lane.replace(/[^A-Za-z0-9._-]/g, '-');
       const logPathAbs = path.join(runSessionDir, `${planToken}-${labelToken}-${index + 1}.log`);
       logPathRel = toPosix(path.relative(paths.rootDir, logPathAbs));
       await fs.mkdir(runSessionDir, { recursive: true });
@@ -6015,26 +6416,58 @@ async function runValidationCommands(paths, commands, options, label, state = nu
       );
     }
 
+    const structuredPayload = normalizeValidationResultPayload(
+      await readJsonIfExists(resultPath.abs, null),
+      spec,
+      lane,
+      command,
+      logPathRel
+    );
+
     if (didTimeout(result)) {
+      const failedResult = {
+        ...structuredPayload,
+        status: 'failed',
+        summary: structuredPayload.summary || `${label} command timed out.`,
+        finishedAt: structuredPayload.finishedAt || nowIso()
+      };
+      results.push(failedResult);
       return {
         ok: false,
         failedCommand: command,
         reason: `${label} command timed out after ${Math.floor((options.validationTimeoutMs ?? 0) / 1000)}s`,
         evidence,
+        results,
+        failedResult,
         outputLogPath: logPathRel,
         failureTail: tailLines(output, options.failureTailLines)
       };
     }
     if (result.status !== 0) {
+      const failedResult = {
+        ...structuredPayload,
+        status: structuredPayload.status || 'failed',
+        summary: structuredPayload.summary || `${label} failed: ${command}`,
+        finishedAt: structuredPayload.finishedAt || nowIso()
+      };
+      results.push(failedResult);
       return {
         ok: false,
         failedCommand: command,
         reason: `${label} failed: ${command}`,
         evidence,
+        results,
+        failedResult,
         outputLogPath: logPathRel,
         failureTail: tailLines(output, options.failureTailLines)
       };
     }
+    results.push({
+      ...structuredPayload,
+      status: structuredPayload.status || 'passed',
+      summary: structuredPayload.summary || `${label} passed: ${command}`,
+      finishedAt: structuredPayload.finishedAt || nowIso()
+    });
     if (logPathRel) {
       evidence.push(`${label} output log: ${logPathRel}`);
     }
@@ -6043,7 +6476,8 @@ async function runValidationCommands(paths, commands, options, label, state = nu
 
   return {
     ok: true,
-    evidence
+    evidence,
+    results
   };
 }
 
@@ -6081,6 +6515,7 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
     return {
       status: 'passed',
       evidence: [`Dry-run: host validation (${provider}) command skipped: ${command}`],
+      results: [],
       provider
     };
   }
@@ -6169,6 +6604,8 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
         evidence: Array.isArray(payload.evidence)
           ? payload.evidence.map((entry) => String(entry))
           : [`Host validation (${provider}) result payload loaded from ${resultPaths.rel}`],
+        results: Array.isArray(payload.results) ? payload.results : [],
+        failedResult: payload.failedResult ?? null,
         outputLogPath
       };
     }
@@ -6181,7 +6618,8 @@ async function executeHostProviderCommand(provider, command, commands, paths, st
       evidence: [
         `Host validation passed via ${provider} command: ${command}`,
         outputLogPath ? `Host validation output log: ${outputLogPath}` : null
-      ].filter(Boolean)
+      ].filter(Boolean),
+      results: []
     };
   }
 
@@ -6275,6 +6713,8 @@ async function runHostValidation(paths, state, plan, options, config) {
         provider: 'local',
         reason: `Host validation failed: ${result.failedCommand}`,
         evidence: result.evidence,
+        results: result.results ?? [],
+        failedResult: result.failedResult ?? null,
         outputLogPath: result.outputLogPath ?? null,
         failureTail: result.failureTail ?? ''
       };
@@ -6284,7 +6724,8 @@ async function runHostValidation(paths, state, plan, options, config) {
       status: 'passed',
       provider: 'local',
       reason: null,
-      evidence: result.evidence
+      evidence: result.evidence,
+      results: result.results ?? []
     };
   };
 
@@ -7789,8 +8230,17 @@ async function finalizeCompletedPlan(plan, paths, state, validationEvidence, opt
     `- Plan Duration: ${formatDuration(planDurationSeconds)} (${planDurationSeconds ?? 'unknown'}s)`,
     `- Run Duration At Completion: ${formatDuration(runDurationSeconds)} (${runDurationSeconds ?? 'unknown'}s)`
   ];
+  const proofCoverageLines = completionInfo.semanticProofReport
+    ? semanticProofCoverageLines(completionInfo.semanticProofReport)
+    : [];
+  if (completionInfo.semanticProofManifestPath) {
+    proofCoverageLines.push(`- Manifest: ${completionInfo.semanticProofManifestPath}`);
+  }
 
   let finalContent = upsertSection(updatedMetadata, 'Validation Evidence', validationLines);
+  if (proofCoverageLines.length > 0) {
+    finalContent = upsertSection(finalContent, 'Proof Coverage', proofCoverageLines);
+  }
   finalContent = upsertSection(finalContent, 'Completion Snapshot', snapshotLines);
   if (indexResult?.indexPath) {
     finalContent = upsertSection(finalContent, 'Evidence Index', [
@@ -8258,8 +8708,39 @@ async function runValidationAndFinalize(plan, paths, state, options, config, ass
   await setPlanStatus(plan.filePath, 'validation', options.dryRun);
   progressLog(options, `validation start ${plan.planId} lane=always`);
   const alwaysValidation = await runAlwaysValidation(paths, options, config, state, plan);
+  updatePlanValidationResults(state, plan.planId, 'always', alwaysValidation.results ?? []);
   if (!alwaysValidation.ok) {
     state.stats.validationFailures += 1;
+    const failureScope = classifyValidationFailureScope(alwaysValidation.failedResult, plan);
+    if (failureScope === 'external') {
+      updatePlanValidationState(state, plan.planId, {
+        always: 'pending',
+        reason: alwaysValidation.reason ?? `Validation blocked by residual external failure: ${alwaysValidation.failedCommand}`
+      });
+      await setPlanStatus(plan.filePath, 'validation', options.dryRun);
+      await setResidualValidationBlockersSection(
+        plan.filePath,
+        alwaysValidation.failedResult,
+        alwaysValidation.reason ?? `Validation blocked by residual external failure: ${alwaysValidation.failedCommand}`,
+        options.dryRun
+      );
+      await logEvent(paths, state, 'validation_residual_external', {
+        planId: plan.planId,
+        command: alwaysValidation.failedCommand,
+        reason: alwaysValidation.reason ?? null,
+        findingFiles: alwaysValidation.failedResult?.findingFiles ?? [],
+        outputLogPath: alwaysValidation.outputLogPath ?? null
+      }, options.dryRun);
+      progressLog(
+        options,
+        `validation residual blocker ${plan.planId}: ${alwaysValidation.reason ?? alwaysValidation.failedCommand}`
+      );
+      return {
+        outcome: 'pending',
+        reason: alwaysValidation.reason ?? `Validation blocked by residual external failure: ${alwaysValidation.failedCommand}`,
+        riskTier: assessment.effectiveRiskTier
+      };
+    }
     updatePlanValidationState(state, plan.planId, {
       always: 'failed',
       reason: alwaysValidation.reason ?? `Validation failed: ${alwaysValidation.failedCommand}`
@@ -8300,8 +8781,40 @@ async function runValidationAndFinalize(plan, paths, state, options, config, ass
   progressLog(options, `validation start ${plan.planId} lane=host mode=${resolveHostValidationMode(config)}`);
 
   const hostValidation = await runHostValidation(paths, state, plan, options, config);
+  updatePlanValidationResults(state, plan.planId, 'host-required', hostValidation.results ?? []);
   if (hostValidation.status === 'failed') {
     state.stats.validationFailures += 1;
+    const failureScope = classifyValidationFailureScope(hostValidation.failedResult, plan);
+    if (failureScope === 'external') {
+      updatePlanValidationState(state, plan.planId, {
+        host: 'pending',
+        provider: hostValidation.provider ?? null,
+        reason: hostValidation.reason ?? 'Host validation blocked by residual external failure.'
+      });
+      await setPlanStatus(plan.filePath, 'validation', options.dryRun);
+      await setResidualValidationBlockersSection(
+        plan.filePath,
+        hostValidation.failedResult,
+        hostValidation.reason ?? 'Host validation blocked by residual external failure.',
+        options.dryRun
+      );
+      await logEvent(paths, state, 'host_validation_residual_external', {
+        planId: plan.planId,
+        provider: hostValidation.provider ?? null,
+        reason: hostValidation.reason ?? 'Host validation blocked by residual external failure.',
+        findingFiles: hostValidation.failedResult?.findingFiles ?? [],
+        outputLogPath: hostValidation.outputLogPath ?? null
+      }, options.dryRun);
+      progressLog(
+        options,
+        `host validation residual blocker ${plan.planId}: ${hostValidation.reason ?? 'Host validation blocked.'}`
+      );
+      return {
+        outcome: 'pending',
+        reason: hostValidation.reason ?? 'Host validation blocked by residual external failure.',
+        riskTier: assessment.effectiveRiskTier
+      };
+    }
     updatePlanValidationState(state, plan.planId, {
       host: 'failed',
       provider: hostValidation.provider ?? null,
@@ -8382,9 +8895,36 @@ async function runValidationAndFinalize(plan, paths, state, options, config, ass
   }, options.dryRun);
   progressLog(options, `host validation passed ${plan.planId} provider=${hostValidation.provider ?? 'n/a'}`);
 
+  const semanticProofReport = evaluateSemanticProofCoverage(plan, state, config);
+  const semanticProofManifestPath = await writeSemanticProofManifest(paths, state, plan, semanticProofReport, options);
+  await logEvent(paths, state, 'semantic_proof_evaluated', {
+    planId: plan.planId,
+    mode: semanticProofReport.mode,
+    applicable: semanticProofReport.applicable,
+    satisfied: semanticProofReport.satisfied,
+    issueCount: semanticProofReport.issues.length,
+    manifestPath: semanticProofManifestPath
+  }, options.dryRun);
+  if (semanticProofReport.applicable && !semanticProofReport.satisfied) {
+    progressLog(
+      options,
+      `semantic proof ${semanticProofReport.mode} ${plan.planId}: ${semanticProofReport.issues.slice(0, 3).join(' | ') || 'coverage incomplete'}`
+    );
+    if (semanticProofReport.mode === 'required') {
+      await setPlanStatus(plan.filePath, 'failed', options.dryRun);
+      return {
+        outcome: 'failed',
+        reason: `Semantic proof coverage incomplete: ${semanticProofReport.issues[0] ?? 'unknown proof gap'}`,
+        riskTier: assessment.effectiveRiskTier
+      };
+    }
+  }
+
   const mergedValidationEvidence = [
     ...alwaysValidation.evidence,
-    ...(Array.isArray(hostValidation.evidence) ? hostValidation.evidence : [])
+    ...(Array.isArray(hostValidation.evidence) ? hostValidation.evidence : []),
+    ...semanticProofCoverageLines(semanticProofReport),
+    ...(semanticProofManifestPath ? [`Semantic proof manifest: ${semanticProofManifestPath}`] : [])
   ];
   const shouldCreateAtomicCommit = asBoolean(options.commit, config.git.atomicCommits !== false);
   const completedTargetPath = await resolveCompletedPlanTargetPath(plan.filePath, paths.completedDir);
@@ -8494,6 +9034,8 @@ async function runValidationAndFinalize(plan, paths, state, options, config, ass
       sessionsExecuted,
       rollovers,
       hostValidationProvider: hostValidation.provider ?? 'none',
+      semanticProofReport,
+      semanticProofManifestPath,
       effectiveRiskTier: assessment.effectiveRiskTier,
       declaredRiskTier: assessment.declaredRiskTier,
       rolePipeline:

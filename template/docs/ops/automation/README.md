@@ -163,6 +163,7 @@ Use the manual path when any of these are true:
   - Detailed role contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`.
 - Validation lanes:
   - `validation.always`: sandbox-safe checks that should run in every completion gate.
+  - Validation entries may be plain strings or structured objects with `id`, `command`, and optional `type`; proof mapping should reference explicit IDs instead of command text.
   - `validation.requireAlwaysCommands: true` enforces fail-closed behavior when `validation.always` is empty.
   - `validation.always` should include a unit/integration test command (framework-appropriate).
   - `validation.hostRequired`: Docker/port/browser checks required before completion.
@@ -179,6 +180,12 @@ Use the manual path when any of these are true:
   - `validation.host.local.command`: optional local host-validation command override.
   - Recommended baseline: set `validation.host.local.command` to `npm run verify:full` so host-lane behavior is explicit and reproducible.
   - If host validation fails with command output (for example architecture/dependency checks), treat it as a real repository-gate failure and fix the code/docs; host configuration is already functioning.
+- Semantic proof:
+  - `semanticProof.mode: advisory|required` controls whether missing proof coverage is reported or blocks product-slice completion.
+  - Product slices should add stable must-land IDs plus `## Capability Proof Map` so must-land claims map to explicit capability and proof rows.
+  - Proof rows should reference explicit validation IDs or artifact paths; do not rely on title or test-name inference.
+  - Validation commands can emit structured result payloads via `ORCH_VALIDATION_RESULT_PATH`; orchestrator uses those payloads for proof matching and external-residual failure classification.
+  - When structured findings show a validation failure is entirely outside the current plan scope, orchestration records a residual blocker instead of failing the slice as product-incomplete.
 - Evidence compaction:
   - `evidence.compaction.mode: "compact-index"` writes canonical per-plan index files in `docs/exec-plans/evidence-index/`.
   - `evidence.compaction.maxReferences` controls how many most-recent evidence links are retained in the canonical index.
@@ -216,10 +223,12 @@ Use the manual path when any of these are true:
   - When run inside orchestration sessions, `verify:fast` receives `ORCH_PLAN_ID` and scopes `check-plan-metadata` to the in-flight plan to avoid unrelated plan-metadata drift blocking completion.
   - Runs `node ./scripts/docs/repair-plan-references.mjs` before docs governance checks so stale plan-path links and stale runtime links (contact packs and run artifacts) are auto-healed while keeping strict governance enabled.
   - Runs `node ./scripts/automation/check-plan-metadata.mjs`; in local runs it auto-heals top-level `Status:` drift to metadata `- Status` (set `ORCH_PLAN_METADATA_AUTO_HEAL_STATUS=0` to disable; CI defaults to disabled).
+  - When orchestration provides `ORCH_VALIDATION_RESULT_PATH`, `verify:fast` aggregates child-checker finding files into a structured result payload so residual external blockers can be distinguished from plan-scoped failures.
   - In orchestrator planner/explorer/reviewer sessions (`ORCH_ROLE` non-worker), it automatically switches to read-only behavior (`repair-plan-references --dry-run`, runtime-context output to `/tmp`, and metadata auto-heal disabled) to avoid role-scope policy violations.
 - Full merge profile: `npm run verify:full`
   - Runs all required repository gates.
   - When run inside orchestration sessions, `verify:full` receives `ORCH_PLAN_ID` and scopes `check-plan-metadata` to the in-flight plan to avoid unrelated plan-metadata auto-heal edits during host validation.
+  - When orchestration provides `ORCH_VALIDATION_RESULT_PATH`, `verify:full` aggregates child-checker finding files into a structured result payload for host-lane reporting.
 - Metrics capture:
   - `npm run perf:baseline`
   - `npm run perf:after`

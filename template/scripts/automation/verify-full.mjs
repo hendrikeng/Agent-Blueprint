@@ -1,7 +1,11 @@
 #!/usr/bin/env node
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const rootDir = process.cwd();
+const aggregateResultPath = String(process.env.ORCH_VALIDATION_RESULT_PATH ?? '').trim();
 
 function resolvedPlanMetadataCommand() {
   const planId = String(process.env.ORCH_PLAN_ID ?? '').trim().toLowerCase();
@@ -54,20 +58,49 @@ function asBoolean(value, fallback = false) {
   return fallback;
 }
 
-function runCommand(command, dryRun) {
+async function writeValidationResult(payload) {
+  if (!aggregateResultPath) {
+    return;
+  }
+  const absPath = path.join(rootDir, aggregateResultPath);
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  await fs.writeFile(absPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+function subcommandResultPath(index) {
+  if (!aggregateResultPath) {
+    return null;
+  }
+  const parsed = path.parse(aggregateResultPath);
+  return path.join(parsed.dir, `${parsed.name}-command-${index + 1}.json`);
+}
+
+async function readJsonIfExists(filePath) {
+  if (!filePath) {
+    return null;
+  }
+  try {
+    const raw = await fs.readFile(path.join(rootDir, filePath), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function runCommand(command, dryRun, env) {
   if (dryRun) {
     console.log(`[verify-full] dry-run: ${command}`);
-    return 0;
+    return { status: 0 };
   }
   const result = spawnSync(command, {
     shell: true,
     stdio: 'inherit',
-    env: process.env
+    env
   });
   if (result.error) {
     throw result.error;
   }
-  return result.status ?? 1;
+  return { status: result.status ?? 1 };
 }
 
 async function main() {
@@ -76,18 +109,60 @@ async function main() {
   const commands = fullCommands();
 
   console.log(`[verify-full] running ${commands.length} command(s).`);
+  const checks = [];
   for (const command of commands) {
-    const status = runCommand(command, dryRun);
-    if (status !== 0) {
+    const index = checks.length;
+    const childResultPath = subcommandResultPath(index);
+    const env = childResultPath
+      ? { ...process.env, ORCH_VALIDATION_RESULT_PATH: childResultPath }
+      : process.env;
+    const execution = runCommand(command, dryRun, env);
+    const childResult = await readJsonIfExists(childResultPath);
+    checks.push({ command, resultPath: childResultPath, childResult });
+    if (execution.status !== 0) {
+      await writeValidationResult({
+        validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-full',
+        type: process.env.ORCH_VALIDATION_TYPE || 'host-required',
+        status: 'failed',
+        summary: `[verify-full] failed: ${command}`,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        findingFiles: Array.isArray(childResult?.findingFiles) ? childResult.findingFiles : [],
+        evidenceRefs: childResultPath ? [childResultPath] : [],
+        artifactRefs: []
+      });
       console.error(`[verify-full] failed: ${command}`);
-      process.exit(status);
+      process.exit(execution.status);
     }
   }
+  await writeValidationResult({
+    validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-full',
+    type: process.env.ORCH_VALIDATION_TYPE || 'host-required',
+    status: 'passed',
+    summary: '[verify-full] passed.',
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    findingFiles: [],
+    evidenceRefs: checks.map((entry) => entry.resultPath).filter(Boolean),
+    artifactRefs: []
+  });
   console.log('[verify-full] passed.');
 }
 
 main().catch((error) => {
-  console.error('[verify-full] failed with an unexpected error.');
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exit(1);
+  writeValidationResult({
+    validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-full',
+    type: process.env.ORCH_VALIDATION_TYPE || 'host-required',
+    status: 'failed',
+    summary: error instanceof Error ? error.message : String(error),
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    findingFiles: [],
+    evidenceRefs: [],
+    artifactRefs: []
+  }).finally(() => {
+    console.error('[verify-full] failed with an unexpected error.');
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
 });

@@ -41,6 +41,8 @@ Optional metadata:
 - `Tags` (comma-separated risk hints such as `payments`, `security`, `migration`)
 - `Security-Approval` (`not-required` | `pending` | `approved`)
 
+For `Delivery-Class: product` plus `Execution-Scope: slice`, prefer adding stable must-land IDs and `## Capability Proof Map` during blueprinting even while semantic proof mode is still advisory. That keeps promotion and later validation machine-checkable without relying on test-name heuristics.
+
 ## Future Intake Gate (Minimal)
 
 Create or update a future blueprint as `Status: draft` only when these checks pass:
@@ -54,6 +56,7 @@ Create or update a future blueprint as `Status: draft` only when these checks pa
 - [ ] `Risk-Tier` is set correctly (`low` | `medium` | `high`) when applicable.
 - [ ] `Spec-Targets` reference canonical docs/files.
 - [ ] Product slices declare non-doc `Implementation-Targets`; programs and non-product blueprints do not.
+- [ ] Product slices should prefix must-land checkboxes with stable backticked IDs and prepare `## Capability Proof Map` entries before promotion.
 - [ ] `Done-Evidence` is `pending`.
 - [ ] `## Must-Land Checklist` exists and every checkbox item is executable within one promoted plan.
 - [ ] `## Already-True Baseline` and `## Deferred Follow-Ons` keep non-plan scope out of the must-land checklist.

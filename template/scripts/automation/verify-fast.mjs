@@ -1,8 +1,12 @@
 #!/usr/bin/env node
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const READ_ONLY_ORCH_ROLES = new Set(['planner', 'explorer', 'reviewer']);
+const rootDir = process.cwd();
+const aggregateResultPath = String(process.env.ORCH_VALIDATION_RESULT_PATH ?? '').trim();
 
 function orchestratorRole() {
   const role = String(process.env.ORCH_ROLE ?? '').trim().toLowerCase();
@@ -85,6 +89,35 @@ function runShell(command) {
     stdout: String(result.stdout ?? ''),
     stderr: String(result.stderr ?? '')
   };
+}
+
+async function writeValidationResult(payload) {
+  if (!aggregateResultPath) {
+    return;
+  }
+  const absPath = path.join(rootDir, aggregateResultPath);
+  await fs.mkdir(path.dirname(absPath), { recursive: true });
+  await fs.writeFile(absPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+function subcommandResultPath(index) {
+  if (!aggregateResultPath) {
+    return null;
+  }
+  const parsed = path.parse(aggregateResultPath);
+  return path.join(parsed.dir, `${parsed.name}-command-${index + 1}.json`);
+}
+
+async function readJsonIfExists(filePath) {
+  if (!filePath) {
+    return null;
+  }
+  try {
+    const raw = await fs.readFile(path.join(rootDir, filePath), 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function collectFromLines(raw) {
@@ -194,20 +227,20 @@ function buildCommandSet(changedFiles) {
   };
 }
 
-function runCommand(command, dryRun) {
+function runCommand(command, dryRun, env) {
   if (dryRun) {
     console.log(`[verify-fast] dry-run: ${command}`);
-    return 0;
+    return { status: 0 };
   }
   const result = spawnSync(command, {
     shell: true,
     stdio: 'inherit',
-    env: process.env
+    env
   });
   if (result.error) {
     throw result.error;
   }
-  return result.status ?? 1;
+  return { status: result.status ?? 1 };
 }
 
 async function main() {
@@ -226,18 +259,65 @@ async function main() {
   }
 
   console.log(`[verify-fast] running ${commands.length} command(s).`);
+  const checks = [];
   for (const command of commands) {
-    const status = runCommand(command, dryRun);
-    if (status !== 0) {
+    const index = checks.length;
+    const childResultPath = subcommandResultPath(index);
+    const env = childResultPath
+      ? { ...process.env, ORCH_VALIDATION_RESULT_PATH: childResultPath }
+      : process.env;
+    const execution = runCommand(command, dryRun, env);
+    const childResult = await readJsonIfExists(childResultPath);
+    checks.push({
+      command,
+      status: execution.status === 0 ? 'passed' : 'failed',
+      resultPath: childResultPath,
+      childResult
+    });
+    if (execution.status !== 0) {
+      await writeValidationResult({
+        validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-fast',
+        type: process.env.ORCH_VALIDATION_TYPE || 'integration',
+        status: 'failed',
+        summary: `[verify-fast] failed: ${command}`,
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        findingFiles: Array.isArray(childResult?.findingFiles) ? childResult.findingFiles : [],
+        evidenceRefs: childResultPath ? [childResultPath] : [],
+        artifactRefs: []
+      });
       console.error(`[verify-fast] failed: ${command}`);
-      process.exit(status);
+      process.exit(execution.status);
     }
   }
+  await writeValidationResult({
+    validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-fast',
+    type: process.env.ORCH_VALIDATION_TYPE || 'integration',
+    status: 'passed',
+    summary: '[verify-fast] passed.',
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    findingFiles: [],
+    evidenceRefs: checks.map((entry) => entry.resultPath).filter(Boolean),
+    artifactRefs: []
+  });
   console.log('[verify-fast] passed.');
 }
 
 main().catch((error) => {
-  console.error('[verify-fast] failed with an unexpected error.');
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exit(1);
+  writeValidationResult({
+    validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-fast',
+    type: process.env.ORCH_VALIDATION_TYPE || 'integration',
+    status: 'failed',
+    summary: error instanceof Error ? error.message : String(error),
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    findingFiles: [],
+    evidenceRefs: [],
+    artifactRefs: []
+  }).finally(() => {
+    console.error('[verify-fast] failed with an unexpected error.');
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
 });
