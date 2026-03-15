@@ -97,6 +97,18 @@ function toRunId(event) {
   return nested || null;
 }
 
+function toSessionKey(event) {
+  const details = eventDetails(event);
+  const runId = toRunId(event) ?? 'unknown-run';
+  const planId = toPlanId(event) ?? 'unknown-plan';
+  const session = String(event?.session ?? details.session ?? '').trim();
+  const role = String(event?.role ?? details.role ?? '').trim().toLowerCase();
+  if (!session) {
+    return null;
+  }
+  return [runId, planId, session, role || 'unknown-role'].join('::');
+}
+
 function mean(values) {
   if (values.length === 0) {
     return null;
@@ -137,13 +149,9 @@ async function main() {
   const runIds = new Set();
   const planIds = new Set();
   const planStats = new Map();
-  let explicitCheckpointAssessmentCount = 0;
   let sessionFinishedCount = 0;
   let continuityDerivedSessions = 0;
-  let continuityDegradedSessions = 0;
-  let resumeSafeCheckpointSessions = 0;
-  let fallbackContinuityDegradedSessions = 0;
-  let fallbackResumeSafeCheckpointSessions = 0;
+  const checkpointOutcomeBySession = new Map();
   let contactPackSessions = 0;
   let contactPackGeneratedSessions = 0;
   let contactPackCacheHitSessions = 0;
@@ -325,20 +333,31 @@ async function main() {
         ) {
           stats.firstWorkerEditSeconds = (timestampMs - stats.firstSeenMs) / 1000;
         }
-        if (details.continuityDegraded === true) {
-          fallbackContinuityDegradedSessions += 1;
-        }
-        if (details.checkpointResumeSafe === true) {
-          fallbackResumeSafeCheckpointSessions += 1;
+        const sessionKey = toSessionKey(event);
+        if (sessionKey) {
+          const current = checkpointOutcomeBySession.get(sessionKey) ?? {
+            fallbackContinuityDegraded: false,
+            fallbackCheckpointResumeSafe: false,
+            explicitContinuityDegraded: null,
+            explicitCheckpointResumeSafe: null
+          };
+          current.fallbackContinuityDegraded = details.continuityDegraded === true;
+          current.fallbackCheckpointResumeSafe = details.checkpointResumeSafe === true;
+          checkpointOutcomeBySession.set(sessionKey, current);
         }
       }
       if (typeLower === 'session_checkpoint_assessed') {
-        explicitCheckpointAssessmentCount += 1;
-        if (details.continuityDegraded === true) {
-          continuityDegradedSessions += 1;
-        }
-        if (details.checkpointResumeSafe === true) {
-          resumeSafeCheckpointSessions += 1;
+        const sessionKey = toSessionKey(event);
+        if (sessionKey) {
+          const current = checkpointOutcomeBySession.get(sessionKey) ?? {
+            fallbackContinuityDegraded: false,
+            fallbackCheckpointResumeSafe: false,
+            explicitContinuityDegraded: null,
+            explicitCheckpointResumeSafe: null
+          };
+          current.explicitContinuityDegraded = details.continuityDegraded === true;
+          current.explicitCheckpointResumeSafe = details.checkpointResumeSafe === true;
+          checkpointOutcomeBySession.set(sessionKey, current);
         }
       }
 
@@ -354,10 +373,23 @@ async function main() {
     }
   }
 
-  // Older runs may log checkpoint quality on session_finished without a dedicated assessment event.
-  if (explicitCheckpointAssessmentCount === 0) {
-    continuityDegradedSessions = fallbackContinuityDegradedSessions;
-    resumeSafeCheckpointSessions = fallbackResumeSafeCheckpointSessions;
+  let continuityDegradedSessions = 0;
+  let resumeSafeCheckpointSessions = 0;
+  for (const outcome of checkpointOutcomeBySession.values()) {
+    const continuityDegraded =
+      outcome.explicitContinuityDegraded != null
+        ? outcome.explicitContinuityDegraded
+        : outcome.fallbackContinuityDegraded;
+    const checkpointResumeSafe =
+      outcome.explicitCheckpointResumeSafe != null
+        ? outcome.explicitCheckpointResumeSafe
+        : outcome.fallbackCheckpointResumeSafe;
+    if (continuityDegraded) {
+      continuityDegradedSessions += 1;
+    }
+    if (checkpointResumeSafe) {
+      resumeSafeCheckpointSessions += 1;
+    }
   }
 
   const leadTimesSeconds = [];
