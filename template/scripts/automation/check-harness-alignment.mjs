@@ -128,6 +128,20 @@ function ensureScriptSignatures(orchestratorRaw, wrapperRaw, contextCompilerRaw,
       'scripts/automation/executor-wrapper.mjs'
     );
   }
+  if (!wrapperRaw.includes('Delivery-Class') || !wrapperRaw.includes('Execution-Scope')) {
+    addFinding(
+      'MISSING_PLAN_CLASS_PROMPT_POLICY',
+      "scripts/automation/executor-wrapper.mjs must instruct executors to honor 'Delivery-Class' and 'Execution-Scope'.",
+      'scripts/automation/executor-wrapper.mjs'
+    );
+  }
+  if (!wrapperRaw.includes('Implementation-Targets')) {
+    addFinding(
+      'MISSING_IMPLEMENTATION_TARGETS_PROMPT_POLICY',
+      "scripts/automation/executor-wrapper.mjs must instruct product slices to honor 'Implementation-Targets'.",
+      'scripts/automation/executor-wrapper.mjs'
+    );
+  }
   if (!wrapperRaw.includes('currentSubtask') || !wrapperRaw.includes('stateDelta')) {
     addFinding(
       'MISSING_STRUCTURED_CONTINUITY_PROMPT_POLICY',
@@ -281,6 +295,20 @@ function ensureConfigPolicy(config, configPath) {
     addFinding(
       'MISSING_RECONCILIATION_PROMPT_TEMPLATE',
       "executor.promptTemplate must mention '## Prior Completed Plan Reconciliation' policy.",
+      rel(configPath)
+    );
+  }
+  if (!promptTemplate.includes('Delivery-Class') || !promptTemplate.includes('Execution-Scope')) {
+    addFinding(
+      'MISSING_PLAN_CLASS_PROMPT_TEMPLATE',
+      "executor.promptTemplate must mention 'Delivery-Class' and 'Execution-Scope'.",
+      rel(configPath)
+    );
+  }
+  if (!promptTemplate.includes('Implementation-Targets')) {
+    addFinding(
+      'MISSING_IMPLEMENTATION_TARGETS_PROMPT_TEMPLATE',
+      "executor.promptTemplate must mention 'Implementation-Targets' for product slices.",
       rel(configPath)
     );
   }

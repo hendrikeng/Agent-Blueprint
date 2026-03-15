@@ -14,6 +14,8 @@ import {
   listMarkdownFiles,
   metadataValue,
   normalizeStatus,
+  parseDeliveryClass,
+  parseExecutionScope,
   parsePlanId,
   parseRiskTier,
   parseSecurityApproval,
@@ -1680,25 +1682,18 @@ function isMeaningfulWorkerTouchPath(filePath, touchPolicy = null) {
 }
 
 function buildWorkerTouchPolicy(plan) {
-  const specTargets =
-    Array.isArray(plan?.specTargets) && plan.specTargets.length > 0
-      ? plan.specTargets
-      : ['docs/product-specs/CURRENT-STATE.md'];
-  const docsOnlySpecTargets = specTargets.every((target) => {
-    const category = classifyTouchedPath(target);
-    return category === 'plan-docs' || category === 'docs' || category === 'automation';
-  });
+  const docsOnlyArtifactPlan = isArtifactSlicePlan(plan);
   const content = typeof plan?.content === 'string' ? plan.content : '';
   const documentStatus = content ? documentStatusValue(content) : '';
   const validationReady = content ? documentValidationReadyValue(content) : '';
   const validationOnlyPlan = completionGateReadyForValidation(documentStatus, validationReady);
-  const allowPlanDocsOnlyTouches = docsOnlySpecTargets;
+  const allowPlanDocsOnlyTouches = docsOnlyArtifactPlan;
   const progressLabel = allowPlanDocsOnlyTouches
-    ? 'repository edits in the plan\'s scoped docs/evidence targets'
+    ? 'repository edits in the plan\'s scoped docs/artifact targets'
     : 'repository edits outside plan/evidence files';
 
   return {
-    docsOnlySpecTargets,
+    docsOnlySpecTargets: docsOnlyArtifactPlan,
     validationOnlyPlan,
     allowPlanDocsOnlyTouches,
     progressLabel
@@ -3785,7 +3780,7 @@ async function persistSecurityApproval(plan, securityApprovalField, securityAppr
 
 function createInitialState(runId, requestedMode, effectiveMode) {
   return {
-    version: 2,
+    version: 3,
     runId,
     requestedMode,
     effectiveMode,
@@ -3806,6 +3801,7 @@ function createInitialState(runId, requestedMode, effectiveMode) {
     recoveryState: {},
     continuationState: {},
     evidenceState: {},
+    implementationState: {},
     roleState: {},
     parallelState: {
       activeWorkers: {},
@@ -3837,6 +3833,10 @@ function normalizePersistedState(state) {
       : {};
   normalized.evidenceState =
     normalized.evidenceState && typeof normalized.evidenceState === 'object' ? normalized.evidenceState : {};
+  normalized.implementationState =
+    normalized.implementationState && typeof normalized.implementationState === 'object'
+      ? normalized.implementationState
+      : {};
   normalized.roleState =
     normalized.roleState && typeof normalized.roleState === 'object' ? normalized.roleState : {};
   normalized.parallelState =
@@ -4035,6 +4035,20 @@ function ensureEvidenceState(state, planId) {
   return state.evidenceState[planId];
 }
 
+function ensurePlanImplementationState(state, planId) {
+  if (!state.implementationState || typeof state.implementationState !== 'object') {
+    state.implementationState = {};
+  }
+  if (!state.implementationState[planId] || typeof state.implementationState[planId] !== 'object') {
+    state.implementationState[planId] = {
+      touchedPaths: [],
+      lastRecordedAt: null,
+      updatedAt: null
+    };
+  }
+  return state.implementationState[planId];
+}
+
 async function saveState(paths, state, dryRun) {
   state.lastUpdated = nowIso();
   await writeJson(paths.runStatePath, state, dryRun);
@@ -4171,7 +4185,17 @@ async function readPlanRecord(rootDir, filePath, phase) {
   const specTargets = parseListField(metadataValue(metadata, 'Spec-Targets')).map((target) => (
     resolveSafeRepoPath(rootDir, target, `Spec-Targets entry in ${rel}`).rel
   ));
+  const implementationTargets = parseListField(metadataValue(metadata, 'Implementation-Targets')).map((target) => (
+    resolveSafeRepoPath(rootDir, target, `Implementation-Targets entry in ${rel}`).rel
+  ));
   const doneEvidence = parseListField(metadataValue(metadata, 'Done-Evidence'));
+  const parentPlanIdRaw = metadataValue(metadata, 'Parent-Plan-ID');
+  const parentPlanId = parentPlanIdRaw ? parsePlanId(parentPlanIdRaw, null) : null;
+  if (parentPlanIdRaw && !parentPlanId) {
+    throw new Error(
+      `Invalid Parent-Plan-ID '${parentPlanIdRaw}' in ${rel}. Parent-Plan-ID must be a lowercase kebab-case Plan-ID value.`
+    );
+  }
   const atomicRoots = parseListField(metadataValue(metadata, 'Atomic-Roots')).map((entry) => (
     resolveSafeRepoPath(rootDir, entry, `Atomic-Roots entry in ${rel}`).rel
   ));
@@ -4193,6 +4217,10 @@ async function readPlanRecord(rootDir, filePath, phase) {
     dependencies,
     tags,
     specTargets,
+    deliveryClass: parseDeliveryClass(metadataValue(metadata, 'Delivery-Class'), ''),
+    executionScope: parseExecutionScope(metadataValue(metadata, 'Execution-Scope'), ''),
+    implementationTargets,
+    parentPlanId,
     doneEvidence,
     atomicRoots,
     concurrencyLocks,
@@ -4217,9 +4245,11 @@ function clonePlanRecord(record) {
     dependencies: [...(record.dependencies ?? [])],
     tags: [...(record.tags ?? [])],
     specTargets: [...(record.specTargets ?? [])],
+    implementationTargets: [...(record.implementationTargets ?? [])],
     doneEvidence: [...(record.doneEvidence ?? [])],
     atomicRoots: [...(record.atomicRoots ?? [])],
-    concurrencyLocks: [...(record.concurrencyLocks ?? [])]
+    concurrencyLocks: [...(record.concurrencyLocks ?? [])],
+    parentPlanId: record.parentPlanId ?? null
   };
 }
 
@@ -4329,7 +4359,7 @@ async function promoteFuturePlans(paths, state, options) {
 
     const promotedMetadata = {
       'Plan-ID': future.planId,
-      Status: 'queued',
+      Status: isProgramPlan(future) ? 'in-progress' : 'queued',
       Priority: future.priority,
       Owner: future.owner,
       'Acceptance-Criteria': future.acceptanceCriteria || 'Define acceptance criteria before execution.',
@@ -4369,6 +4399,7 @@ function executablePlans(activePlans, completedPlanIds, excludedPlanIds = new Se
   return activePlans
     .filter((plan) => ACTIVE_STATUSES.has(plan.status))
     .filter((plan) => !(plan.status === 'completed' && completedPlanIds.has(plan.planId)))
+    .filter((plan) => !isProgramPlan(plan))
     .filter((plan) =>
       plan.status !== 'failed' && plan.status !== 'blocked'
         ? true
@@ -4388,6 +4419,38 @@ function blockedPlans(activePlans, completedPlanIds, excludedPlanIds = new Set()
     .filter((plan) => ACTIVE_STATUSES.has(plan.status))
     .filter((plan) => !excludedPlanIds.has(plan.planId))
     .filter((plan) => plan.dependencies.some((dependency) => !completedPlanIds.has(dependency)));
+}
+
+function evaluateExecutionEligibility(plan) {
+  if (!plan.deliveryClass) {
+    return {
+      allowed: false,
+      reason: "Plan is missing 'Delivery-Class'."
+    };
+  }
+
+  if (!plan.executionScope) {
+    return {
+      allowed: false,
+      reason: "Plan is missing 'Execution-Scope'."
+    };
+  }
+
+  if (isProgramPlan(plan)) {
+    return {
+      allowed: false,
+      reason: 'Program plans are non-executable parent contracts. Extract or complete child slices instead.'
+    };
+  }
+
+  if (isProductPlan(plan) && implementationTargetRoots(plan).length === 0) {
+    return {
+      allowed: false,
+      reason: "Product slice plans must declare non-doc 'Implementation-Targets' before worker/reviewer execution."
+    };
+  }
+
+  return { allowed: true, reason: null };
 }
 
 function securityApprovalSatisfied(plan, assessment, config) {
@@ -4760,7 +4823,10 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
   const sessionLogPathRel = toPosix(path.relative(paths.rootDir, sessionLogPathAbs));
   const workerDirtyImplementationBaselinePaths =
     role === ROLE_WORKER ? dirtyImplementationTouchPaths(paths.rootDir, plan) : [];
-  const workerHasDirtyImplementationBaseline = workerDirtyImplementationBaselinePaths.length > 0;
+  const workerHasImplementationBaseline =
+    role === ROLE_WORKER
+      ? workerDirtyImplementationBaselinePaths.length > 0 || hasRecordedImplementationEvidence(state, plan)
+      : false;
 
   if (!options.dryRun) {
     await fs.mkdir(runSessionDir, { recursive: true });
@@ -4896,7 +4962,7 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
   const effectiveWorkerFirstTouchDeadlineSeconds =
     role !== ROLE_WORKER
       ? baseWorkerFirstTouchDeadlineSeconds
-      : workerHasDirtyImplementationBaseline
+      : workerHasImplementationBaseline
         ? 0
         : workerNoTouchRetryCount > 0 &&
             baseWorkerFirstTouchDeadlineSeconds > 0 &&
@@ -5545,10 +5611,34 @@ async function maybeAutoPromoteCompletionGate(planPath, currentRole, sessionResu
   };
 }
 
-async function evaluateCompletionGate(plan, rootDir) {
+async function evaluateCompletionGate(plan, rootDir, state = null) {
   const content = await fs.readFile(plan.filePath, 'utf8');
   const documentStatus = documentStatusValue(content);
   const validationReady = documentValidationReadyValue(content);
+
+  if (!plan.deliveryClass) {
+    return {
+      ready: false,
+      reason:
+        "Plan is missing 'Delivery-Class'. Declare whether the plan is product, docs, ops, or reconciliation before validation/completion."
+    };
+  }
+
+  if (!plan.executionScope) {
+    return {
+      ready: false,
+      reason:
+        "Plan is missing 'Execution-Scope'. Declare whether the plan is an executable slice or a non-executable program before validation/completion."
+    };
+  }
+
+  if (isProgramPlan(plan)) {
+    return {
+      ready: false,
+      reason:
+        'Program plans are non-executable parent contracts. Keep the parent active, complete child slices first, and close the parent only after scope reconciliation is done.'
+    };
+  }
 
   if (completionGateReadyForValidation(documentStatus, validationReady)) {
     const mustLandLines = mustLandChecklistLines(content);
@@ -5568,29 +5658,38 @@ async function evaluateCompletionGate(plan, rootDir) {
       };
     }
 
-    const unfinishedCoverageRows = collectUnfinishedCoverageRows(content);
-    if (unfinishedCoverageRows.length > 0) {
-      const preview = unfinishedCoverageRows
-        .slice(0, 3)
-        .map((entry) => `${entry.capability}='${entry.status}'`)
-        .join(', ');
-      return {
-        ready: false,
-        reason:
-          `Plan still records unfinished current-status rows in '${unfinishedCoverageRows[0].sectionTitle}' (${preview}). ` +
-          'Keep the plan in-progress until those capabilities are implemented in product code or split into separate executable follow-on plans.'
-      };
-    }
-
-    if (requiresImplementationTouch(plan)) {
-      const implementationTouches = dirtyImplementationTouchPaths(rootDir, plan);
-      if (implementationTouches.length === 0) {
-        const targetPreview = implementationSpecTargetRoots(plan).slice(0, 4).join(', ');
+    if (isProductPlan(plan)) {
+      const unfinishedCoverageRows = collectUnfinishedCoverageRows(content);
+      if (unfinishedCoverageRows.length > 0) {
+        const preview = unfinishedCoverageRows
+          .slice(0, 3)
+          .map((entry) => `${entry.capability}='${entry.status}'`)
+          .join(', ');
         return {
           ready: false,
           reason:
-            `Plan targets implementation paths via Spec-Targets (${targetPreview}) but no current repo edits exist under those roots. ` +
-            'Keep the plan in-progress until structural changes land in the targeted apps/packages/config/scripts paths.'
+            `Plan still records unfinished current-status rows in '${unfinishedCoverageRows[0].sectionTitle}' (${preview}). ` +
+            'Keep the plan in-progress until those capabilities are implemented in product code or split into separate executable follow-on plans.'
+        };
+      }
+
+      const targetRoots = implementationTargetRoots(plan);
+      if (targetRoots.length === 0) {
+        return {
+          ready: false,
+          reason:
+            "Product slice plans must declare at least one non-doc 'Implementation-Targets' root before validation/completion."
+        };
+      }
+
+      const implementationTouches = implementationEvidencePaths(state, plan);
+      if (implementationTouches.length === 0) {
+        const targetPreview = targetRoots.slice(0, 4).join(', ');
+        return {
+          ready: false,
+          reason:
+            `Plan declares product implementation roots via Implementation-Targets (${targetPreview}) but no durable implementation evidence has been recorded under those roots. ` +
+            'Keep the plan in-progress until worker sessions touch the declared implementation paths.'
         };
       }
     }
@@ -5638,6 +5737,10 @@ function syncPlanRecord(plan, nextRecord) {
   plan.content = nextRecord.content;
   plan.tags = nextRecord.tags;
   plan.specTargets = nextRecord.specTargets;
+  plan.deliveryClass = nextRecord.deliveryClass;
+  plan.executionScope = nextRecord.executionScope;
+  plan.implementationTargets = nextRecord.implementationTargets;
+  plan.parentPlanId = nextRecord.parentPlanId ?? null;
   plan.dependencies = nextRecord.dependencies;
   plan.riskTier = nextRecord.riskTier;
   plan.securityApproval = nextRecord.securityApproval;
@@ -7104,10 +7207,22 @@ function pathMatchesRootPrefix(filePath, rootPrefix) {
   return normalizedFile === normalizedRoot || normalizedFile.startsWith(`${normalizedRoot}/`);
 }
 
-function implementationSpecTargetRoots(plan) {
-  const specTargets = Array.isArray(plan?.specTargets) ? plan.specTargets : [];
+function isProgramPlan(plan) {
+  return String(plan?.executionScope ?? '').trim().toLowerCase() === 'program';
+}
+
+function isProductPlan(plan) {
+  return String(plan?.deliveryClass ?? '').trim().toLowerCase() === 'product';
+}
+
+function isArtifactSlicePlan(plan) {
+  return !isProgramPlan(plan) && !isProductPlan(plan);
+}
+
+function implementationTargetRoots(plan) {
+  const implementationTargets = Array.isArray(plan?.implementationTargets) ? plan.implementationTargets : [];
   return [...new Set(
-    specTargets
+    implementationTargets
       .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, ''))
       .filter(Boolean)
       .filter((entry) => {
@@ -7123,12 +7238,12 @@ function implementationSpecTargetRoots(plan) {
   )];
 }
 
-function requiresImplementationTouch(plan) {
-  return implementationSpecTargetRoots(plan).length > 0;
+function planRequiresImplementationEvidence(plan) {
+  return isProductPlan(plan) && !isProgramPlan(plan);
 }
 
 function dirtyImplementationTouchPaths(rootDir, plan) {
-  const implementationRoots = implementationSpecTargetRoots(plan);
+  const implementationRoots = implementationTargetRoots(plan);
   if (implementationRoots.length === 0) {
     return [];
   }
@@ -7136,6 +7251,49 @@ function dirtyImplementationTouchPaths(rootDir, plan) {
   return dirtyRepoPaths(rootDir, { includeTransient: false }).filter((entry) =>
     implementationRoots.some((root) => pathMatchesRootPrefix(entry, root))
   );
+}
+
+function implementationEvidencePaths(state, plan) {
+  const implementationRoots = implementationTargetRoots(plan);
+  if (implementationRoots.length === 0) {
+    return [];
+  }
+  const touchedPaths = Array.isArray(state?.implementationState?.[plan.planId]?.touchedPaths)
+    ? state.implementationState[plan.planId].touchedPaths
+    : [];
+  return normalizeTouchedPathList(touchedPaths).filter((entry) =>
+    implementationRoots.some((root) => pathMatchesRootPrefix(entry, root))
+  );
+}
+
+function hasRecordedImplementationEvidence(state, plan) {
+  return implementationEvidencePaths(state, plan).length > 0;
+}
+
+function recordImplementationEvidence(state, plan, touchedPaths = []) {
+  const implementationRoots = implementationTargetRoots(plan);
+  if (implementationRoots.length === 0) {
+    return { recorded: false, matchedPaths: [] };
+  }
+
+  const matchedPaths = normalizeTouchedPathList(touchedPaths).filter((entry) =>
+    implementationRoots.some((root) => pathMatchesRootPrefix(entry, root))
+  );
+  if (matchedPaths.length === 0) {
+    return { recorded: false, matchedPaths: [] };
+  }
+
+  const current = ensurePlanImplementationState(state, plan.planId);
+  const mergedPaths = [...new Set([...(Array.isArray(current.touchedPaths) ? current.touchedPaths : []), ...matchedPaths])];
+  state.implementationState[plan.planId] = {
+    touchedPaths: mergedPaths,
+    lastRecordedAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  return {
+    recorded: true,
+    matchedPaths
+  };
 }
 
 function resolveAtomicCommitRoots(plan, config, paths, completionContext = {}) {
@@ -7161,6 +7319,10 @@ function resolveAtomicCommitRoots(plan, config, paths, completionContext = {}) {
       ? plan.specTargets
       : ['docs/product-specs/CURRENT-STATE.md'];
   for (const target of normalizeRelativePrefixList(planSpecTargets)) {
+    roots.add(target);
+  }
+
+  for (const target of normalizeRelativePrefixList(plan.implementationTargets ?? [])) {
     roots.add(target);
   }
 
@@ -8154,7 +8316,16 @@ async function processPlan(plan, paths, state, options, config) {
     };
   }
 
-  const initialCompletionGate = await evaluateCompletionGate(plan, paths.rootDir);
+  const executionEligibility = evaluateExecutionEligibility(plan);
+  if (!executionEligibility.allowed) {
+    await setPlanStatus(plan.filePath, isProgramPlan(plan) ? 'in-progress' : 'blocked', options.dryRun);
+    return {
+      outcome: isProgramPlan(plan) ? 'pending' : 'blocked',
+      reason: executionEligibility.reason
+    };
+  }
+
+  const initialCompletionGate = await evaluateCompletionGate(plan, paths.rootDir, state);
   if (!initialCompletionGate.ready) {
     await setPlanStatus(plan.filePath, 'in-progress', options.dryRun);
   }
@@ -8209,7 +8380,7 @@ async function processPlan(plan, paths, state, options, config) {
     const stageIndex = roleIndex + 1;
     const currentRole = normalizeRoleName(roleState.stages[roleIndex], ROLE_WORKER);
     const currentRoleProfile = resolveRoleExecutionProfile(config, currentRole, lastAssessment.effectiveRiskTier);
-    const completionGateBeforeSession = await evaluateCompletionGate(plan, paths.rootDir);
+    const completionGateBeforeSession = await evaluateCompletionGate(plan, paths.rootDir, state);
     if (completionGateBeforeSession.ready) {
       progressLog(
         options,
@@ -8322,6 +8493,21 @@ async function processPlan(plan, paths, state, options, config) {
         message: sessionResult.liveActivity.message,
         updatedAt: sessionResult.liveActivity.updatedAt ?? null
       }, options.dryRun);
+    }
+    const implementationEvidenceUpdate = recordImplementationEvidence(
+      state,
+      plan,
+      sessionResult.touchSummary?.touched ?? []
+    );
+    if (implementationEvidenceUpdate.recorded) {
+      await logEvent(paths, state, 'implementation_evidence_recorded', {
+        planId: plan.planId,
+        session,
+        role: currentRole,
+        matchedPaths: implementationEvidenceUpdate.matchedPaths.slice(0, 20),
+        matchedCount: implementationEvidenceUpdate.matchedPaths.length
+      }, options.dryRun);
+      await saveState(paths, state, options.dryRun);
     }
     const workerTouchCount =
       typeof sessionResult.touchSummary?.count === 'number' && Number.isFinite(sessionResult.touchSummary.count)
@@ -8496,7 +8682,7 @@ async function processPlan(plan, paths, state, options, config) {
     if (!(await exists(plan.filePath))) {
       const relocatedPlan = await findPlanRecordById(paths, plan.planId);
       if (relocatedPlan?.phase === 'completed') {
-        const completionGateForRelocatedPlan = await evaluateCompletionGate(relocatedPlan, paths.rootDir);
+        const completionGateForRelocatedPlan = await evaluateCompletionGate(relocatedPlan, paths.rootDir, state);
         if (!completionGateForRelocatedPlan.ready) {
           return {
             outcome: 'failed',
@@ -8855,7 +9041,7 @@ async function processPlan(plan, paths, state, options, config) {
       continue;
     }
 
-    let completionGate = await evaluateCompletionGate(plan, paths.rootDir);
+    let completionGate = await evaluateCompletionGate(plan, paths.rootDir, state);
     if (!completionGate.ready) {
       const autoPromotedGate = await maybeAutoPromoteCompletionGate(
         plan.filePath,
@@ -8866,7 +9052,7 @@ async function processPlan(plan, paths, state, options, config) {
       if (autoPromotedGate.promoted) {
         const refreshedPlan = await findPlanRecordById(paths, plan.planId);
         syncPlanRecord(plan, refreshedPlan);
-        completionGate = await evaluateCompletionGate(plan, paths.rootDir);
+        completionGate = await evaluateCompletionGate(plan, paths.rootDir, state);
         await logEvent(paths, state, 'completion_gate_auto_promoted_validation', {
           planId: plan.planId,
           session,

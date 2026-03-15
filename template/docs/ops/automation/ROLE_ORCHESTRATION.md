@@ -86,6 +86,9 @@ Recommended baseline:
 
 ## Operational Notes
 
+- `Delivery-Class` and `Execution-Scope` are required active/future metadata. The harness must not infer executable intent from titles such as `phase`, `portfolio`, or `blueprint`.
+- `Execution-Scope: slice` plans are directly executable; `Execution-Scope: program` plans are non-executable parent contracts and stay out of worker/reviewer/validation lanes.
+- `Delivery-Class: product` plus `Execution-Scope: slice` must declare `Implementation-Targets`; product completion evidence is measured against those roots rather than inferred from `Spec-Targets`.
 - Completion gate opens when the top-level plan `Status` is `completed`, or when `Status: validation` is paired with explicit `Validation-Ready`.
 - `## Must-Land Checklist` is the executable completion contract; validation/completion is blocked until every checkbox item is checked.
 - If a plan also carries broader vision or target-state language, keep that scope in `## Already-True Baseline` and `## Deferred Follow-Ons` instead of treating it as implicitly complete.

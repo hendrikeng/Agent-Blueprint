@@ -8,6 +8,7 @@ import {
   inferPlanId,
   metadataValue,
   normalizeStatus,
+  parseExecutionScope,
   parseListField,
   parseMetadata,
   parsePlanId
@@ -140,6 +141,7 @@ function readActivePlanRecords() {
     const metadata = parseMetadata(content);
     const status = normalizeStatus(metadataValue(metadata, 'Status'));
     const validationReady = normalizeStatus(metadataValue(metadata, 'Validation-Ready'));
+    const executionScope = parseExecutionScope(metadataValue(metadata, 'Execution-Scope'), '');
     const explicitPlanId = metadataValue(metadata, 'Plan-ID');
     const planId = parsePlanId(explicitPlanId, null) ?? inferPlanId(content, filePath);
     if (!planId) {
@@ -150,7 +152,7 @@ function readActivePlanRecords() {
       .map((entry) => parsePlanId(entry, null))
       .filter(Boolean);
 
-    records.push({ planId, status, validationReady, dependencies });
+    records.push({ planId, status, validationReady, executionScope, dependencies });
   }
   return records;
 }
@@ -163,6 +165,9 @@ function unresolvedActivePlanIds(state, activePlans) {
   return activePlans
     .filter((plan) => {
       if (!ACTIVE_STATUSES.has(plan.status)) {
+        return false;
+      }
+      if (plan.executionScope === 'program') {
         return false;
       }
       // Only treat validation plans as externally gated when readiness is explicit.

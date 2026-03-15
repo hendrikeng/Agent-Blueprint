@@ -5,6 +5,8 @@ import {
   ACTIVE_STATUSES,
   COMPLETED_STATUSES,
   COVERAGE_SECTION_TITLES,
+  DELIVERY_CLASSES,
+  EXECUTION_SCOPES,
   FUTURE_STATUSES,
   REQUIRED_METADATA_FIELDS,
   RISK_TIERS,
@@ -12,6 +14,8 @@ import {
   collectUnfinishedCoverageRows,
   listMarkdownFiles,
   metadataValue,
+  parseDeliveryClass,
+  parseExecutionScope,
   parseListField,
   parseMetadata,
   parsePlanId,
@@ -77,6 +81,22 @@ function normalizePlanId(value) {
     return null;
   }
   return PLAN_ID_REGEX.test(rendered) ? rendered : null;
+}
+
+function normalizeTargetPathValue(value) {
+  return String(value ?? '').trim().replaceAll('\\', '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+}
+
+function isNonDocImplementationTarget(value) {
+  const normalized = normalizeTargetPathValue(value);
+  if (!normalized) {
+    return false;
+  }
+  const lower = normalized.toLowerCase();
+  if (lower.startsWith('docs/')) {
+    return false;
+  }
+  return !lower.endsWith('.md') && !lower.endsWith('.mdx');
 }
 
 function sectionBounds(content, sectionTitle) {
@@ -235,8 +255,17 @@ async function scanPhase(phase, directoryPath) {
     const coverageSection = firstSectionBody(content, COVERAGE_SECTION_TITLES);
     const unfinishedCoverageRows = collectUnfinishedCoverageRows(content, COVERAGE_SECTION_TITLES);
     const reconciliationBody = sectionBody(content, RECONCILIATION_SECTION);
-    const reconciliationRequired = phase === 'future'
-      || (phase === 'active' && /^phase-\d+(?:-|$)/.test(inferredPlanId ?? ''));
+    const deliveryClassRaw = metadataValue(metadata, 'Delivery-Class');
+    const deliveryClass = parseDeliveryClass(deliveryClassRaw, '');
+    const executionScopeRaw = metadataValue(metadata, 'Execution-Scope');
+    const executionScope = parseExecutionScope(executionScopeRaw, '');
+    const parentPlanIdRaw = metadataValue(metadata, 'Parent-Plan-ID');
+    const parentPlanId = parentPlanIdRaw ? parsePlanId(parentPlanIdRaw, null) : null;
+    const implementationTargetsRaw = parseListField(metadataValue(metadata, 'Implementation-Targets'));
+    const implementationTargets = implementationTargetsRaw.map(normalizeTargetPathValue).filter(Boolean);
+    const implementationTargetsProvided = implementationTargets.length > 0;
+    const productSlicePlan = deliveryClass === 'product' && executionScope === 'slice';
+    const reconciliationRequired = phase === 'future' || (phase === 'active' && executionScope === 'program');
 
     const mustLandRequired = phase === 'future' || phase === 'active';
 
@@ -305,6 +334,95 @@ async function scanPhase(phase, directoryPath) {
       );
     }
 
+    if (deliveryClassRaw && !deliveryClass) {
+      addFinding(
+        'INVALID_DELIVERY_CLASS',
+        `Invalid Delivery-Class '${deliveryClassRaw}' (expected: ${[...DELIVERY_CLASSES].join('|')})`,
+        rel
+      );
+    }
+
+    if (executionScopeRaw && !executionScope) {
+      addFinding(
+        'INVALID_EXECUTION_SCOPE',
+        `Invalid Execution-Scope '${executionScopeRaw}' (expected: ${[...EXECUTION_SCOPES].join('|')})`,
+        rel
+      );
+    }
+
+    if (parentPlanIdRaw && !parentPlanId) {
+      addFinding(
+        'INVALID_PARENT_PLAN_ID',
+        `Invalid Parent-Plan-ID '${parentPlanIdRaw}' (expected lowercase kebab-case Plan-ID)`,
+        rel
+      );
+    }
+
+    if (phase !== 'completed' && !deliveryClass) {
+      addFinding(
+        'MISSING_DELIVERY_CLASS',
+        "Missing metadata field 'Delivery-Class'",
+        rel
+      );
+    }
+
+    if (phase !== 'completed' && !executionScope) {
+      addFinding(
+        'MISSING_EXECUTION_SCOPE',
+        "Missing metadata field 'Execution-Scope'",
+        rel
+      );
+    }
+
+    if (productSlicePlan && !implementationTargetsProvided) {
+      addFinding(
+        'MISSING_IMPLEMENTATION_TARGETS',
+        "Product slice plans must declare 'Implementation-Targets' with at least one non-doc root.",
+        rel
+      );
+    }
+
+    if (productSlicePlan && implementationTargetsProvided && !implementationTargets.some(isNonDocImplementationTarget)) {
+      addFinding(
+        'INVALID_IMPLEMENTATION_TARGETS',
+        "Product slice plans must include at least one non-doc path in 'Implementation-Targets'.",
+        rel
+      );
+    }
+
+    if (!productSlicePlan && implementationTargetsProvided) {
+      addFinding(
+        'UNEXPECTED_IMPLEMENTATION_TARGETS',
+        "Only 'Delivery-Class: product' plus 'Execution-Scope: slice' plans may declare 'Implementation-Targets'. Use 'none' or remove the field for program/docs/ops/reconciliation plans.",
+        rel
+      );
+    }
+
+    if (executionScope === 'program' && parentPlanId) {
+      addFinding(
+        'PROGRAM_PLAN_WITH_PARENT',
+        "Program plans must not set 'Parent-Plan-ID'. Only child slice plans may point to a parent program.",
+        rel
+      );
+    }
+
+    if (phase === 'active' && executionScope === 'program') {
+      if (status === 'validation' || status === 'completed') {
+        addFinding(
+          'PROGRAM_PLAN_NOT_EXECUTABLE',
+          "Active program plans are non-executable parent contracts and cannot move to 'validation' or 'completed'. Keep them active and close child slices instead.",
+          rel
+        );
+      }
+      if (validationReady === 'yes' || validationReady === 'host-required-only') {
+        addFinding(
+          'PROGRAM_PLAN_NOT_VALIDATION_READY',
+          "Active program plans must not set 'Validation-Ready: yes' or 'host-required-only'.",
+          rel
+        );
+      }
+    }
+
     if (phase === 'completed') {
       if (unfinishedCoverageRows.length > 0) {
         const preview = unfinishedCoverageRows
@@ -369,6 +487,7 @@ async function scanPhase(phase, directoryPath) {
         status === 'completed' ||
         validationReady === 'yes' ||
         validationReady === 'host-required-only') &&
+      (deliveryClass === 'product' || executionScope === 'program') &&
       unfinishedCoverageRows.length > 0
     ) {
       const preview = unfinishedCoverageRows
@@ -459,7 +578,10 @@ async function scanPhase(phase, directoryPath) {
       phase,
       rel,
       planId,
-      dependencies: parsedDependencies
+      dependencies: parsedDependencies,
+      deliveryClass,
+      executionScope,
+      parentPlanId
     });
   }
 
@@ -523,6 +645,85 @@ async function main() {
           plan.rel
         );
       }
+    }
+  }
+
+  const planById = new Map(allPlans.filter((plan) => plan.planId).map((plan) => [plan.planId, plan]));
+  const childrenByParent = new Map();
+
+  for (const plan of allPlans) {
+    if (!plan.parentPlanId) {
+      continue;
+    }
+    if (!seenPlanIds.has(plan.parentPlanId)) {
+      addFinding(
+        'MISSING_PARENT_PLAN',
+        `Parent-Plan-ID '${plan.parentPlanId}' does not exist in future/active/completed plans`,
+        plan.rel
+      );
+      continue;
+    }
+    if (plan.parentPlanId === plan.planId) {
+      addFinding(
+        'SELF_REFERENTIAL_PARENT_PLAN',
+        'Parent-Plan-ID must not point to the same plan.',
+        plan.rel
+      );
+      continue;
+    }
+    if (!childrenByParent.has(plan.parentPlanId)) {
+      childrenByParent.set(plan.parentPlanId, []);
+    }
+    childrenByParent.get(plan.parentPlanId).push(plan);
+
+    const parentPlan = planById.get(plan.parentPlanId);
+    if (parentPlan?.executionScope && parentPlan.executionScope !== 'program') {
+      addFinding(
+        'PARENT_PLAN_NOT_PROGRAM',
+        `Parent-Plan-ID '${plan.parentPlanId}' must point to a plan with 'Execution-Scope: program'`,
+        plan.rel
+      );
+    }
+    if (plan.executionScope && plan.executionScope !== 'slice') {
+      addFinding(
+        'CHILD_PLAN_NOT_SLICE',
+        `Plans with Parent-Plan-ID must use 'Execution-Scope: slice'`,
+        plan.rel
+      );
+    }
+    if (
+      parentPlan?.deliveryClass &&
+      plan.deliveryClass &&
+      parentPlan.deliveryClass !== plan.deliveryClass
+    ) {
+      addFinding(
+        'PARENT_CHILD_DELIVERY_CLASS_MISMATCH',
+        `Parent plan '${plan.parentPlanId}' uses Delivery-Class '${parentPlan.deliveryClass}' but child uses '${plan.deliveryClass}'`,
+        plan.rel
+      );
+    }
+  }
+
+  for (const plan of allPlans) {
+    if (plan.phase !== 'completed' || plan.executionScope !== 'program') {
+      continue;
+    }
+    const children = childrenByParent.get(plan.planId) ?? [];
+    if (children.length === 0) {
+      addFinding(
+        'PROGRAM_PLAN_WITHOUT_CHILD_SLICES',
+        'Completed program plans must close from completed child slices; no child slices reference this parent.',
+        plan.rel
+      );
+      continue;
+    }
+    const incompleteChildren = children.filter((child) => child.phase !== 'completed');
+    if (incompleteChildren.length > 0) {
+      addFinding(
+        'PROGRAM_CHILD_NOT_COMPLETED',
+        `Completed program plan still has non-completed child slices: ${incompleteChildren.map((child) => child.planId).join(', ')}`,
+        plan.rel
+      );
     }
   }
 

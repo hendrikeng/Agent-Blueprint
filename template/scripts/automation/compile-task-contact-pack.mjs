@@ -5,6 +5,8 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import {
   metadataValue,
+  parseDeliveryClass,
+  parseExecutionScope,
   parseListField,
   parseMetadata,
   parseRiskTier
@@ -522,6 +524,10 @@ export async function compileTaskContactPack(input) {
   const metadata = parseMetadata(planRaw);
   const dependencies = parseListField(metadataValue(metadata, 'Dependencies'));
   const specTargets = parseListField(metadataValue(metadata, 'Spec-Targets'));
+  const deliveryClass = parseDeliveryClass(metadataValue(metadata, 'Delivery-Class'), '') || 'unspecified';
+  const executionScope = parseExecutionScope(metadataValue(metadata, 'Execution-Scope'), '') || 'unspecified';
+  const implementationTargets = parseListField(metadataValue(metadata, 'Implementation-Targets'));
+  const parentPlanId = metadataValue(metadata, 'Parent-Plan-ID') ?? 'none';
   const tags = parseListField(metadataValue(metadata, 'Tags'));
   const acceptanceCriteria = metadataValue(metadata, 'Acceptance-Criteria') ?? '';
   const declaredRiskTier = parseRiskTier(
@@ -699,8 +705,12 @@ export async function compileTaskContactPack(input) {
   lines.push('');
   lines.push('## Task Scope');
   lines.push(`- Acceptance criteria: ${summarizeSentence(acceptanceCriteria || 'See plan metadata for acceptance criteria.', 28)}`);
+  lines.push(`- Delivery class: ${deliveryClass}`);
+  lines.push(`- Execution scope: ${executionScope}`);
+  lines.push(`- Parent plan: ${parentPlanId || 'none'}`);
   lines.push(`- Dependencies: ${dependencies.length > 0 ? dependencies.join(', ') : 'none'}`);
   lines.push(`- Spec targets: ${specTargets.length > 0 ? specTargets.join(', ') : 'none'}`);
+  lines.push(`- Implementation targets: ${implementationTargets.length > 0 ? implementationTargets.join(', ') : 'none'}`);
   lines.push(`- Tags: ${tags.length > 0 ? tags.join(', ') : 'none'}`);
   lines.push('');
   lines.push('## Hard Safety Rules');
@@ -810,6 +820,10 @@ export async function compileTaskContactPack(input) {
     planId,
     runId,
     role,
+    deliveryClass,
+    executionScope,
+    parentPlanId,
+    implementationTargets,
     stageIndex,
     stageTotal,
     selectionMaxItems,

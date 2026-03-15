@@ -22,12 +22,16 @@ Every plan in `active/` and `completed/` must include `## Metadata` with:
 - `Priority`
 - `Owner`
 - `Acceptance-Criteria`
+- `Delivery-Class`
+- `Execution-Scope`
 - `Dependencies`
 - `Spec-Targets`
 - `Done-Evidence`
 
 Optional fields:
 
+- `Implementation-Targets` (required for `Delivery-Class: product` plus `Execution-Scope: slice`; omit or set to `none` otherwise)
+- `Parent-Plan-ID` (optional child-to-parent link for executable slices)
 - `Autonomy-Allowed` (`guarded` | `full` | `both`)
 - `Risk-Tier` (`low` | `medium` | `high`)
 - `Tags` (comma-separated routing hints such as `payments`, `security`, `migration`)
@@ -41,6 +45,14 @@ Every executable plan must also include:
 - `## Prior Completed Plan Reconciliation`: required for future blueprints and strategic active phase plans so overlapping completed plans are classified instead of silently assumed.
 
 Reconciliation lowers omission and stale-scope risk, but it does not replace planner or reviewer judgment.
+
+## Delivery Semantics
+
+- `Delivery-Class: product` means the plan must land shipped product behavior before validation/completion.
+- `Delivery-Class: docs`, `ops`, and `reconciliation` allow artifact-first completion when the acceptance criteria are truthful.
+- `Execution-Scope: slice` means the plan is directly executable by orchestration.
+- `Execution-Scope: program` means the plan is a non-executable parent contract or portfolio. Keep it active while child slices execute; do not send it directly to validation.
+- `Implementation-Targets` are the authoritative code roots for product slices. `Spec-Targets` remain the broader impact/documentation list and do not replace implementation evidence.
 
 ## Status Conventions
 

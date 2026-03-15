@@ -51,7 +51,10 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `docs/exec-plans/evidence-index/`: canonical compact evidence references by plan ID.
 - `docs/product-specs/CURRENT-STATE.md`: product-facing delivery timeline via `Automated Delivery Log`.
 - `## Must-Land Checklist` inside each plan is the executable completion contract; broader vision belongs in `## Deferred Follow-Ons`, not in completion gating.
-- Future blueprints and strategic active phase plans must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
+- `Delivery-Class` and `Execution-Scope` make plan intent explicit. The harness does not infer executable meaning from titles such as `phase`, `portfolio`, or `blueprint`.
+- `Execution-Scope: program` plans stay active as non-executable parent contracts. `Execution-Scope: slice` plans are the only plans that enter worker/reviewer/validation lanes directly.
+- Product slices must declare `Implementation-Targets`; those roots are the authoritative implementation evidence boundary. `Spec-Targets` remain the broader impact list.
+- Future blueprints and active program parents must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
 
 ## Orchestrated vs Manual Execution
 
@@ -364,8 +367,10 @@ Executor commands should use these outcomes:
 - Optional metadata `Validation-Ready: host-required-only` (or `yes`) allows deterministic reviewer closeout promotion to validation without relying only on free-text phrasing.
 - `Status: validation` on its own is not enough for validation fast-path; reviewer closeout should set `Validation-Ready` and `Status: validation` together.
 - Validation/completion is blocked when any `## Must-Land Checklist` checkbox remains unchecked.
+- `Execution-Scope: program` plans are never validation-ready; they remain parent contracts until child slices finish and parent scope is reconciled.
+- Product slices must record implementation evidence under `Implementation-Targets` before validation/completion; docs/ops/reconciliation slices do not require code-root touches.
 - Plans that discuss broader target state must separate current facts into `## Already-True Baseline` and later work into `## Deferred Follow-Ons`; only `## Must-Land Checklist` is executable scope.
-- Future blueprints and active phase plans fail plan verification when `## Prior Completed Plan Reconciliation` is missing.
+- Future blueprints and active program parents fail plan verification when `## Prior Completed Plan Reconciliation` is missing.
 - If final completion criteria are not yet met after reviewer/worker, orchestrator resets stage progression to `worker` and continues until completion gates pass.
 - Reviewer sessions that clearly indicate host validation is the only remaining gate are auto-promoted to `Status: validation` to avoid worker/reviewer churn.
 - The active role is passed to executors via `ORCH_ROLE` and `--role {role}`.

@@ -17,6 +17,8 @@ Each future blueprint must include a `## Metadata` section with:
 - `Priority` (`p0` | `p1` | `p2` | `p3`)
 - `Owner`
 - `Acceptance-Criteria`
+- `Delivery-Class` (`product` | `docs` | `ops` | `reconciliation`)
+- `Execution-Scope` (`slice` | `program`)
 - `Dependencies` (comma-separated Plan-IDs or `none`)
 - `Spec-Targets` (comma-separated paths)
 - `Done-Evidence` (`pending` until completed)
@@ -32,6 +34,8 @@ Each future blueprint must also include these scoped execution sections:
 
 Optional metadata:
 
+- `Implementation-Targets` (required for `Delivery-Class: product` plus `Execution-Scope: slice`; omit or set to `none` otherwise)
+- `Parent-Plan-ID` (optional when the future blueprint is a child slice under a parent program)
 - `Autonomy-Allowed` (`guarded` | `full` | `both`)
 - `Risk-Tier` (`low` | `medium` | `high`)
 - `Tags` (comma-separated risk hints such as `payments`, `security`, `migration`)
@@ -45,9 +49,11 @@ Create or update a future blueprint as `Status: draft` only when these checks pa
 - [ ] Problem, scope, and non-goals are explicit.
 - [ ] `Acceptance-Criteria` are concrete and testable.
 - [ ] `Acceptance-Criteria` describe full completion for this plan and do not use weak language such as `at minimum`.
+- [ ] `Delivery-Class` and `Execution-Scope` are explicit; do not rely on titles like `phase`, `future`, or `blueprint` to communicate intent.
 - [ ] `Dependencies` are complete (`none` when not applicable).
 - [ ] `Risk-Tier` is set correctly (`low` | `medium` | `high`) when applicable.
 - [ ] `Spec-Targets` reference canonical docs/files.
+- [ ] Product slices declare non-doc `Implementation-Targets`; programs and non-product blueprints do not.
 - [ ] `Done-Evidence` is `pending`.
 - [ ] `## Must-Land Checklist` exists and every checkbox item is executable within one promoted plan.
 - [ ] `## Already-True Baseline` and `## Deferred Follow-Ons` keep non-plan scope out of the must-land checklist.
@@ -61,6 +67,7 @@ Create or update a future blueprint as `Status: draft` only when these checks pa
 Set `Status: ready-for-promotion` only when these checks pass:
 
 - [ ] At least one executable slice is defined with clear entry and exit criteria.
+- [ ] `Execution-Scope: program` blueprints are only promoted when they are intended to remain active parent contracts; executable work still belongs in child slices.
 - [ ] `## Must-Land Checklist` is the exact completion contract for the promoted plan.
 - [ ] `## Master Plan Coverage` or `## Capability Coverage Matrix` proves nothing from upstream strategy is silently omitted.
 - [ ] `## Prior Completed Plan Reconciliation` proves older completed work in the same area is either preserved, refactored, superseded, or intentionally retired.

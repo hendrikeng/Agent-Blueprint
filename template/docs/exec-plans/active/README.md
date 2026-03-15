@@ -10,11 +10,18 @@ Place active non-trivial plans in this directory.
 Each active plan must include:
 
 - `## Metadata` section with required plan fields from `docs/exec-plans/README.md`.
+- Explicit `Delivery-Class` and `Execution-Scope` metadata before execution begins.
 - `Status` set to one of: `queued`, `in-progress`, `blocked`, `validation`, `completed`, `failed`.
 - Explicit acceptance criteria before implementation begins.
 - `## Must-Land Checklist` with the exact completion contract for the current plan.
 - Scope separation via `## Already-True Baseline` and `## Deferred Follow-Ons` when the plan references broader target state.
-- `## Prior Completed Plan Reconciliation` when the active plan is a strategic phase or other major current-state reset that overlaps earlier completed plans.
+- `## Prior Completed Plan Reconciliation` when the active plan is a non-executable `Execution-Scope: program` parent or another major current-state reset that overlaps earlier completed plans.
+
+Active plan intent rules:
+
+- `Execution-Scope: slice` plans are directly executable by orchestration.
+- `Execution-Scope: program` plans stay active as parent contracts and are intentionally skipped by worker/reviewer/validation lanes.
+- `Delivery-Class: product` plus `Execution-Scope: slice` must also declare non-doc `Implementation-Targets`.
 
 ## Session Retention
 

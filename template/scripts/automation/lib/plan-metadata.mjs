@@ -6,6 +6,8 @@ export const ACTIVE_STATUSES = new Set(['queued', 'in-progress', 'blocked', 'val
 export const COMPLETED_STATUSES = new Set(['completed']);
 export const RISK_TIERS = new Set(['low', 'medium', 'high']);
 export const SECURITY_APPROVAL_VALUES = new Set(['not-required', 'pending', 'approved']);
+export const DELIVERY_CLASSES = new Set(['product', 'docs', 'ops', 'reconciliation']);
+export const EXECUTION_SCOPES = new Set(['slice', 'program']);
 export const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const COVERAGE_SECTION_TITLES = ['Master Plan Coverage', 'Capability Coverage Matrix'];
 export const UNFINISHED_COVERAGE_STATUS_PATTERNS = [
@@ -27,6 +29,8 @@ export const REQUIRED_METADATA_FIELDS = {
     'Priority',
     'Owner',
     'Acceptance-Criteria',
+    'Delivery-Class',
+    'Execution-Scope',
     'Dependencies',
     'Spec-Targets',
     'Done-Evidence'
@@ -37,6 +41,8 @@ export const REQUIRED_METADATA_FIELDS = {
     'Priority',
     'Owner',
     'Acceptance-Criteria',
+    'Delivery-Class',
+    'Execution-Scope',
     'Dependencies',
     'Spec-Targets',
     'Done-Evidence'
@@ -226,11 +232,15 @@ function compareMetadataKeys(a, b) {
     'Priority',
     'Owner',
     'Acceptance-Criteria',
+    'Delivery-Class',
+    'Execution-Scope',
+    'Parent-Plan-ID',
     'Dependencies',
     'Autonomy-Allowed',
     'Risk-Tier',
     'Security-Approval',
     'Spec-Targets',
+    'Implementation-Targets',
     'Done-Evidence'
   ];
   const aIndex = order.indexOf(a);
@@ -423,6 +433,22 @@ export function parseRiskTier(value, fallback = 'low') {
 export function parseSecurityApproval(value, fallback = 'not-required') {
   const raw = (value ?? '').trim().toLowerCase();
   if (SECURITY_APPROVAL_VALUES.has(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
+export function parseDeliveryClass(value, fallback = '') {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (DELIVERY_CLASSES.has(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
+export function parseExecutionScope(value, fallback = '') {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (EXECUTION_SCOPES.has(raw)) {
     return raw;
   }
   return fallback;
