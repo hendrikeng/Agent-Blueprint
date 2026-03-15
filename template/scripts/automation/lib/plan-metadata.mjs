@@ -53,6 +53,8 @@ export const REQUIRED_METADATA_FIELDS = {
     'Priority',
     'Owner',
     'Acceptance-Criteria',
+    'Delivery-Class',
+    'Execution-Scope',
     'Dependencies',
     'Spec-Targets',
     'Done-Evidence'
