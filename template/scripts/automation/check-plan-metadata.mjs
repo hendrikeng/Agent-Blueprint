@@ -4,10 +4,12 @@ import path from 'node:path';
 import {
   ACTIVE_STATUSES,
   COMPLETED_STATUSES,
+  COVERAGE_SECTION_TITLES,
   FUTURE_STATUSES,
   REQUIRED_METADATA_FIELDS,
   RISK_TIERS,
   SECURITY_APPROVAL_VALUES,
+  collectUnfinishedCoverageRows,
   listMarkdownFiles,
   metadataValue,
   parseListField,
@@ -32,7 +34,6 @@ const DEFERRED_SECTION = 'Deferred Follow-Ons';
 const BASELINE_SECTION = 'Already-True Baseline';
 const PROMOTION_BLOCKERS_SECTION = 'Promotion Blockers';
 const RECONCILIATION_SECTION = 'Prior Completed Plan Reconciliation';
-const COVERAGE_SECTION_TITLES = ['Master Plan Coverage', 'Capability Coverage Matrix'];
 
 function addFinding(code, message, filePath) {
   findings.push({ code, message, filePath });
@@ -232,6 +233,7 @@ async function scanPhase(phase, directoryPath) {
     const incompleteMustLandItems = uncheckedCheckboxLines(mustLandItems);
     const promotionBlockersBody = sectionBody(content, PROMOTION_BLOCKERS_SECTION);
     const coverageSection = firstSectionBody(content, COVERAGE_SECTION_TITLES);
+    const unfinishedCoverageRows = collectUnfinishedCoverageRows(content, COVERAGE_SECTION_TITLES);
     const reconciliationBody = sectionBody(content, RECONCILIATION_SECTION);
     const reconciliationRequired = phase === 'future'
       || (phase === 'active' && /^phase-\d+(?:-|$)/.test(inferredPlanId ?? ''));
@@ -304,6 +306,17 @@ async function scanPhase(phase, directoryPath) {
     }
 
     if (phase === 'completed') {
+      if (unfinishedCoverageRows.length > 0) {
+        const preview = unfinishedCoverageRows
+          .slice(0, 3)
+          .map((entry) => `${entry.capability}='${entry.status}'`)
+          .join(', ');
+        addFinding(
+          'UNFINISHED_COVERAGE_STATUS',
+          `Completed plan still records unfinished current-status rows in '${unfinishedCoverageRows[0].sectionTitle}': ${preview}`,
+          rel
+        );
+      }
       if (mustLandBody && incompleteMustLandItems.length > 0) {
         addFinding(
           'INCOMPLETE_MUST_LAND_CHECKLIST',
@@ -348,6 +361,25 @@ async function scanPhase(phase, directoryPath) {
           rel
         );
       }
+    }
+
+    if (
+      phase === 'active' &&
+      (status === 'validation' ||
+        status === 'completed' ||
+        validationReady === 'yes' ||
+        validationReady === 'host-required-only') &&
+      unfinishedCoverageRows.length > 0
+    ) {
+      const preview = unfinishedCoverageRows
+        .slice(0, 3)
+        .map((entry) => `${entry.capability}='${entry.status}'`)
+        .join(', ');
+      addFinding(
+        'UNFINISHED_COVERAGE_STATUS',
+        `Active plan cannot enter validation/completion while '${unfinishedCoverageRows[0].sectionTitle}' still records unfinished current-status rows: ${preview}`,
+        rel
+      );
     }
 
     if (phase === 'active' && (status === 'validation' || status === 'completed') && incompleteMustLandItems.length > 0) {

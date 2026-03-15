@@ -9,6 +9,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { compileTaskContactPack } from './compile-task-contact-pack.mjs';
 import {
   ACTIVE_STATUSES,
+  collectUnfinishedCoverageRows,
   isValidPlanId,
   listMarkdownFiles,
   metadataValue,
@@ -5499,6 +5500,10 @@ async function maybeAutoPromoteCompletionGate(planPath, currentRole, sessionResu
   }
 
   const content = await fs.readFile(planPath, 'utf8');
+  const unfinishedCoverageRows = collectUnfinishedCoverageRows(content);
+  if (unfinishedCoverageRows.length > 0) {
+    return { promoted: false, reason: null };
+  }
   const status = documentStatusValue(content);
   const validationReady = documentValidationReadyValue(content);
   if (completionGateReadyForValidation(status, validationReady)) {
@@ -5560,6 +5565,20 @@ async function evaluateCompletionGate(plan, rootDir) {
         ready: false,
         reason:
           "Plan still has unchecked items in '## Must-Land Checklist'. Keep the plan in-progress until every must-land deliverable is complete."
+      };
+    }
+
+    const unfinishedCoverageRows = collectUnfinishedCoverageRows(content);
+    if (unfinishedCoverageRows.length > 0) {
+      const preview = unfinishedCoverageRows
+        .slice(0, 3)
+        .map((entry) => `${entry.capability}='${entry.status}'`)
+        .join(', ');
+      return {
+        ready: false,
+        reason:
+          `Plan still records unfinished current-status rows in '${unfinishedCoverageRows[0].sectionTitle}' (${preview}). ` +
+          'Keep the plan in-progress until those capabilities are implemented in product code or split into separate executable follow-on plans.'
       };
     }
 

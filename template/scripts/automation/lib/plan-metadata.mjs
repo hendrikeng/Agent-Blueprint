@@ -7,6 +7,18 @@ export const COMPLETED_STATUSES = new Set(['completed']);
 export const RISK_TIERS = new Set(['low', 'medium', 'high']);
 export const SECURITY_APPROVAL_VALUES = new Set(['not-required', 'pending', 'approved']);
 export const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+export const COVERAGE_SECTION_TITLES = ['Master Plan Coverage', 'Capability Coverage Matrix'];
+export const UNFINISHED_COVERAGE_STATUS_PATTERNS = [
+  /\bnot shipped\b/i,
+  /\bfoundation only\b/i,
+  /\bpartially implemented\b/i,
+  /\bpartially shipped\b/i,
+  /\bin progress\b/i,
+  /\bqueued\b/i,
+  /\bblocked\b/i,
+  /\bplanned\b/i,
+  /\bdraft\b/i
+];
 
 export const REQUIRED_METADATA_FIELDS = {
   future: [
@@ -97,6 +109,114 @@ function metadataSectionRange(content) {
   }
 
   return { lines, start, end };
+}
+
+export function sectionBounds(content, sectionTitle) {
+  const regex = new RegExp(`^##\\s+${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm');
+  const match = regex.exec(content);
+  if (!match || match.index == null) {
+    return null;
+  }
+
+  const start = match.index;
+  const bodyStart = start + match[0].length;
+  const remainder = content.slice(bodyStart);
+  const nextSectionMatch = /^##\s+/m.exec(remainder);
+  const end = nextSectionMatch && nextSectionMatch.index != null
+    ? bodyStart + nextSectionMatch.index
+    : content.length;
+  return { start, bodyStart, end };
+}
+
+export function sectionBody(content, sectionTitle) {
+  const bounds = sectionBounds(content, sectionTitle);
+  if (!bounds) {
+    return '';
+  }
+  return content.slice(bounds.bodyStart, bounds.end).trim();
+}
+
+export function firstSectionBody(content, sectionTitles) {
+  for (const title of sectionTitles) {
+    const body = sectionBody(content, title);
+    if (body) {
+      return { title, body };
+    }
+  }
+  return { title: null, body: '' };
+}
+
+function parseMarkdownTableRow(line) {
+  const trimmed = String(line ?? '').trim();
+  if (!trimmed.startsWith('|') || trimmed.split('|').length < 3) {
+    return [];
+  }
+  return trimmed
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(cells) {
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+export function collectUnfinishedCoverageRows(content, sectionTitles = COVERAGE_SECTION_TITLES) {
+  const coverageSection = firstSectionBody(content, sectionTitles);
+  if (!coverageSection.body) {
+    return [];
+  }
+
+  const lines = coverageSection.body.split(/\r?\n/);
+  const findings = [];
+
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const headerCells = parseMarkdownTableRow(lines[index]);
+    const separatorCells = parseMarkdownTableRow(lines[index + 1]);
+    if (headerCells.length === 0 || !isMarkdownTableSeparator(separatorCells)) {
+      continue;
+    }
+
+    const statusColumnIndex = headerCells.findIndex((cell) => /\b(?:repo\s+status\s+now|current\s+status|status)\b/i.test(cell));
+    if (statusColumnIndex === -1) {
+      continue;
+    }
+
+    for (let rowIndex = index + 2; rowIndex < lines.length; rowIndex += 1) {
+      const rowCells = parseMarkdownTableRow(lines[rowIndex]);
+      if (rowCells.length === 0) {
+        if (String(lines[rowIndex] ?? '').trim()) {
+          break;
+        }
+        continue;
+      }
+      if (isMarkdownTableSeparator(rowCells)) {
+        continue;
+      }
+
+      const capability = rowCells[0] ?? '';
+      const status = rowCells[statusColumnIndex] ?? '';
+      if (!status) {
+        continue;
+      }
+      if (!UNFINISHED_COVERAGE_STATUS_PATTERNS.some((pattern) => pattern.test(status))) {
+        continue;
+      }
+
+      findings.push({
+        sectionTitle: coverageSection.title,
+        capability: capability.replace(/`/g, '').trim(),
+        status: status.replace(/`/g, '').trim()
+      });
+    }
+
+    if (findings.length > 0) {
+      break;
+    }
+  }
+
+  return findings;
 }
 
 function compareMetadataKeys(a, b) {
