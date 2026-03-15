@@ -3810,7 +3810,7 @@ async function persistSecurityApproval(plan, securityApprovalField, securityAppr
 
 function createInitialState(runId, requestedMode, effectiveMode) {
   return {
-    version: 4,
+    version: 5,
     runId,
     requestedMode,
     effectiveMode,
@@ -4103,6 +4103,66 @@ function ensurePlanImplementationState(state, planId) {
     };
   }
   return state.implementationState[planId];
+}
+
+function captureImplementationBaseline(rootDir, plan) {
+  const implementationRoots = implementationTargetRoots(plan, { sourceOnly: true });
+  if (implementationRoots.length === 0) {
+    return {};
+  }
+
+  const fingerprints = {};
+  const visited = new Set();
+
+  const recordPath = (relativePath) => {
+    const normalized = toPosix(String(relativePath ?? '').trim()).replace(/^\.?\//, '');
+    if (!normalized || visited.has(normalized)) {
+      return;
+    }
+    visited.add(normalized);
+    fingerprints[normalized] = implementationEvidenceFingerprint(rootDir, normalized);
+  };
+
+  for (const root of implementationRoots) {
+    const normalizedRoot = toPosix(String(root ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, '');
+    if (!normalizedRoot) {
+      continue;
+    }
+
+    const absRoot = path.join(rootDir, normalizedRoot);
+    try {
+      const stat = fsSync.lstatSync(absRoot);
+      if (stat.isFile() || stat.isSymbolicLink() || !stat.isDirectory()) {
+        recordPath(normalizedRoot);
+        continue;
+      }
+
+      const stack = [normalizedRoot];
+      while (stack.length > 0) {
+        const current = stack.pop();
+        const absCurrent = path.join(rootDir, current);
+        let entries = [];
+        try {
+          entries = fsSync.readdirSync(absCurrent, { withFileTypes: true });
+        } catch {
+          continue;
+        }
+
+        for (const entry of entries) {
+          const child = toPosix(path.posix.join(current, entry.name));
+          if (entry.isDirectory()) {
+            stack.push(child);
+            continue;
+          }
+          recordPath(child);
+        }
+      }
+    } catch {
+      recordPath(normalizedRoot);
+    }
+  }
+
+  return fingerprints;
 }
 
 async function saveState(paths, state, dryRun) {
@@ -4525,10 +4585,10 @@ function evaluateExecutionEligibility(plan) {
     };
   }
 
-  if (isProductPlan(plan) && implementationTargetRoots(plan).length === 0) {
+  if (isProductPlan(plan) && implementationTargetRoots(plan, { sourceOnly: true }).length === 0) {
     return {
       allowed: false,
-      reason: "Product slice plans must declare non-doc 'Implementation-Targets' before worker/reviewer execution."
+      reason: "Product slice plans must declare at least one source-code 'Implementation-Targets' root before worker/reviewer execution."
     };
   }
 
@@ -4905,6 +4965,8 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
   const sessionLogPathRel = toPosix(path.relative(paths.rootDir, sessionLogPathAbs));
   const workerDirtyImplementationBaselinePaths =
     role === ROLE_WORKER ? dirtyImplementationTouchPaths(paths.rootDir, plan) : [];
+  const workerImplementationBaseline =
+    role === ROLE_WORKER ? captureImplementationBaseline(paths.rootDir, plan) : {};
   const workerHasImplementationBaseline =
     role === ROLE_WORKER
       ? workerDirtyImplementationBaselinePaths.length > 0 || hasRecordedImplementationEvidence(state, plan, paths.rootDir)
@@ -5085,6 +5147,7 @@ async function executePlanSession(plan, paths, state, options, config, sessionNu
     ...result,
     touchSummary: sessionTouchSummary,
     touchMonitor: sessionTouchMonitor,
+    implementationBaseline: workerImplementationBaseline,
     contactPackFile,
     contactPackManifestFile: contactPack?.contactPackManifestFile ?? null,
     contactPackGenerated: contactPack?.generated ?? false,
@@ -5755,12 +5818,12 @@ async function evaluateCompletionGate(plan, rootDir, state = null) {
         };
       }
 
-      const targetRoots = implementationTargetRoots(plan);
+      const targetRoots = implementationTargetRoots(plan, { sourceOnly: true });
       if (targetRoots.length === 0) {
         return {
           ready: false,
           reason:
-            "Product slice plans must declare at least one non-doc 'Implementation-Targets' root before validation/completion."
+            "Product slice plans must declare at least one source-code 'Implementation-Targets' root before validation/completion."
         };
       }
 
@@ -5770,8 +5833,8 @@ async function evaluateCompletionGate(plan, rootDir, state = null) {
         return {
           ready: false,
           reason:
-            `Plan declares product implementation roots via Implementation-Targets (${targetPreview}) but no durable implementation evidence has been recorded under those roots. ` +
-            'Keep the plan in-progress until worker sessions touch the declared implementation paths.'
+            `Plan declares product implementation roots via Implementation-Targets (${targetPreview}) but no durable source implementation evidence has been recorded under those roots. ` +
+            'Keep the plan in-progress until worker sessions land shipped product changes under the declared source paths.'
         };
       }
     }
@@ -7301,21 +7364,25 @@ function isArtifactSlicePlan(plan) {
   return !isProgramPlan(plan) && !isProductPlan(plan);
 }
 
-function implementationTargetRoots(plan) {
+function implementationTargetRoots(plan, options = {}) {
   const implementationTargets = Array.isArray(plan?.implementationTargets) ? plan.implementationTargets : [];
+  const sourceOnly = options && options.sourceOnly === true;
   return [...new Set(
     implementationTargets
       .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, ''))
       .filter(Boolean)
       .filter((entry) => {
         const category = classifyTouchedPath(entry);
-        return (
-          category === 'source' ||
-          category === 'tests' ||
-          category === 'scripts' ||
-          category === 'configs' ||
-          category === 'lockfiles'
-        );
+        if (
+          category !== 'source' &&
+          category !== 'tests' &&
+          category !== 'scripts' &&
+          category !== 'configs' &&
+          category !== 'lockfiles'
+        ) {
+          return false;
+        }
+        return sourceOnly ? category === 'source' : true;
       })
   )];
 }
@@ -7325,7 +7392,7 @@ function planRequiresImplementationEvidence(plan) {
 }
 
 function dirtyImplementationTouchPaths(rootDir, plan) {
-  const implementationRoots = implementationTargetRoots(plan);
+  const implementationRoots = implementationTargetRoots(plan, { sourceOnly: true });
   if (implementationRoots.length === 0) {
     return [];
   }
@@ -7360,7 +7427,7 @@ function implementationEvidenceFingerprint(rootDir, relativePath) {
 }
 
 function implementationEvidenceEntries(state, plan, rootDir) {
-  const implementationRoots = implementationTargetRoots(plan);
+  const implementationRoots = implementationTargetRoots(plan, { sourceOnly: true });
   if (implementationRoots.length === 0) {
     return [];
   }
@@ -7377,7 +7444,8 @@ function implementationEvidenceEntries(state, plan, rootDir) {
       continue;
     }
     merged.set(normalized, {
-      fingerprint: String(record?.fingerprint ?? '').trim()
+      baselineFingerprint: String(record?.baselineFingerprint ?? '').trim(),
+      recordedFingerprint: String(record?.recordedFingerprint ?? record?.fingerprint ?? '').trim()
     });
   }
 
@@ -7386,7 +7454,8 @@ function implementationEvidenceEntries(state, plan, rootDir) {
       continue;
     }
     merged.set(filePath, {
-      fingerprint: implementationEvidenceFingerprint(rootDir, filePath)
+      baselineFingerprint: '',
+      recordedFingerprint: implementationEvidenceFingerprint(rootDir, filePath)
     });
   }
 
@@ -7394,14 +7463,23 @@ function implementationEvidenceEntries(state, plan, rootDir) {
     .filter(([filePath]) => implementationRoots.some((root) => pathMatchesRootPrefix(filePath, root)))
     .map(([filePath, record]) => ({
       path: filePath,
-      fingerprint: record.fingerprint,
+      baselineFingerprint: record.baselineFingerprint,
+      recordedFingerprint: record.recordedFingerprint,
       currentFingerprint: implementationEvidenceFingerprint(rootDir, filePath)
     }));
 }
 
 function implementationEvidencePaths(state, plan, rootDir) {
   return implementationEvidenceEntries(state, plan, rootDir)
-    .filter((entry) => entry.fingerprint && entry.currentFingerprint === entry.fingerprint)
+    .filter((entry) => {
+      if (!entry.currentFingerprint || entry.currentFingerprint === 'missing') {
+        return false;
+      }
+      if (entry.baselineFingerprint) {
+        return entry.currentFingerprint !== entry.baselineFingerprint;
+      }
+      return entry.recordedFingerprint && entry.currentFingerprint === entry.recordedFingerprint;
+    })
     .map((entry) => entry.path);
 }
 
@@ -7410,7 +7488,7 @@ function hasRecordedImplementationEvidence(state, plan, rootDir) {
 }
 
 function recordImplementationEvidence(state, rootDir, plan, touchedPaths = [], metadata = {}) {
-  const implementationRoots = implementationTargetRoots(plan);
+  const implementationRoots = implementationTargetRoots(plan, { sourceOnly: true });
   if (implementationRoots.length === 0) {
     return { recorded: false, matchedPaths: [] };
   }
@@ -7426,11 +7504,23 @@ function recordImplementationEvidence(state, rootDir, plan, touchedPaths = [], m
   const pathRecords = current.pathRecords && typeof current.pathRecords === 'object'
     ? current.pathRecords
     : {};
+  const baselineFingerprints =
+    metadata.baselineFingerprints && typeof metadata.baselineFingerprints === 'object'
+      ? metadata.baselineFingerprints
+      : {};
   const mergedPaths = [...new Set([...(Array.isArray(current.touchedPaths) ? current.touchedPaths : []), ...matchedPaths])];
   const recordedAt = nowIso();
   for (const filePath of matchedPaths) {
+    const baselineFingerprint = String(
+      Object.prototype.hasOwnProperty.call(baselineFingerprints, filePath)
+        ? baselineFingerprints[filePath]
+        : 'missing'
+    ).trim();
+    const recordedFingerprint = implementationEvidenceFingerprint(rootDir, filePath);
     pathRecords[filePath] = {
-      fingerprint: implementationEvidenceFingerprint(rootDir, filePath),
+      baselineFingerprint,
+      recordedFingerprint,
+      fingerprint: recordedFingerprint,
       recordedAt,
       runId: metadata.runId ?? null,
       session: metadata.session ?? null,
@@ -8740,7 +8830,8 @@ async function processPlan(plan, paths, state, options, config) {
         {
           runId: state.runId,
           session,
-          role: currentRole
+          role: currentRole,
+          baselineFingerprints: sessionResult.implementationBaseline ?? {}
         }
       );
       if (implementationEvidenceUpdate.recorded) {

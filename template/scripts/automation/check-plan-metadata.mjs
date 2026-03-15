@@ -198,6 +198,10 @@ function isSupportedImplementationTarget(value) {
   );
 }
 
+function isSourceImplementationTarget(value) {
+  return implementationTargetCategory(value) === 'source';
+}
+
 function sectionBounds(content, sectionTitle) {
   const regex = new RegExp(`^##\\s+${sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm');
   const match = regex.exec(content);
@@ -399,9 +403,8 @@ async function scanPhase(phase, directoryPath) {
     const implementationTargets = implementationTargetsRaw.map(normalizeTargetPathValue).filter(Boolean);
     const implementationTargetsProvided = implementationTargets.length > 0;
     const productSlicePlan = deliveryClass === 'product' && executionScope === 'slice';
-    const phaseResetPlan = /^phase-\d+(?:-|$)/.test(inferredPlanId ?? '');
     const reconciliationRequired =
-      phase === 'future' || (phase === 'active' && (executionScope === 'program' || phaseResetPlan));
+      phase === 'future' || (phase === 'active' && executionScope === 'program');
 
     const mustLandRequired = phase === 'future' || phase === 'active';
 
@@ -522,6 +525,14 @@ async function scanPhase(phase, directoryPath) {
       addFinding(
         'INVALID_IMPLEMENTATION_TARGETS',
         "Product slice plans must include at least one runtime-supported path in 'Implementation-Targets' (source|tests|scripts|configs|lockfiles outside docs).",
+        rel
+      );
+    }
+
+    if (productSlicePlan && implementationTargetsProvided && !implementationTargets.some(isSourceImplementationTarget)) {
+      addFinding(
+        'MISSING_SOURCE_IMPLEMENTATION_TARGET',
+        "Product slice plans must include at least one source-code path in 'Implementation-Targets' so completion maps to shipped product behavior.",
         rel
       );
     }
