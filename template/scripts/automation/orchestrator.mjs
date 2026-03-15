@@ -7171,6 +7171,12 @@ function resolveAtomicCommitRoots(plan, config, paths, completionContext = {}) {
     roots.add(assertSafeRelativePlanPath(runtimeContextPath));
   }
 
+  // Host validation may regenerate the aggregated outcomes scorecard as a repo-level validation artifact.
+  const runOutcomesPath = normalizedRelativePrefix('docs/generated/run-outcomes.json');
+  if (runOutcomesPath) {
+    roots.add(assertSafeRelativePlanPath(runOutcomesPath));
+  }
+
   return [...roots]
     .map((entry) => normalizedRelativePrefix(entry))
     .filter(Boolean)
