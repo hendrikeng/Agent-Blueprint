@@ -22,6 +22,7 @@ Active plan intent rules:
 
 - `Execution-Scope: slice` plans are directly executable by orchestration.
 - `Execution-Scope: program` plans stay active as parent contracts and are intentionally skipped by worker/reviewer/validation lanes.
+- Active `Execution-Scope: program` parents must carry `Authoring-Intent: executable-default`; blueprint-only is future-draft only.
 - `Delivery-Class: product` plus `Execution-Scope: slice` must also declare non-doc `Implementation-Targets`.
 
 ## Session Retention

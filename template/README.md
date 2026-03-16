@@ -124,6 +124,7 @@ Start with:
 - Runtime context build: `npm run context:compile`
 - Governance checks: `npm run docs:verify`, `npm run conformance:verify`, `npm run architecture:verify`, `npm run agent:verify`, `npm run eval:verify`, `npm run plans:verify`, `npm run harness:verify`
 - Plan metadata drift self-heal (local default): `plans:verify` auto-aligns top-level `Status:` with metadata `- Status`; disable via `ORCH_PLAN_METADATA_AUTO_HEAL_STATUS=0` (CI defaults to disabled).
+- Broad future parents that still need decomposition should use `npm run plans:scaffold-children -- --plan-file <path>` instead of staying childless.
 - Fast iteration profile: `npm run verify:fast`
 - Full merge profile: `npm run verify:full`
 - Canonical command map and policy: `docs/governance/RULES.md`
@@ -155,6 +156,7 @@ Start with:
 Future blueprint promotion rule:
 
 - Before setting `Status: ready-for-promotion`, add `## Master Plan Coverage` or `## Capability Coverage Matrix`, add `## Prior Completed Plan Reconciliation`, add `## Promotion Blockers`, and run `npm run plans:verify`.
+- Broad `Execution-Scope: program` futures must also declare `Authoring-Intent`; default to `executable-default` plus `## Child Slice Definitions`, and reserve `blueprint-only` for explicit blueprint-only requests.
 - Resume supervised run loop: `npm run automation:resume:grind`
 - Resume supervised run loop with medium enabled: `npm run automation:resume:grind:medium`
 - Resume supervised run loop with medium+high enabled: `npm run automation:resume:grind:high`

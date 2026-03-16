@@ -8,6 +8,7 @@ export const RISK_TIERS = new Set(['low', 'medium', 'high']);
 export const SECURITY_APPROVAL_VALUES = new Set(['not-required', 'pending', 'approved']);
 export const DELIVERY_CLASSES = new Set(['product', 'docs', 'ops', 'reconciliation']);
 export const EXECUTION_SCOPES = new Set(['slice', 'program']);
+export const AUTHORING_INTENTS = new Set(['executable-default', 'blueprint-only']);
 export const CAPABILITY_PROOF_MAP_SECTION = 'Capability Proof Map';
 export const CHILD_SLICE_DEFINITIONS_SECTION = 'Child Slice Definitions';
 export const VALIDATION_CONTRACT_SECTION = 'Validation Contract';
@@ -467,6 +468,7 @@ function compareMetadataKeys(a, b) {
     'Acceptance-Criteria',
     'Delivery-Class',
     'Execution-Scope',
+    'Authoring-Intent',
     'Parent-Plan-ID',
     'Dependencies',
     'Autonomy-Allowed',
@@ -697,6 +699,14 @@ export function parseDeliveryClass(value, fallback = '') {
 export function parseExecutionScope(value, fallback = '') {
   const raw = (value ?? '').trim().toLowerCase();
   if (EXECUTION_SCOPES.has(raw)) {
+    return raw;
+  }
+  return fallback;
+}
+
+export function parseAuthoringIntent(value, fallback = '') {
+  const raw = (value ?? '').trim().toLowerCase();
+  if (AUTHORING_INTENTS.has(raw)) {
     return raw;
   }
   return fallback;

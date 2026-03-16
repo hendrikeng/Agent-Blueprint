@@ -2,9 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import {
-  CHILD_SLICE_DEFINITIONS_SECTION,
   VALIDATION_CONTRACT_SECTION,
-  extractProgramChildUnitDeclarations,
   inferPlanId,
   listMarkdownFiles,
   metadataValue,
@@ -19,6 +17,11 @@ import {
   parseValidationLanes,
   sectionBody
 } from './plan-metadata.mjs';
+import {
+  evaluateProgramParentAuthoring,
+  parseStructuredProgramChildDefinitions
+} from './program-parent-authoring.mjs';
+export { parseStructuredProgramChildDefinitions } from './program-parent-authoring.mjs';
 
 const GENERATED_START = '<!-- ORCH-GENERATED-START';
 const GENERATED_END = '<!-- ORCH-GENERATED-END -->';
@@ -47,115 +50,6 @@ function normalizeListValue(values) {
 function readSimpleSection(content, title) {
   const body = sectionBody(content, title);
   return body ? body.trim() : '';
-}
-
-function parseBulletFields(lines) {
-  const fields = new Map();
-  for (const line of lines) {
-    const match = String(line ?? '').trim().match(/^-\s*([A-Za-z][A-Za-z0-9- ]+):\s*(.*)$/);
-    if (!match) {
-      continue;
-    }
-    if (!fields.has(match[1].trim().toLowerCase())) {
-      fields.set(match[1].trim().toLowerCase(), match[2].trim());
-    }
-  }
-  return fields;
-}
-
-function parseChildDefinitionSubsections(lines) {
-  const sections = new Map();
-  let current = '';
-  let currentLines = [];
-
-  const flush = () => {
-    if (!current) {
-      return;
-    }
-    sections.set(current.toLowerCase(), currentLines.join('\n').trim());
-  };
-
-  for (const rawLine of lines) {
-    const line = String(rawLine ?? '');
-    const match = line.match(/^####\s+(.+?)\s*$/);
-    if (match) {
-      flush();
-      current = match[1].trim();
-      currentLines = [];
-      continue;
-    }
-    if (current) {
-      currentLines.push(line);
-    }
-  }
-  flush();
-  return sections;
-}
-
-export function parseStructuredProgramChildDefinitions(content) {
-  const section = readSimpleSection(content, CHILD_SLICE_DEFINITIONS_SECTION);
-  if (!section) {
-    return { definitions: [], errors: [], legacyUnits: extractProgramChildUnitDeclarations(content) };
-  }
-
-  const lines = section.split(/\r?\n/);
-  const definitions = [];
-  const errors = [];
-  let current = null;
-
-  const flush = () => {
-    if (!current) {
-      return;
-    }
-    const planId = parsePlanId(current.heading, null);
-    if (!planId) {
-      errors.push(`Child definition heading '${current.heading}' must be a lowercase kebab-case Plan-ID.`);
-      current = null;
-      return;
-    }
-    const fields = parseBulletFields(current.lines.filter((line) => !/^####\s+/.test(line)));
-    const subsections = parseChildDefinitionSubsections(current.lines);
-    const validationLanes = parseValidationLanes(fields.get('validation-lanes'), []);
-    definitions.push({
-      planId,
-      title: fields.get('title') ?? '',
-      dependencies: parseListField(fields.get('dependencies')),
-      specTargets: normalizeListValue(parseListField(fields.get('spec-targets'))),
-      implementationTargets: normalizeListValue(parseListField(fields.get('implementation-targets'))),
-      validationLanes,
-      autonomyAllowed: String(fields.get('autonomy-allowed') ?? '').trim(),
-      riskTier: parseRiskTier(fields.get('risk-tier'), ''),
-      securityApproval: parseSecurityApproval(fields.get('security-approval'), ''),
-      tags: parseListField(fields.get('tags')),
-      mustLandBody: subsections.get('must-land checklist') ?? '',
-      baselineBody: subsections.get('already-true baseline') ?? '',
-      deferredBody: subsections.get('deferred follow-ons') ?? '',
-      proofMapBody: subsections.get('capability proof map') ?? ''
-    });
-    current = null;
-  };
-
-  for (const rawLine of lines) {
-    const headingMatch = rawLine.match(/^###\s+(.+?)\s*$/);
-    if (headingMatch) {
-      flush();
-      current = {
-        heading: headingMatch[1].trim(),
-        lines: []
-      };
-      continue;
-    }
-    if (current) {
-      current.lines.push(rawLine);
-    }
-  }
-  flush();
-
-  return {
-    definitions,
-    errors,
-    legacyUnits: extractProgramChildUnitDeclarations(content)
-  };
 }
 
 async function readAutomationConfig(rootDir) {
@@ -475,7 +369,8 @@ export async function compileProgramChildren(rootDir, options = {}) {
     advisories: [],
     writes: [],
     moves: [],
-    compiledParents: []
+    compiledParents: [],
+    parentOutcomes: []
   };
 
   for (const parent of plans) {
@@ -486,28 +381,35 @@ export async function compileProgramChildren(rootDir, options = {}) {
       continue;
     }
 
+    const parentState = evaluateProgramParentAuthoring(parent);
     const parsed = parseStructuredProgramChildDefinitions(parent.content);
     const definitions = parsed.definitions;
-    const legacyUnits = parsed.legacyUnits;
     const seenChildIds = new Set();
     const desiredPhase = expectedPhaseForParent(parent);
+    const parentOutcome = {
+      planId: parent.planId,
+      filePath: parent.rel,
+      phase: parent.phase,
+      authoringIntent: parentState?.authoringIntent ?? '',
+      childDefinitionCount: parentState?.childDefinitionCount ?? definitions.length,
+      status: parentState?.statusCode ?? 'ready-for-compilation',
+      reason: parentState?.reason ?? 'Program parent is ready for child compilation.'
+    };
 
-    if (definitions.length === 0 && legacyUnits.length > 0) {
-      results.advisories.push({
-        code: 'LEGACY_PROGRAM_CHILD_SCHEMA',
-        message: `Program plan '${parent.planId}' still uses legacy child-unit headings without '## ${CHILD_SLICE_DEFINITIONS_SECTION}'. Automatic child compilation is disabled until the parent migrates.`,
-        filePath: parent.rel
-      });
+    if (parentState && parentState.issues.length > 0) {
+      results.issues.push(...parentState.issues);
+      results.parentOutcomes.push(parentOutcome);
       continue;
     }
 
-    for (const error of parsed.errors) {
-      results.issues.push({
-        code: 'INVALID_CHILD_SLICE_DEFINITION',
-        message: error,
-        filePath: parent.rel
-      });
+    if (parentState?.authoringIntent === 'blueprint-only') {
+      results.parentOutcomes.push(parentOutcome);
+      continue;
     }
+
+    const issueCountBeforeParent = results.issues.length;
+    const writeCountBeforeParent = results.writes.length;
+    const moveCountBeforeParent = results.moves.length;
 
     for (const definition of definitions) {
       let definitionValid = true;
@@ -691,6 +593,25 @@ export async function compileProgramChildren(rootDir, options = {}) {
     if (definitions.length > 0) {
       results.compiledParents.push(parent.planId);
     }
+
+    const parentIssueCount = results.issues.length - issueCountBeforeParent;
+    const parentWriteCount = (results.writes.length - writeCountBeforeParent) + (results.moves.length - moveCountBeforeParent);
+    if (parentIssueCount > 0) {
+      const hasGeneratedStateIssue = results.issues
+        .slice(issueCountBeforeParent)
+        .some((issue) => issue.code === 'MISSING_COMPILED_CHILD_PLAN' || issue.code === 'STALE_COMPILED_CHILD_PLAN');
+      parentOutcome.status = hasGeneratedStateIssue ? 'blocked-generated-child-drift' : 'blocked-invalid-definitions';
+      parentOutcome.reason = hasGeneratedStateIssue
+        ? 'Compiled child plans are missing or stale.'
+        : 'Structured child definitions are invalid or inconsistent.';
+    } else if (parentWriteCount > 0) {
+      parentOutcome.status = 'compiled-written';
+      parentOutcome.reason = 'Compiled child plans were created or updated.';
+    } else {
+      parentOutcome.status = 'compiled-current';
+      parentOutcome.reason = 'Compiled child plans are current.';
+    }
+    results.parentOutcomes.push(parentOutcome);
   }
 
   return results;

@@ -32,11 +32,12 @@ Each future blueprint must also include these scoped execution sections:
 - `## Prior Completed Plan Reconciliation`
 - `## Promotion Blockers`
 
-Future `Execution-Scope: program` blueprints that want automatic child materialization must also include `## Child Slice Definitions`. Each child definition should declare the child plan ID in the `###` heading plus `Title`, `Dependencies`, `Spec-Targets`, `Implementation-Targets` for product slices, `Validation-Lanes`, `#### Must-Land Checklist`, `#### Already-True Baseline`, `#### Deferred Follow-Ons`, and `#### Capability Proof Map` for product slices.
+Future `Execution-Scope: program` blueprints with `Authoring-Intent: executable-default` must also include `## Child Slice Definitions`. Each child definition should declare the child plan ID in the `###` heading plus `Title`, `Dependencies`, `Spec-Targets`, `Implementation-Targets` for product slices, `Validation-Lanes`, `#### Must-Land Checklist`, `#### Already-True Baseline`, `#### Deferred Follow-Ons`, and `#### Capability Proof Map` for product slices.
 
 Optional metadata:
 
 - `Implementation-Targets` (required for `Delivery-Class: product` plus `Execution-Scope: slice`; omit or set to `none` otherwise)
+- `Authoring-Intent` (required for future `Execution-Scope: program`; values: `executable-default` or `blueprint-only`)
 - `Parent-Plan-ID` (optional when the future blueprint is a child slice under a parent program)
 - `Autonomy-Allowed` (`guarded` | `full` | `both`)
 - `Risk-Tier` (`low` | `medium` | `high`)
@@ -45,6 +46,29 @@ Optional metadata:
 
 For `Delivery-Class: product` plus `Execution-Scope: slice`, prefer adding stable must-land IDs and `## Capability Proof Map` during blueprinting even while semantic proof mode is still advisory. That keeps promotion and later validation machine-checkable without relying on test-name heuristics.
 Compiled child slices inherit parent defaults for priority/owner/delivery/risk/autonomy/security, then add generated `Validation-Lanes` and `## Validation Contract` so proof references resolve to explicit configured validation IDs.
+
+## Future Authoring Contract
+
+Default rule: future authoring must produce executable shapes, not blueprint-only dead ends.
+
+- Concrete ask: author a direct `Execution-Scope: slice`.
+- Broad multi-slice ask: author `Execution-Scope: program` with `Authoring-Intent: executable-default` and complete `## Child Slice Definitions`.
+- If child decomposition is not safe yet, run `npm run plans:scaffold-children -- --plan-file <path>` and review the generated draft child definitions instead of leaving the parent without children.
+- Only use `Authoring-Intent: blueprint-only` when the user explicitly asked for a blueprint-only artifact. Blueprint-only parents must stay `Status: draft`, stay in `docs/future/`, and must not declare child definitions.
+
+Minimal examples:
+
+- Direct slice:
+  - `Execution-Scope: slice`
+  - `Implementation-Targets: src/feature`
+- Executable program:
+  - `Execution-Scope: program`
+  - `Authoring-Intent: executable-default`
+  - `## Child Slice Definitions`
+- Explicit blueprint-only:
+  - `Execution-Scope: program`
+  - `Authoring-Intent: blueprint-only`
+  - no `## Child Slice Definitions`
 
 ## Future Intake Gate (Minimal)
 
@@ -66,7 +90,10 @@ Create or update a future blueprint as `Status: draft` only when these checks pa
 - [ ] `## Master Plan Coverage` or `## Capability Coverage Matrix` explicitly maps upstream strategy/capabilities into `shipped now`, `this phase`, `later phase`, or `non-goal`.
 - [ ] `## Prior Completed Plan Reconciliation` classifies relevant completed plans as `kept-as-baseline`, `kept-but-refactored`, `superseded`, `obsolete`, or `reopened`.
 - [ ] `## Promotion Blockers` lists the unresolved decisions, approvals, or external gates that still block safe promotion.
-- [ ] Future `Execution-Scope: program` plans that want automation use `## Child Slice Definitions`; legacy `## Remaining Execution Slices` / `## Portfolio Units` headings are compatibility-only and do not trigger child compilation.
+- [ ] Future `Execution-Scope: program` plans declare `Authoring-Intent`.
+- [ ] Future `Execution-Scope: program` plans with `Authoring-Intent: executable-default` include `## Child Slice Definitions`; legacy `## Remaining Execution Slices` / `## Portfolio Units` headings are migration-only and do not trigger child compilation.
+- [ ] Future `Execution-Scope: program` plans with `Authoring-Intent: blueprint-only` stay `Status: draft`, remain in `docs/future/`, and do not declare child definitions.
+- [ ] If decomposition is not safe yet, use `npm run plans:scaffold-children -- --plan-file <path>` and review the draft child definitions before promotion.
 - [ ] Use `node ./scripts/automation/migrate-program-children.mjs --plan-file <path>` to turn legacy `## Remaining Execution Slices` / `## Portfolio Units` headings into reviewable `## Child Slice Definitions` before expecting automatic child compilation.
 - [ ] `npm run plans:verify` passes.
 
@@ -76,7 +103,8 @@ Set `Status: ready-for-promotion` only when these checks pass:
 
 - [ ] At least one executable slice is defined with clear entry and exit criteria.
 - [ ] `Execution-Scope: program` blueprints are only promoted when they are intended to remain active parent contracts; executable work still belongs in child slices.
-- [ ] Program blueprints with automated child execution have complete `## Child Slice Definitions`, and their child definitions already declare `Validation-Lanes`.
+- [ ] Program blueprints with `Authoring-Intent: executable-default` have complete `## Child Slice Definitions`, and their child definitions already declare `Validation-Lanes`.
+- [ ] Blueprint-only parents are not promoted.
 - [ ] `## Must-Land Checklist` is the exact completion contract for the promoted plan.
 - [ ] `## Master Plan Coverage` or `## Capability Coverage Matrix` proves nothing from upstream strategy is silently omitted.
 - [ ] `## Prior Completed Plan Reconciliation` proves older completed work in the same area is either preserved, refactored, superseded, or intentionally retired.

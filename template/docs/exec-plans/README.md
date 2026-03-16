@@ -57,8 +57,10 @@ Compiled child slices are owned in three bands: compiler-generated contract sect
 - `Delivery-Class: docs`, `ops`, and `reconciliation` allow artifact-first completion when the acceptance criteria are truthful.
 - `Execution-Scope: slice` means the plan is directly executable by orchestration.
 - `Execution-Scope: program` means the plan is a non-executable parent contract or portfolio. Keep it active while child slices execute; do not send it directly to validation.
-- Program plans that want automatic child materialization must declare `## Child Slice Definitions`; orchestration/compiler turns those definitions into child slice plans deterministically.
-- Legacy `## Remaining Execution Slices` / `## Portfolio Units` headings remain compatibility-only discovery hints. They do not enable automatic child generation.
+- Future and active program parents must declare `Authoring-Intent`.
+- `Authoring-Intent: executable-default` requires `## Child Slice Definitions`; orchestration/compiler turns those definitions into child slice plans deterministically.
+- `Authoring-Intent: blueprint-only` is draft-only future state and must not be promoted or compiled.
+- Legacy `## Remaining Execution Slices` / `## Portfolio Units` headings are migration-only discovery hints. They do not enable automatic child generation.
 - `Implementation-Targets` are the authoritative code roots for product slices. `Spec-Targets` remain the broader impact/documentation list and do not replace implementation evidence.
 - `Validation-Lanes` and `## Validation Contract` tie each compiled child slice to explicit configured validation IDs instead of inferred command text.
 - `## Capability Proof Map` maps must-land IDs to capability claims and proof rows. Proof rows should reference explicit validation IDs or artifact paths, not inferred test names.

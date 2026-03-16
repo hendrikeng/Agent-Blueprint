@@ -53,9 +53,12 @@ Quick start for `Lite`: `docs/ops/automation/LITE_QUICKSTART.md`.
 - `## Must-Land Checklist` inside each plan is the executable completion contract; broader vision belongs in `## Deferred Follow-Ons`, not in completion gating.
 - `Delivery-Class` and `Execution-Scope` make plan intent explicit. The harness does not infer executable meaning from titles such as `phase`, `portfolio`, or `blueprint`.
 - `Execution-Scope: program` plans stay active as non-executable parent contracts. `Execution-Scope: slice` plans are the only plans that enter worker/reviewer/validation lanes directly.
-- Program parents that want automatic child generation must declare `## Child Slice Definitions`; orchestration/compiler materializes those child slices before promotion and queue selection.
+- Future and active program parents must declare `Authoring-Intent`.
+- Program parents with `Authoring-Intent: executable-default` must declare `## Child Slice Definitions`; orchestration/compiler materializes those child slices before promotion and queue selection.
+- Program parents with `Authoring-Intent: blueprint-only` are explicit draft-only blueprints and must not promote or compile.
 - Compiled child slices must declare `Validation-Lanes` and include `## Validation Contract` so proof references bind to configured validation IDs instead of free-form command text.
 - Legacy program parents that still use `## Remaining Execution Slices` or `## Portfolio Units` must be migrated to `## Child Slice Definitions` before automatic child compilation is allowed; use `node ./scripts/automation/migrate-program-children.mjs --plan-file <path>` for a dry-run preview.
+- If a broad executable parent still lacks a safe child graph, use `npm run plans:scaffold-children -- --plan-file <path>` to generate review-required draft child definitions instead of leaving the parent childless.
 - Product slices must declare `Implementation-Targets`; those roots are the authoritative implementation evidence boundary. Worker sessions must not edit source/tests/config files outside those roots without first updating plan scope. `Spec-Targets` remain the broader impact list.
 - Future blueprints and active program parents must also include `## Prior Completed Plan Reconciliation` so overlapping completed plans are explicitly preserved, refactored, superseded, marked obsolete, or reopened.
 
@@ -82,6 +85,7 @@ Use the manual path when any of these are true:
 - `node ./scripts/automation/orchestrator.mjs audit --json true`
 - `node ./scripts/automation/orchestrator.mjs curate-evidence [--scope active|completed|all] [--plan-id <value>]`
 - `node ./scripts/automation/compile-program-children.mjs --write true [--plan-id <value>]`
+- `node ./scripts/automation/scaffold-program-children.mjs --plan-file <path> [--write true]`
 - `node ./scripts/automation/migrate-program-children.mjs --plan-file <path> [--write true]`
 - Optional continuation controls:
   - `--max-sessions-per-plan <n>` (default `12`)

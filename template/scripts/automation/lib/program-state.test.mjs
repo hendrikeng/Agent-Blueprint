@@ -46,6 +46,14 @@ test('deriveProgramStates summarizes child progress and closeout blockers', () =
   };
 
   const states = deriveProgramStates(catalog, {
+    parentOutcomesByParent: new Map([
+      ['parent-program', {
+        planId: 'parent-program',
+        status: 'blocked-missing-child-definitions',
+        reason: 'Program parent cannot run because no child definitions exist.',
+        authoringIntent: 'executable-default'
+      }]
+    ]),
     derivedAt: '2026-03-16T10:00:00.000Z'
   });
 
@@ -55,6 +63,7 @@ test('deriveProgramStates summarizes child progress and closeout blockers', () =
   assert.equal(states['parent-program'].percentComplete, 50);
   assert.equal(states['parent-program'].closeoutEligible, false);
   assert.match(states['parent-program'].closeoutBlockedReasons[0], /Incomplete child slices remain/);
+  assert.equal(states['parent-program'].authoringIntent, 'executable-default');
   assert.equal(states['parent-program'].lastDerivedAt, '2026-03-16T10:00:00.000Z');
 });
 
@@ -91,7 +100,16 @@ test('deriveProgramStates marks active program closeout eligible when all childr
     ]
   };
 
-  const states = deriveProgramStates(catalog);
+  const states = deriveProgramStates(catalog, {
+    parentOutcomesByParent: new Map([
+      ['parent-program', {
+        planId: 'parent-program',
+        status: 'compiled-current',
+        reason: 'Compiled child plans are current.',
+        authoringIntent: 'executable-default'
+      }]
+    ])
+  });
 
   assert.equal(states['parent-program'].completedChildren, 2);
   assert.equal(states['parent-program'].closeoutEligible, true);

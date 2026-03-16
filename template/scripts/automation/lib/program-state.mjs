@@ -69,6 +69,9 @@ export function deriveProgramStates(catalog, options = {}) {
   const compilationIssuesByParent = options.compilationIssuesByParent instanceof Map
     ? options.compilationIssuesByParent
     : new Map();
+  const parentOutcomesByParent = options.parentOutcomesByParent instanceof Map
+    ? options.parentOutcomesByParent
+    : new Map();
   const byId = new Map(allPlans.map((plan) => [plan.planId, plan]));
   const childrenByParent = new Map();
 
@@ -94,6 +97,7 @@ export function deriveProgramStates(catalog, options = {}) {
     const unresolvedDependencies = new Set();
     const childStatuses = [];
     const compilationIssues = compilationIssuesByParent.get(parent.planId) ?? [];
+    const parentOutcome = parentOutcomesByParent.get(parent.planId) ?? null;
 
     for (const child of children) {
       const childStatus = classifyChildStatus(child);
@@ -137,6 +141,18 @@ export function deriveProgramStates(catalog, options = {}) {
     if (!isReconciliationReady) {
       closeoutBlockedReasons.push('Prior completed plan reconciliation is missing or unresolved.');
     }
+    if (parentOutcome?.status === 'blocked-missing-child-definitions') {
+      closeoutBlockedReasons.push('Program parent cannot run because no child definitions exist.');
+    }
+    if (parentOutcome?.status === 'blocked-legacy-headings') {
+      closeoutBlockedReasons.push('Legacy headings block structured child compilation.');
+    }
+    if (parentOutcome?.status === 'blocked-draft-scaffold') {
+      closeoutBlockedReasons.push('Draft child scaffold still requires review.');
+    }
+    if (parentOutcome?.status === 'skipped-blueprint-only') {
+      closeoutBlockedReasons.push('Program parent is intentionally blueprint-only.');
+    }
     if (compilationIssues.length > 0) {
       closeoutBlockedReasons.push(
         `Compiled child plans are stale or invalid: ${compilationIssues.map((issue) => issue.code).join(', ')}`
@@ -153,6 +169,9 @@ export function deriveProgramStates(catalog, options = {}) {
       phase: parent.phase,
       status: parent.status,
       rel: parent.rel,
+      authoringIntent: parentOutcome?.authoringIntent ?? '',
+      authoringStatus: parentOutcome?.status ?? '',
+      authoringReason: parentOutcome?.reason ?? '',
       totalChildren,
       completedChildren,
       futureChildren: counts.future,

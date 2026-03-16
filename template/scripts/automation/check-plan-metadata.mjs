@@ -21,6 +21,7 @@ import {
   listMarkdownFiles,
   metadataValue,
   parseCapabilityProofMap,
+  parseAuthoringIntent,
   parseMustLandChecklist,
   parseDeliveryClass,
   parseExecutionScope,
@@ -496,6 +497,8 @@ async function scanPhase(phase, directoryPath) {
     const deliveryClass = parseDeliveryClass(deliveryClassRaw, '');
     const executionScopeRaw = metadataValue(metadata, 'Execution-Scope');
     const executionScope = parseExecutionScope(executionScopeRaw, '');
+    const authoringIntentRaw = metadataValue(metadata, 'Authoring-Intent');
+    const authoringIntent = parseAuthoringIntent(authoringIntentRaw, '');
     const parentPlanIdRaw = metadataValue(metadata, 'Parent-Plan-ID');
     const parentPlanId = parentPlanIdRaw ? parsePlanId(parentPlanIdRaw, null) : null;
     const implementationTargetsRaw = parseListField(metadataValue(metadata, 'Implementation-Targets'));
@@ -624,6 +627,22 @@ async function scanPhase(phase, directoryPath) {
       addFinding(
         'MISSING_EXECUTION_SCOPE',
         "Missing metadata field 'Execution-Scope'",
+        rel
+      );
+    }
+
+    if (authoringIntentRaw && !authoringIntent) {
+      addFinding(
+        'INVALID_AUTHORING_INTENT',
+        `Invalid Authoring-Intent '${authoringIntentRaw}' (expected: executable-default|blueprint-only)`,
+        rel
+      );
+    }
+
+    if (authoringIntentRaw && (phase === 'completed' || executionScope !== 'program')) {
+      addFinding(
+        'UNEXPECTED_AUTHORING_INTENT',
+        "Only future/active program parents may declare 'Authoring-Intent'.",
         rel
       );
     }

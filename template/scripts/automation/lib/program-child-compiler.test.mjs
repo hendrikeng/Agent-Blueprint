@@ -81,6 +81,7 @@ Validation-Ready: no
 - Acceptance-Criteria: Complete the child queue.
 - Delivery-Class: product
 - Execution-Scope: program
+- Authoring-Intent: executable-default
 - Dependencies: none
 - Autonomy-Allowed: guarded
 - Risk-Tier: medium
@@ -146,6 +147,7 @@ Validation-Ready: no
   const writeResult = await compileProgramChildren(rootDir, { write: true });
   assert.equal(writeResult.issues.length, 0);
   assert.equal(writeResult.writes.length, 1);
+  assert.equal(writeResult.parentOutcomes[0]?.status, 'compiled-written');
 
   const childPath = path.join(rootDir, 'docs', 'future', writeResult.writes[0].filePath.split('/').pop());
   const childContent = await fs.readFile(childPath, 'utf8');
@@ -160,9 +162,10 @@ Validation-Ready: no
   await fs.writeFile(parentPath, (await fs.readFile(parentPath, 'utf8')).replace('Child Slice One', 'Child Slice One Updated'), 'utf8');
   const checkResult = await compileProgramChildren(rootDir, { write: false });
   assert.equal(checkResult.issues.some((issue) => issue.code === 'STALE_COMPILED_CHILD_PLAN'), true);
+  assert.equal(checkResult.parentOutcomes[0]?.status, 'blocked-generated-child-drift');
 });
 
-test('compileProgramChildren warns on legacy heading-only parent schemas', async () => {
+test('compileProgramChildren fails on legacy heading-only parent schemas', async () => {
   const rootDir = await createHarnessFixture();
   await fs.writeFile(path.join(rootDir, 'docs', 'future', '2026-03-15-parent-program.md'), `# Parent Program
 
@@ -178,6 +181,7 @@ Validation-Ready: no
 - Acceptance-Criteria: Complete the child queue.
 - Delivery-Class: product
 - Execution-Scope: program
+- Authoring-Intent: executable-default
 - Dependencies: none
 - Spec-Targets: docs/spec.md
 - Done-Evidence: pending
@@ -214,6 +218,58 @@ Validation-Ready: no
 `, 'utf8');
 
   const result = await compileProgramChildren(rootDir, { write: false });
-  assert.equal(result.issues.length, 0);
-  assert.equal(result.advisories.some((entry) => entry.code === 'LEGACY_PROGRAM_CHILD_SCHEMA'), true);
+  assert.equal(result.issues.some((entry) => entry.code === 'LEGACY_PROGRAM_CHILD_SCHEMA'), true);
+  assert.equal(result.parentOutcomes[0]?.status, 'blocked-legacy-headings');
+});
+
+test('compileProgramChildren fails when a program parent omits Authoring-Intent and child definitions', async () => {
+  const rootDir = await createHarnessFixture();
+  await fs.writeFile(path.join(rootDir, 'docs', 'future', '2026-03-15-parent-program.md'), `# Parent Program
+
+Status: draft
+Validation-Ready: no
+
+## Metadata
+
+- Plan-ID: parent-program
+- Status: draft
+- Priority: p1
+- Owner: planner
+- Acceptance-Criteria: Complete the child queue.
+- Delivery-Class: product
+- Execution-Scope: program
+- Dependencies: none
+- Spec-Targets: docs/spec.md
+- Done-Evidence: pending
+
+## Already-True Baseline
+
+- Parent baseline.
+
+## Must-Land Checklist
+
+- [ ] Keep the parent active while children execute.
+
+## Deferred Follow-Ons
+
+- Later.
+
+## Master Plan Coverage
+
+| Capability | Current Status | This Plan | Later |
+| --- | --- | --- | --- |
+| Parent queue | foundation only | yes | no |
+
+## Prior Completed Plan Reconciliation
+
+- None.
+
+## Promotion Blockers
+
+- None.
+`, 'utf8');
+
+  const result = await compileProgramChildren(rootDir, { write: false });
+  assert.equal(result.issues.some((entry) => entry.code === 'MISSING_AUTHORING_INTENT'), true);
+  assert.equal(result.parentOutcomes[0]?.status, 'blocked-missing-authoring-intent');
 });

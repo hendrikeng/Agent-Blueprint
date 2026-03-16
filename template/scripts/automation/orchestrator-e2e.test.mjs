@@ -82,6 +82,7 @@ Validation-Ready: no
 - Acceptance-Criteria: Close the child graph and parent contract.
 - Delivery-Class: product
 - Execution-Scope: program
+- Authoring-Intent: executable-default
 - Dependencies: none
 - Autonomy-Allowed: guarded
 - Risk-Tier: medium

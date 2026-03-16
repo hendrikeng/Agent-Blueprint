@@ -34,6 +34,9 @@ If instructions conflict, this file is the behavioral priority entrypoint.
 - If a user asks for planning-only work (for example: "plan", "outline", "prepare for promotion", "no implementation yet"), do not modify source or test files.
 - For planning-only requests, work in `docs/future/`, keep metadata complete, and set `Status: ready-for-promotion` when the plan is decision-complete.
 - Planning outputs must separate `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` so executable scope is explicit before promotion.
+- Future authoring must be executable by default: concrete asks become `Execution-Scope: slice`; broad asks become `Execution-Scope: program` plus `Authoring-Intent: executable-default` and `## Child Slice Definitions`.
+- If a broad future cannot be decomposed safely yet, scaffold draft child definitions with `npm run plans:scaffold-children -- --plan-file <path>` instead of leaving a dead parent blueprint.
+- Only use `Authoring-Intent: blueprint-only` when the user explicitly asked for a blueprint-only artifact.
 - Start implementation only when the user explicitly asks to implement or promote/execute the plan.
 
 ## Core Map

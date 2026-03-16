@@ -8500,14 +8500,16 @@ async function collectPlanCatalog(paths) {
   };
 }
 
-function deriveProgramStateSnapshot(catalog, compilationIssuesByParent = new Map()) {
+function deriveProgramStateSnapshot(catalog, compilationIssuesByParent = new Map(), parentOutcomesByParent = new Map()) {
   return deriveProgramStates(catalog, {
-    compilationIssuesByParent
+    compilationIssuesByParent,
+    parentOutcomesByParent
   });
 }
 
-async function collectProgramCompilationIssues(paths, catalog) {
+async function collectProgramCompilationState(paths, catalog) {
   const issuesByParent = new Map();
+  const parentOutcomesByParent = new Map();
   for (const parent of [...(catalog.active ?? []), ...(catalog.future ?? [])]) {
     if (!isProgramPlan(parent)) {
       continue;
@@ -8520,14 +8522,41 @@ async function collectProgramCompilationIssues(paths, catalog) {
     if (compileCheck.issues.length > 0) {
       issuesByParent.set(parent.planId, compileCheck.issues);
     }
+    const outcome = compileCheck.parentOutcomes.find((entry) => entry.planId === parent.planId);
+    if (outcome) {
+      parentOutcomesByParent.set(parent.planId, outcome);
+    }
   }
-  return issuesByParent;
+  return {
+    issuesByParent,
+    parentOutcomesByParent
+  };
 }
 
 async function refreshProgramState(paths, state, catalog) {
-  const compilationIssuesByParent = await collectProgramCompilationIssues(paths, catalog);
-  state.programState = deriveProgramStateSnapshot(catalog, compilationIssuesByParent);
+  const compilationState = await collectProgramCompilationState(paths, catalog);
+  state.programState = deriveProgramStateSnapshot(
+    catalog,
+    compilationState.issuesByParent,
+    compilationState.parentOutcomesByParent
+  );
   return state.programState;
+}
+
+function programOutcomeRecord(parent, outcome) {
+  return {
+    planId: parent.planId,
+    rel: parent.rel,
+    phase: parent.phase,
+    status: outcome.status,
+    reason: outcome.reason,
+    authoringIntent: outcome.authoringIntent || 'missing',
+    childDefinitionCount: outcome.childDefinitionCount ?? 0
+  };
+}
+
+function outcomeIsAuthoringReady(outcome) {
+  return ['compiled-current', 'compiled-written', 'blocked-generated-child-drift'].includes(outcome.status);
 }
 
 async function closeEligibleProgramParents(paths, state, options, config, catalog) {
@@ -9839,11 +9868,31 @@ async function auditCommand(paths, options) {
 
   try {
     const catalog = await collectPlanCatalog(paths);
-    const compilationIssuesByParent = await collectProgramCompilationIssues(paths, catalog);
-    payload.programStatuses = Object.values(deriveProgramStateSnapshot(catalog, compilationIssuesByParent))
+    const compilationState = await collectProgramCompilationState(paths, catalog);
+    payload.programStatuses = Object.values(
+      deriveProgramStateSnapshot(catalog, compilationState.issuesByParent, compilationState.parentOutcomesByParent)
+    )
       .sort((a, b) => a.planId.localeCompare(b.planId));
+
+    const outcomeEntries = [...(catalog.future ?? []), ...(catalog.active ?? [])]
+      .filter((plan) => isProgramPlan(plan))
+      .map((plan) => {
+        const outcome = compilationState.parentOutcomesByParent.get(plan.planId);
+        return outcome ? programOutcomeRecord(plan, outcome) : null;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.planId.localeCompare(b.planId));
+
+    payload.nonExecutablePrograms = outcomeEntries.filter((entry) => !outcomeIsAuthoringReady(entry) && entry.status !== 'compiled-written');
+    payload.missingChildDefinitions = outcomeEntries.filter((entry) => entry.status === 'blocked-missing-child-definitions');
+    payload.legacyProgramParents = outcomeEntries.filter((entry) => entry.status === 'blocked-legacy-headings');
+    payload.programParentsReadyForCompilation = outcomeEntries.filter((entry) => outcomeIsAuthoringReady(entry));
   } catch {
     payload.programStatuses = [];
+    payload.nonExecutablePrograms = [];
+    payload.missingChildDefinitions = [];
+    payload.legacyProgramParents = [];
+    payload.programParentsReadyForCompilation = [];
   }
 
   if (asBoolean(options.json, false)) {
@@ -9873,6 +9922,18 @@ async function auditCommand(paths, options) {
       console.log(
         `  - ${status.planId}: ${status.summary}; closeoutEligible=${status.closeoutEligible ? 'yes' : 'no'}${blocked}`
       );
+    }
+  }
+  if (Array.isArray(payload.nonExecutablePrograms) && payload.nonExecutablePrograms.length > 0) {
+    console.log('- non-executable program parents:');
+    for (const status of payload.nonExecutablePrograms) {
+      console.log(`  - ${status.planId}: ${status.reason}`);
+    }
+  }
+  if (Array.isArray(payload.programParentsReadyForCompilation) && payload.programParentsReadyForCompilation.length > 0) {
+    console.log('- program parents ready for compilation:');
+    for (const status of payload.programParentsReadyForCompilation) {
+      console.log(`  - ${status.planId}: ${status.reason}`);
     }
   }
 }

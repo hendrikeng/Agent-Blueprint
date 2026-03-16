@@ -115,6 +115,7 @@ flowchart TD
 | Command | Use When |
 | --- | --- |
 | `npm run plans:verify` | You want a fast plan-state check only. |
+| `npm run plans:scaffold-children -- --plan-file <path>` | A broad future needs reviewable child definitions instead of a dead program parent. |
 | `npm run verify:fast` | You want standard local preflight before grind/resume/commit. |
 | `npm run verify:full` | You are preparing merge-level validation. |
 | `npm run automation:run:grind` | You want supervised low-risk grind until queue is stable/drained. |
@@ -126,6 +127,7 @@ flowchart TD
 
 Future blueprint promotion rule:
 - Before setting `Status: ready-for-promotion`, add `## Master Plan Coverage` or `## Capability Coverage Matrix`, add `## Prior Completed Plan Reconciliation`, add `## Promotion Blockers`, and run `npm run plans:verify`.
+- Broad `Execution-Scope: program` futures must also declare `Authoring-Intent`; use `executable-default` plus `## Child Slice Definitions` by default, and reserve `blueprint-only` for explicit blueprint-only requests.
 
 For full command contracts, flags, and policy behavior, use `template/docs/ops/automation/README.md`.
 
@@ -185,6 +187,10 @@ Help me decide and lock:
 3) core invariants and non-negotiables,
 4) first implementation slices and acceptance criteria,
 5) initial futures backlog with dependencies/risk tiers.
+When you propose future plans, default to executable shapes:
+- concrete work -> `Execution-Scope: slice`
+- broad work -> `Execution-Scope: program` with `Authoring-Intent: executable-default` plus `## Child Slice Definitions`
+- only use `Authoring-Intent: blueprint-only` if I explicitly ask for a blueprint-only artifact
 Output a decision-complete implementation plan I can approve.
 ```
 

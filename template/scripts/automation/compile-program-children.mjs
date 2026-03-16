@@ -56,6 +56,15 @@ async function main() {
     }
   }
 
+  if (result.parentOutcomes.length > 0) {
+    console.log('[plans-compile] parent outcomes:');
+    for (const outcome of result.parentOutcomes) {
+      console.log(
+        `- ${outcome.planId}: ${outcome.status} (${outcome.reason}) [children=${outcome.childDefinitionCount} intent=${outcome.authoringIntent || 'missing'}]`
+      );
+    }
+  }
+
   if (result.issues.length > 0) {
     console.error(`[plans-compile] failed (${result.issues.length} issue(s)).`);
     for (const issue of result.issues) {

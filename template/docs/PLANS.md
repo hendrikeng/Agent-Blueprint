@@ -54,7 +54,9 @@ When the user asks for planning only (no implementation yet):
 4. Add `## Master Plan Coverage` or `## Capability Coverage Matrix` so nothing from upstream strategy is silently omitted.
 5. Add `## Prior Completed Plan Reconciliation` so overlapping completed plans are classified as preserved, refactored, superseded, obsolete, or reopened.
 6. Add `## Promotion Blockers` so the remaining gates to safe promotion are explicit.
-7. Set `Status: ready-for-promotion` when the plan is implementation-ready.
+7. For future `Execution-Scope: program`, declare `Authoring-Intent`.
+8. Broad executable futures must include `## Child Slice Definitions`; if safe decomposition is not ready yet, scaffold draft child definitions with `npm run plans:scaffold-children -- --plan-file <path>` instead of leaving a childless parent.
+9. Set `Status: ready-for-promotion` when the plan is implementation-ready.
 
 This also applies when the agent/session is explicitly set to plan mode: default to `docs/future` planning outputs until implementation is explicitly requested.
 
