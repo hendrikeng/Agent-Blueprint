@@ -144,6 +144,9 @@ const STAGE_TRANSITIONS = {
     session_started: { to: STAGE_STATES.RUNNING, code: 'stage.started' },
     session_continued: { to: STAGE_STATES.RUNNING, code: 'stage.continued' },
     session_pending: { to: STAGE_STATES.PENDING, code: 'stage.pending' },
+    session_pending_no_touch_retry: { to: STAGE_STATES.PENDING, code: 'stage.retry' },
+    session_pending_fail_fast: { to: STAGE_STATES.PENDING, code: 'stage.pending-fail-fast' },
+    session_pending_streak_fail_fast: { to: STAGE_STATES.PENDING, code: 'stage.pending-fail-fast' },
     session_handoff_required: { to: STAGE_STATES.HANDOFF_REQUIRED, code: 'stage.handoff-required' },
     session_blocked: { to: STAGE_STATES.BLOCKED, code: 'stage.blocked' },
     session_failed: { to: STAGE_STATES.FAILED, code: 'stage.failed' },
@@ -301,11 +304,11 @@ export function inferOrchestrationTransition(type, details = {}) {
       }
       return null;
     case 'session_pending_no_touch_retry':
-      return { stageEvent: 'session_pending_no_touch_retry' };
+      return { planEvent: 'plan_pending', stageEvent: 'session_pending_no_touch_retry' };
     case 'session_pending_fail_fast':
-      return { stageEvent: 'session_pending_fail_fast' };
+      return { planEvent: 'plan_pending', stageEvent: 'session_pending_fail_fast' };
     case 'session_pending_streak_fail_fast':
-      return { stageEvent: 'session_pending_streak_fail_fast' };
+      return { planEvent: 'plan_pending', stageEvent: 'session_pending_streak_fail_fast' };
     case 'session_continued':
       return { planEvent: 'session_continued', stageEvent: 'session_continued' };
     case 'role_stage_advanced':

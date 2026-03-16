@@ -66,6 +66,55 @@ test('applyOrchestrationTransition tracks pending restart flow', () => {
   assert.equal(state.currentRole, 'planner');
 });
 
+test('applyOrchestrationTransition tolerates worker no-touch retry annotations while running', () => {
+  let state = createOrchestrationState('plan-a');
+  state = applyOrchestrationTransition(state, 'session_started', {
+    planId: 'plan-a',
+    role: 'worker',
+    stageIndex: 1,
+    stageTotal: 1
+  });
+  state = applyOrchestrationTransition(state, 'session_pending_no_touch_retry', {
+    planId: 'plan-a',
+    role: 'worker',
+    nextRole: 'worker',
+    stageIndex: 1,
+    stageTotal: 1
+  });
+
+  assert.equal(state.planState, PLAN_STATES.PENDING);
+  assert.equal(state.stageState, STAGE_STATES.PENDING);
+  assert.equal(state.lastTransitionCode, 'stage.retry');
+});
+
+test('applyOrchestrationTransition keeps pending fail-fast annotations idempotent', () => {
+  let state = createOrchestrationState('plan-a');
+  state = applyOrchestrationTransition(state, 'session_started', {
+    planId: 'plan-a',
+    role: 'worker',
+    stageIndex: 1,
+    stageTotal: 1
+  });
+  state = applyOrchestrationTransition(state, 'session_pending_fail_fast', {
+    planId: 'plan-a',
+    role: 'worker',
+    nextRole: 'worker',
+    stageIndex: 1,
+    stageTotal: 1
+  });
+  state = applyOrchestrationTransition(state, 'session_pending_streak_fail_fast', {
+    planId: 'plan-a',
+    role: 'worker',
+    nextRole: 'worker',
+    stageIndex: 1,
+    stageTotal: 1
+  });
+
+  assert.equal(state.planState, PLAN_STATES.PENDING);
+  assert.equal(state.stageState, STAGE_STATES.PENDING);
+  assert.equal(state.lastTransitionCode, 'stage.pending-fail-fast');
+});
+
 test('inferOrchestrationTransition maps session_finished status variants', () => {
   assert.deepEqual(inferOrchestrationTransition('session_finished', { status: 'pending' }), {
     planEvent: 'session_pending',
@@ -76,6 +125,10 @@ test('inferOrchestrationTransition maps session_finished status variants', () =>
     stageEvent: 'session_handoff_required'
   });
   assert.equal(inferOrchestrationTransition('session_finished', { status: 'completed' }), null);
+  assert.deepEqual(inferOrchestrationTransition('session_pending_no_touch_retry', {}), {
+    planEvent: 'plan_pending',
+    stageEvent: 'session_pending_no_touch_retry'
+  });
 });
 
 test('replayOrchestrationTransitions rebuilds the latest state summary', () => {
