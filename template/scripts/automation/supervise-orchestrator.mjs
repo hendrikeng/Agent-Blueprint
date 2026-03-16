@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -38,6 +39,10 @@ const guardedWorkerPendingStreakLimit = Number.parseInt(
   process.env.ORCH_SUPERVISOR_WORKER_PENDING_STREAK_LIMIT ?? '6',
   10
 );
+const blockerStreakLimit = Number.parseInt(
+  process.env.ORCH_SUPERVISOR_BLOCKER_STREAK_LIMIT ?? String(stableLimit),
+  10
+);
 
 const rootDir = process.cwd();
 const runStatePath = path.join(rootDir, 'docs/ops/automation/run-state.json');
@@ -55,6 +60,9 @@ const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
 let stableCycles = 0;
 let consecutiveErrors = 0;
 let previousSignature = '';
+let repeatedBlockerCycles = 0;
+let previousBlockerFingerprint = '';
+let previousRepoFingerprint = '';
 let dirtyRecoveryMode = false;
 
 function normalizePathValue(value) {
@@ -238,6 +246,83 @@ function worktreeHasNonTransientChanges() {
     .some((entry) => !isTransientAutomationPath(entry));
 }
 
+function nonTransientRepoFingerprint() {
+  const buckets = [
+    listRepoPaths(['diff', '--name-only', '-z']),
+    listRepoPaths(['diff', '--cached', '--name-only', '-z']),
+    listRepoPaths(['ls-files', '--others', '--exclude-standard', '-z'])
+  ];
+  if (buckets.some((bucket) => bucket == null)) {
+    return 'unknown';
+  }
+
+  const entries = [...new Set(
+    buckets
+      .flat()
+      .filter((entry) => !isTransientAutomationPath(entry))
+      .filter((entry) => !normalizePathValue(entry).startsWith('docs/exec-plans/'))
+  )].sort((left, right) => left.localeCompare(right));
+
+  if (entries.length === 0) {
+    return 'clean';
+  }
+
+  const hash = createHash('sha1');
+  for (const relPath of entries) {
+    hash.update(relPath);
+    const absPath = path.join(rootDir, relPath);
+    if (!existsSync(absPath)) {
+      hash.update('missing');
+      continue;
+    }
+    try {
+      hash.update(readFileSync(absPath));
+    } catch {
+      hash.update('unreadable');
+    }
+  }
+
+  return `${entries.length}:${hash.digest('hex').slice(0, 16)}`;
+}
+
+function residualValidationBlockerEntries(state, activePlans) {
+  const validationState = state?.validationState && typeof state.validationState === 'object'
+    ? state.validationState
+    : {};
+  return activePlans
+    .map((plan) => {
+      const validation = validationState[plan.planId];
+      if (!validation || typeof validation !== 'object') {
+        return null;
+      }
+      const always = String(validation.always ?? '').trim().toLowerCase();
+      const host = String(validation.host ?? '').trim().toLowerCase();
+      const reason = String(validation.reason ?? '').trim();
+      if (!reason) {
+        return null;
+      }
+      const hasResidualBlocker =
+        always === 'pending' ||
+        host === 'pending' ||
+        always === 'failed' ||
+        host === 'failed';
+      if (!hasResidualBlocker) {
+        return null;
+      }
+      return `${plan.planId}:${always || 'none'}:${host || 'none'}:${String(validation.provider ?? 'none').trim()}:${reason.toLowerCase()}`;
+    })
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function residualValidationBlockerFingerprint(state, activePlans) {
+  const entries = residualValidationBlockerEntries(state, activePlans);
+  if (entries.length === 0) {
+    return '';
+  }
+  return createHash('sha1').update(entries.join('\n')).digest('hex').slice(0, 16);
+}
+
 function eventContainsAtomicDeadlockText(event) {
   const haystack = `${event?.type ?? ''} ${JSON.stringify(event?.details ?? {})}`.toLowerCase();
   return (
@@ -407,6 +492,31 @@ function main() {
         '[supervisor] stopping auto-resume to protect token budget: detected repeated pending/session-budget ' +
         'exhaustion in this run. Narrow to one implementation slice, then resume manually with ' +
         '--max-plans 1 --allow-dirty true --commit false.'
+      );
+      process.exit(2);
+    }
+
+    const blockerEntries = residualValidationBlockerEntries(state, activePlans);
+    const blockerFingerprint = blockerEntries.length > 0
+      ? residualValidationBlockerFingerprint(state, activePlans)
+      : '';
+    const repoFingerprint = nonTransientRepoFingerprint();
+    if (
+      blockerFingerprint &&
+      blockerFingerprint === previousBlockerFingerprint &&
+      repoFingerprint === previousRepoFingerprint
+    ) {
+      repeatedBlockerCycles += 1;
+    } else {
+      repeatedBlockerCycles = 0;
+    }
+    previousBlockerFingerprint = blockerFingerprint;
+    previousRepoFingerprint = repoFingerprint;
+
+    if (blockerFingerprint && repeatedBlockerCycles >= blockerStreakLimit) {
+      console.error(
+        `[supervisor] repeated residual validation blocker for ${repeatedBlockerCycles + 1} consecutive cycles ` +
+        `without meaningful repo progress. Stopping for manual review. blockers=${blockerEntries.slice(0, 2).join(' | ')}`
       );
       process.exit(2);
     }

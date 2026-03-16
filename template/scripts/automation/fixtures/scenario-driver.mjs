@@ -7,7 +7,10 @@ import {
   upsertSection
 } from '../lib/plan-document-state.mjs';
 
-const SCENARIO_PATH = path.join('docs', 'ops', 'automation', 'runtime', 'fixture-scenario.json');
+const SCENARIO_PATHS = [
+  path.join('docs', 'ops', 'automation', 'runtime', 'fixture-scenario.json'),
+  path.join('docs', 'ops', 'automation', 'fixture-scenario.json')
+];
 const STATE_PATH = path.join('docs', 'ops', 'automation', 'runtime', 'fixture-driver-state.json');
 
 async function readJsonIfExists(filePath, fallback) {
@@ -24,9 +27,17 @@ async function writeJson(filePath, value) {
 }
 
 export async function nextScenarioStep(rootDir, group, key, fallback = {}) {
-  const scenarioPath = path.join(rootDir, SCENARIO_PATH);
   const statePath = path.join(rootDir, STATE_PATH);
-  const scenario = await readJsonIfExists(scenarioPath, {});
+  let scenario = {};
+  for (const scenarioPath of SCENARIO_PATHS) {
+    scenario = await readJsonIfExists(path.join(rootDir, scenarioPath), null);
+    if (scenario && typeof scenario === 'object') {
+      break;
+    }
+  }
+  if (!scenario || typeof scenario !== 'object') {
+    scenario = {};
+  }
   const state = await readJsonIfExists(statePath, {});
   const groupState = state[group] && typeof state[group] === 'object' ? state[group] : {};
   const index = Number.isFinite(groupState[key]) ? groupState[key] : 0;

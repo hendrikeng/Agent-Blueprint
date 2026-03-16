@@ -225,7 +225,16 @@ export function documentStatusValue(content) {
 
 export function documentValidationReadyValue(content) {
   const metadata = parseMetadata(content);
-  const value = normalizeStatus(metadataValue(metadata, 'Validation-Ready'));
+  const metadataValueOrEmpty = normalizeStatus(metadataValue(metadata, 'Validation-Ready'));
+  if (
+    metadataValueOrEmpty === 'yes' ||
+    metadataValueOrEmpty === 'host-required-only' ||
+    metadataValueOrEmpty === 'no'
+  ) {
+    return metadataValueOrEmpty;
+  }
+  const match = content.match(/^Validation-Ready:\s*(.+)$/m);
+  const value = normalizeStatus(match?.[1] ?? '');
   if (value === 'yes' || value === 'host-required-only' || value === 'no') {
     return value;
   }

@@ -43,3 +43,20 @@ test('completionGateReadyForValidation requires explicit validation-ready for va
   assert.equal(completionGateReadyForValidation('validation', ''), false);
   assert.equal(completionGateReadyForValidation('in-progress', 'yes'), false);
 });
+
+test('documentValidationReadyValue falls back to top-level fields when metadata is absent', () => {
+  const content = [
+    '# Example Plan',
+    '',
+    'Status: validation',
+    'Validation-Ready: yes',
+    '',
+    '## Metadata',
+    '',
+    '- Plan-ID: example-plan',
+    '- Status: validation',
+    ''
+  ].join('\n');
+
+  assert.equal(documentValidationReadyValue(content), 'yes');
+});

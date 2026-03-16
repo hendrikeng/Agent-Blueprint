@@ -6,6 +6,7 @@ import {
   inferPlanId,
   listMarkdownFiles,
   metadataValue,
+  parseMustLandChecklist,
   parseDeliveryClass,
   parseExecutionScope,
   parseListField,
@@ -208,8 +209,16 @@ function validationContractLines(lanes, validationIds) {
 
 function preserveExistingState(content, fallbackStatus) {
   const metadata = parseMetadata(content ?? '');
-  const status = String(metadataValue(metadata, 'Status') ?? '').trim().toLowerCase() || String(fallbackStatus ?? '').trim();
-  const validationReady = String(metadataValue(metadata, 'Validation-Ready') ?? '').trim().toLowerCase() || 'no';
+  const topLevelStatus = String(content ?? '').match(/^Status:\s*(.+)$/m)?.[1] ?? '';
+  const topLevelValidationReady = String(content ?? '').match(/^Validation-Ready:\s*(.+)$/m)?.[1] ?? '';
+  const status =
+    String(metadataValue(metadata, 'Status') ?? '').trim().toLowerCase() ||
+    String(topLevelStatus).trim().toLowerCase() ||
+    String(fallbackStatus ?? '').trim();
+  const validationReady =
+    String(metadataValue(metadata, 'Validation-Ready') ?? '').trim().toLowerCase() ||
+    String(topLevelValidationReady).trim().toLowerCase() ||
+    'no';
   const doneEvidence = parseListField(metadataValue(metadata, 'Done-Evidence'));
   const start = content.indexOf(GENERATED_START);
   const end = start === -1 ? -1 : content.indexOf(GENERATED_END, start);
@@ -239,6 +248,17 @@ function preserveExistingState(content, fallbackStatus) {
     status: status || fallbackStatus,
     validationReady: validationReady === 'yes' || validationReady === 'host-required-only' ? validationReady : 'no',
     doneEvidence,
+    completedMustLandIds: new Set(
+      parseMustLandChecklist(content ?? '')
+        .filter((entry) => entry.checked && entry.id)
+        .map((entry) => entry.id)
+    ),
+    completedMustLandTexts: new Set(
+      parseMustLandChecklist(content ?? '')
+        .filter((entry) => entry.checked && !entry.id)
+        .map((entry) => String(entry.text ?? '').trim().toLowerCase())
+        .filter(Boolean)
+    ),
     tail: tail || `## Planner Overlay\n\n${DEFAULT_PLANNER_OVERLAY}`
   };
 }
@@ -248,6 +268,8 @@ function alignPreservedStateForPhase(parent, existing, preserved) {
     status: preserved.status,
     validationReady: preserved.validationReady,
     doneEvidence: [...(preserved.doneEvidence ?? [])],
+    completedMustLandIds: new Set(preserved.completedMustLandIds ?? []),
+    completedMustLandTexts: new Set(preserved.completedMustLandTexts ?? []),
     tail: preserved.tail
   };
 
@@ -260,6 +282,39 @@ function alignPreservedStateForPhase(parent, existing, preserved) {
   }
 
   return aligned;
+}
+
+function applyPreservedChecklistProgress(body, preserved) {
+  if (!body) {
+    return body;
+  }
+  const completedMustLandIds = preserved?.completedMustLandIds instanceof Set
+    ? preserved.completedMustLandIds
+    : new Set();
+  const completedMustLandTexts = preserved?.completedMustLandTexts instanceof Set
+    ? preserved.completedMustLandTexts
+    : new Set();
+
+  return String(body)
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^(\s*-\s+\[)([ xX])(\]\s+)(.*)$/);
+      if (!match) {
+        return line;
+      }
+      const remainder = String(match[4] ?? '').trim();
+      const idMatch = remainder.match(/^`([a-z0-9]+(?:-[a-z0-9]+)*)`\s+(.*)$/);
+      const mustLandId = idMatch ? idMatch[1] : '';
+      const mustLandText = String(idMatch ? idMatch[2] : remainder).trim().toLowerCase();
+      const shouldPreserveChecked =
+        (mustLandId && completedMustLandIds.has(mustLandId)) ||
+        (!mustLandId && mustLandText && completedMustLandTexts.has(mustLandText));
+      if (!shouldPreserveChecked) {
+        return line;
+      }
+      return `${match[1]}x${match[3]}${match[4]}`;
+    })
+    .join('\n');
 }
 
 function blockForHash(parent, definition, validationIds) {
@@ -322,7 +377,10 @@ function renderChildDocument(parent, definition, preserved, validationIds) {
     '',
     '## Must-Land Checklist',
     '',
-    definition.mustLandBody || '- [ ] Define generated must-land items in the parent child definition.',
+    applyPreservedChecklistProgress(
+      definition.mustLandBody || '- [ ] Define generated must-land items in the parent child definition.',
+      preserved
+    ),
     '',
     '## Deferred Follow-Ons',
     '',

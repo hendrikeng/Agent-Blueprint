@@ -64,6 +64,17 @@ async function configureFixtureRepo(rootDir, scenario) {
   );
 }
 
+async function updateFixtureConfig(rootDir, mutate) {
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  mutate(config);
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+}
+
+function todayDateStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function fullGraphScenario() {
   return {
     providerActions: {
@@ -393,6 +404,58 @@ test('supervised grind drains the full program queue and auto-closes the parent'
   assert.equal(runState.programState['parent-program'].percentComplete, 100);
 });
 
+test('active parent edits trigger child recompilation before validation', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orchestrator-parent-recompile-'));
+  const activeDate = todayDateStamp();
+  const updatedParent = programParentDocument({ includeChildB: false })
+    .replaceAll('ready-for-promotion', 'in-progress')
+    .replace('Child A', 'Child A Updated');
+  const scenario = {
+    providerActions: {
+      'child-a': {
+        planner: [{ status: 'completed', summary: 'Planner complete for child-a.' }],
+        worker: [{
+          status: 'completed',
+          summary: 'Child A implementation complete.',
+          writeFiles: [{ path: 'src/feature-a.js', content: 'export const featureA = "done";\n' }],
+          plan: {
+            checkMustLand: true,
+            status: 'in-progress'
+          }
+        }],
+        reviewer: [{
+          status: 'completed',
+          summary: 'Reviewer updated the active parent definition.',
+          plan: {
+            status: 'validation',
+            validationReady: 'yes',
+            validationEvidence: ['fixture child-a ready']
+          },
+          writeFiles: [{
+            path: `docs/exec-plans/active/${activeDate}-parent-program.md`,
+            content: updatedParent
+          }]
+        }]
+      }
+    }
+  };
+
+  await configureFixtureRepo(rootDir, scenario);
+  await writeFutureParent(rootDir, { includeChildB: false });
+  await initGitRepo(rootDir);
+
+  const result = run('node', orchestratorArgs('run', 1), rootDir, { ORCH_APPROVED_MEDIUM: '1' });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+
+  const completedChildPath = await findPlanFile(rootDir, 'completed', 'child-a');
+  assert.ok(completedChildPath, 'expected child-a completion after automatic recompilation');
+  const completedChildContent = await fs.readFile(completedChildPath, 'utf8');
+  assert.match(completedChildContent, /^# Child A Updated$/m);
+
+  const completedParentPath = await findPlanFile(rootDir, 'completed', 'parent-program');
+  assert.ok(completedParentPath, 'expected parent closeout after child recompilation');
+});
+
 test('host validation failure keeps parent incomplete and surfaces derived blockers', async () => {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orchestrator-host-fail-'));
   const scenario = {
@@ -435,6 +498,95 @@ test('host validation failure keeps parent incomplete and surfaces derived block
   const parentStatus = payload.programStatuses.find((entry) => entry.planId === 'parent-program');
   assert.ok(parentStatus.closeoutBlockedReasons.some((entry) => entry.includes('Incomplete child slices remain')));
   assert.ok(parentStatus.closeoutBlockedReasons.some((entry) => entry.includes('Failed child slices require retry or unblock')));
+});
+
+test('supervisor stops on repeated identical residual validation blockers without repo progress', async () => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), 'orchestrator-residual-blocker-'));
+  const scenario = {
+    providerActions: {
+      'child-a': {
+        planner: [{ status: 'completed', summary: 'Planner complete for child-a.' }],
+        worker: [{
+          status: 'completed',
+          summary: 'Child A implementation complete.',
+          writeFiles: [{ path: 'src/feature-a.js', content: 'export const featureA = "done";\n' }],
+          plan: {
+            checkMustLand: true,
+            status: 'validation',
+            validationReady: 'yes',
+            validationEvidence: ['fixture child-a ready']
+          }
+        }],
+        reviewer: [{ status: 'completed', summary: 'Reviewer complete for child-a.' }]
+      }
+    },
+    validation: {
+      'always:child-a': [
+        {
+          status: 'failed',
+          summary: 'External validation blocker persists.',
+          findingFiles: ['docs/generated/external-blocker.json']
+        },
+        {
+          status: 'failed',
+          summary: 'External validation blocker persists.',
+          findingFiles: ['docs/generated/external-blocker.json']
+        },
+        {
+          status: 'failed',
+          summary: 'External validation blocker persists.',
+          findingFiles: ['docs/generated/external-blocker.json']
+        }
+      ]
+    }
+  };
+
+  await configureFixtureRepo(rootDir, scenario);
+  await updateFixtureConfig(rootDir, (config) => {
+    config.validation.always = [
+      {
+        id: 'fixture:always',
+        command: 'node ./scripts/automation/fixtures/stub-validation-command.mjs --lane always',
+        type: 'integration'
+      }
+    ];
+  });
+  await writeFutureParent(rootDir, { includeChildB: false });
+  await initGitRepo(rootDir);
+
+  const result = run(
+    'node',
+    [
+      './scripts/automation/supervise-orchestrator.mjs',
+      'run',
+      '--mode',
+      'guarded',
+      '--retry-failed',
+      'true',
+      '--auto-unblock',
+      'true',
+      '--max-failed-retries',
+      '2',
+      '--output',
+      'minimal',
+      '--allow-dirty',
+      'false',
+      '--commit',
+      'false',
+      '--max-plans',
+      '1'
+    ],
+    rootDir,
+    {
+      ORCH_APPROVED_MEDIUM: '1',
+      ORCH_SUPERVISOR_BLOCKER_STREAK_LIMIT: '1',
+      ORCH_SUPERVISOR_STABLE_LIMIT: '10'
+    }
+  );
+
+  const combined = `${result.stdout}\n${result.stderr}`;
+  assert.equal(result.status, 2, combined);
+  assert.match(combined, /repeated residual validation blocker/);
 });
 
 test('supervisor dirty recovery continues unresolved work on a dirty workspace', async () => {

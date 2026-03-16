@@ -19,6 +19,10 @@ import {
   isProgramPlan
 } from './atomic-commit-policy.mjs';
 import {
+  parentScopeIdsForPlan,
+  recompileProgramChildrenForParentScopes
+} from './program-child-refresh.mjs';
+import {
   asBoolean,
   asInteger,
   durationSeconds,
@@ -1100,6 +1104,46 @@ export function createValidationCompletionOps(deps = {}) {
         options,
         `security approval recorded for ${plan.planId}: source=${securityApprovalSource} status=${deps.SECURITY_APPROVAL_APPROVED}`
       );
+    }
+
+    const parentScopeIds = parentScopeIdsForPlan(plan);
+    if (parentScopeIds.length > 0) {
+      const compileResult = await recompileProgramChildrenForParentScopes(paths.rootDir, parentScopeIds, {
+        write: !options.dryRun,
+        dryRun: options.dryRun === true
+      });
+      for (const advisory of compileResult.advisories) {
+        deps.progressLog(options, `child compile advisory ${advisory.code}: ${advisory.message}`);
+      }
+      for (const entry of compileResult.writes) {
+        deps.progressLog(options, `compiled child ${entry.action} ${entry.planId}: ${entry.filePath}`);
+      }
+      for (const entry of compileResult.moves) {
+        deps.progressLog(options, `compiled child moved ${entry.planId}: ${entry.source} -> ${entry.target}`);
+      }
+      if (compileResult.issues.length > 0) {
+        const preview = compileResult.issues
+          .slice(0, 3)
+          .map((entry) => `${entry.code}: ${entry.message}`)
+          .join(' | ');
+        const reason = `Program child recompilation failed before validation: ${preview}`;
+        await deps.logEvent(paths, state, 'validation_child_recompile_failed', {
+          planId: plan.planId,
+          parentPlanIds: parentScopeIds,
+          reason
+        }, options.dryRun);
+        await deps.setPlanStatus(plan.filePath, 'blocked', options.dryRun);
+        deps.progressLog(options, `validation blocked ${plan.planId}: ${reason}`);
+        return {
+          outcome: 'blocked',
+          reason,
+          riskTier: assessment.effectiveRiskTier
+        };
+      }
+      if (!options.dryRun) {
+        const refreshed = await fs.readFile(plan.filePath, 'utf8');
+        plan.content = refreshed;
+      }
     }
 
     await deps.setPlanStatus(plan.filePath, 'validation', options.dryRun);

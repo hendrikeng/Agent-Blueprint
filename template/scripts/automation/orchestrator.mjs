@@ -90,6 +90,10 @@ import {
   classifyValidationFailureScope,
   createValidationCompletionOps
 } from './lib/validation-completion.mjs';
+import {
+  parentScopeIdsForPlan,
+  recompileProgramChildrenForParentScopes
+} from './lib/program-child-refresh.mjs';
 import { deriveProgramStates } from './lib/program-state.mjs';
 
 const DEFAULT_CONTEXT_THRESHOLD = 10000;
@@ -4533,6 +4537,86 @@ async function preflightCompileProgramChildren(paths, options) {
   return result;
 }
 
+function phaseForPlanPath(paths, relPath) {
+  const normalized = toPosix(String(relPath ?? '').trim()).replace(/^\.?\//, '');
+  if (!normalized.endsWith('.md')) {
+    return null;
+  }
+  if (normalized.startsWith('docs/future/')) {
+    return 'future';
+  }
+  if (normalized.startsWith('docs/exec-plans/active/')) {
+    return 'active';
+  }
+  if (normalized.startsWith('docs/exec-plans/completed/')) {
+    return 'completed';
+  }
+  return null;
+}
+
+async function refreshGeneratedChildrenAfterPlanEdits(paths, plan, touchedPaths, options, contextLabel = 'session') {
+  const parentIds = new Set(parentScopeIdsForPlan(plan));
+  const normalizedTouched = normalizeTouchedPathList(touchedPaths);
+
+  for (const relPath of normalizedTouched) {
+    const phase = phaseForPlanPath(paths, relPath);
+    if (!phase) {
+      continue;
+    }
+    const absPath = path.join(paths.rootDir, relPath);
+    if (!(await exists(absPath))) {
+      continue;
+    }
+    const touchedPlan = await readPlanRecord(paths.rootDir, absPath, phase);
+    for (const parentId of parentScopeIdsForPlan(touchedPlan)) {
+      parentIds.add(parentId);
+    }
+  }
+
+  if (parentIds.size === 0) {
+    return { ok: true, parentIds: [], issues: [], writes: [], moves: [] };
+  }
+
+  const compileResult = await recompileProgramChildrenForParentScopes(paths.rootDir, [...parentIds], {
+    write: !asBoolean(options.dryRun, false),
+    dryRun: asBoolean(options.dryRun, false)
+  });
+
+  for (const advisory of compileResult.advisories) {
+    progressLog(options, `child compile advisory ${advisory.code}: ${advisory.message}`);
+  }
+  for (const entry of compileResult.writes) {
+    progressLog(options, `compiled child ${entry.action} ${entry.planId}: ${entry.filePath}`);
+  }
+  for (const entry of compileResult.moves) {
+    progressLog(options, `compiled child moved ${entry.planId}: ${entry.source} -> ${entry.target}`);
+  }
+
+  if (compileResult.issues.length > 0) {
+    const preview = compileResult.issues
+      .slice(0, 3)
+      .map((entry) => `${entry.code}: ${entry.message}`)
+      .join(' | ');
+    const reason = `Program child recompilation failed after ${contextLabel} edits: ${preview}`;
+    return {
+      ok: false,
+      parentIds: [...parentIds].sort((left, right) => left.localeCompare(right)),
+      issues: compileResult.issues,
+      writes: compileResult.writes,
+      moves: compileResult.moves,
+      reason
+    };
+  }
+
+  return {
+    ok: true,
+    parentIds: [...parentIds].sort((left, right) => left.localeCompare(right)),
+    issues: [],
+    writes: compileResult.writes,
+    moves: compileResult.moves
+  };
+}
+
 async function loadPlanRecords(rootDir, directoryPath, phase) {
   const files = await listMarkdownFiles(directoryPath);
   const activeCacheKeys = new Set(files.map((filePath) => `${phase}:${toPosix(path.resolve(filePath))}`));
@@ -8161,6 +8245,28 @@ async function processPlan(plan, paths, state, options, config) {
       return {
         outcome: 'failed',
         reason: `Plan file is missing after executor session: ${plan.rel}`,
+        riskTier: lastAssessment.effectiveRiskTier
+      };
+    }
+
+    const childRefresh = await refreshGeneratedChildrenAfterPlanEdits(
+      paths,
+      plan,
+      sessionResult.touchSummary?.touched ?? [],
+      options,
+      'session'
+    );
+    if (!childRefresh.ok) {
+      await logEvent(paths, state, 'child_recompile_failed_after_session', {
+        planId: plan.planId,
+        parentPlanIds: childRefresh.parentIds,
+        reason: childRefresh.reason
+      }, options.dryRun);
+      await setPlanStatus(plan.filePath, 'blocked', options.dryRun);
+      progressLog(options, `child recompilation blocked ${plan.planId}: ${childRefresh.reason}`);
+      return {
+        outcome: 'blocked',
+        reason: childRefresh.reason,
         riskTier: lastAssessment.effectiveRiskTier
       };
     }

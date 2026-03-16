@@ -159,7 +159,41 @@ Validation-Ready: no
   assert.doesNotMatch(childContent, /ORCH-GENERATED-END --> -->/);
   assert.doesNotMatch(childContent, /\n-->\n/);
 
-  await fs.writeFile(parentPath, (await fs.readFile(parentPath, 'utf8')).replace('Child Slice One', 'Child Slice One Updated'), 'utf8');
+  const activeParentPath = path.join(rootDir, 'docs', 'exec-plans', 'active', path.basename(parentPath));
+  const activeChildPath = path.join(rootDir, 'docs', 'exec-plans', 'active', path.basename(childPath));
+  await fs.rename(parentPath, activeParentPath);
+  await fs.rename(childPath, activeChildPath);
+  await fs.writeFile(
+    activeParentPath,
+    (await fs.readFile(activeParentPath, 'utf8')).replaceAll('ready-for-promotion', 'in-progress'),
+    'utf8'
+  );
+  await fs.writeFile(
+    activeChildPath,
+    (await fs.readFile(activeChildPath, 'utf8'))
+      .replaceAll('ready-for-promotion', 'validation')
+      .replace('Validation-Ready: no', 'Validation-Ready: yes'),
+    'utf8'
+  );
+  const preserveResult = await compileProgramChildren(rootDir, { write: true });
+  assert.equal(preserveResult.issues.length, 0);
+  const preservedChild = await fs.readFile(activeChildPath, 'utf8');
+  assert.match(preservedChild, /^Validation-Ready: yes$/m);
+
+  await fs.writeFile(
+    activeChildPath,
+    preservedChild.replace('- [ ] `ml-child-slice-one` Land the slice', '- [x] `ml-child-slice-one` Land the slice'),
+    'utf8'
+  );
+  await compileProgramChildren(rootDir, { write: true });
+  const preservedChecklistChild = await fs.readFile(activeChildPath, 'utf8');
+  assert.match(preservedChecklistChild, /^- \[x\] `ml-child-slice-one` Land the slice$/m);
+
+  await fs.writeFile(
+    activeParentPath,
+    (await fs.readFile(activeParentPath, 'utf8')).replace('Child Slice One', 'Child Slice One Updated'),
+    'utf8'
+  );
   const checkResult = await compileProgramChildren(rootDir, { write: false });
   assert.equal(checkResult.issues.some((issue) => issue.code === 'STALE_COMPILED_CHILD_PLAN'), true);
   assert.equal(checkResult.parentOutcomes[0]?.status, 'blocked-generated-child-drift');
