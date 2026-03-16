@@ -2,6 +2,10 @@
 import path from 'node:path';
 
 import { nextScenarioStep, writeStructuredResult } from './scenario-driver.mjs';
+import {
+  CONTRACT_IDS,
+  prepareContractPayload
+} from '../lib/contracts/index.mjs';
 
 function parseArgs(argv) {
   const options = {};
@@ -36,8 +40,10 @@ async function main() {
     status: 'passed',
     summary: `${lane} validation passed for ${planId}`
   });
-  const payload = {
+  const payload = prepareContractPayload(CONTRACT_IDS.validationResult, {
     validationId: String(process.env.ORCH_VALIDATION_ID ?? `fixture:${lane}`).trim(),
+    command: String(process.env.ORCH_VALIDATION_COMMAND ?? `fixture:${lane}`).trim(),
+    lane,
     type: String(process.env.ORCH_VALIDATION_TYPE ?? lane).trim(),
     status: String(step.status ?? 'passed').trim().toLowerCase(),
     summary: String(step.summary ?? `${lane} validation passed for ${planId}`).trim(),
@@ -46,7 +52,7 @@ async function main() {
     findingFiles: Array.isArray(step.findingFiles) ? step.findingFiles : [],
     evidenceRefs: Array.isArray(step.evidenceRefs) ? step.evidenceRefs : [],
     artifactRefs: Array.isArray(step.artifactRefs) ? step.artifactRefs : []
-  };
+  });
   await writeStructuredResult(path.join(rootDir, resultPath), payload);
 
   process.exit(payload.status === 'failed' ? 1 : 0);

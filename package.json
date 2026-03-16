@@ -1,0 +1,14 @@
+{
+  "name": "agent-orchestration-harness",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "test": "npm run test:root && npm run test:template-smoke",
+    "test:root": "node ./scripts/ci/run-root-tests.mjs",
+    "test:template-smoke": "node ./scripts/ci/run-template-smoke.mjs"
+  }
+}

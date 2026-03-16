@@ -2,7 +2,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { resolveRepoOrAbsolutePath } from './lib/orchestrator-shared.mjs';
+import {
+  resolveRepoOrAbsolutePath,
+  writeTextFileAtomic
+} from './lib/orchestrator-shared.mjs';
+import {
+  CONTRACT_IDS,
+  parseContractPayload,
+  prepareContractPayload
+} from './lib/contracts/index.mjs';
 
 const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rootDir = process.cwd();
@@ -67,8 +75,12 @@ async function writeValidationResult(payload) {
   if (!absPath) {
     return;
   }
-  await fs.mkdir(path.dirname(absPath), { recursive: true });
-  await fs.writeFile(absPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  const normalized = prepareContractPayload(CONTRACT_IDS.validationResult, {
+    ...payload,
+    command: String(payload?.command ?? 'npm run verify:full').trim(),
+    lane: String(payload?.lane ?? 'host-required').trim()
+  });
+  await writeTextFileAtomic(absPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
 }
 
 function subcommandResultPath(index) {
@@ -89,7 +101,7 @@ async function readJsonIfExists(filePath) {
       return null;
     }
     const raw = await fs.readFile(resolved.abs, 'utf8');
-    return JSON.parse(raw);
+    return parseContractPayload(CONTRACT_IDS.validationResult, JSON.parse(raw));
   } catch {
     return null;
   }

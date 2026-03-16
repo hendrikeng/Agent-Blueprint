@@ -95,6 +95,11 @@ import {
   recompileProgramChildrenForParentScopes
 } from './lib/program-child-refresh.mjs';
 import { deriveProgramStates } from './lib/program-state.mjs';
+import {
+  CONTRACT_IDS,
+  parseContractPayload,
+  prepareContractPayload
+} from './lib/contracts/index.mjs';
 
 const DEFAULT_CONTEXT_THRESHOLD = 10000;
 const DEFAULT_CONTEXT_SOFT_USED_RATIO = 0.65;
@@ -225,6 +230,8 @@ const DEFAULT_STAGE_REUSE_MAX_AGE_MINUTES = 60;
 const DEFAULT_STAGE_BUDGET_PLANNER_SECONDS = 300;
 const DEFAULT_STAGE_BUDGET_EXPLORER_SECONDS = 300;
 const DEFAULT_STAGE_BUDGET_REVIEWER_SECONDS = 420;
+const RUN_STATE_SCHEMA_VERSION = 1;
+const RUN_EVENT_SCHEMA_VERSION = 1;
 const ROLE_PLANNER = 'planner';
 const ROLE_EXPLORER = 'explorer';
 const ROLE_WORKER = 'worker';
@@ -1457,18 +1464,62 @@ async function readJsonStrict(filePath) {
   }
 }
 
+async function readContractIfExists(filePath, contractId, fallback) {
+  try {
+    const raw = await fs.readFile(filePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    return parseContractPayload(contractId, parsed);
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return fallback;
+    }
+    if (error instanceof SyntaxError) {
+      const message = error.message || String(error);
+      throw new Error(`Invalid JSON in ${toPosix(path.relative(process.cwd(), filePath))}: ${message}`);
+    }
+    throw error;
+  }
+}
+
 async function writeJson(filePath, payload, dryRun) {
   if (dryRun) {
     return;
   }
-  await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  const directory = path.dirname(filePath);
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  await fs.mkdir(directory, { recursive: true });
+  let handle = null;
+  try {
+    handle = await fs.open(tempPath, 'w');
+    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function appendJsonLine(filePath, payload, dryRun) {
   if (dryRun) {
     return;
   }
-  await fs.appendFile(filePath, `${JSON.stringify(payload)}\n`, 'utf8');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const handle = await fs.open(filePath, 'a');
+  try {
+    await handle.writeFile(`${JSON.stringify(payload)}\n`, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 function trimmedString(value, fallback = '') {
@@ -1681,7 +1732,7 @@ function continuityStateFromRecord(plan, checkpoint, existingState = null) {
 }
 
 async function readLatestContinuityState(paths, planId) {
-  return readJsonIfExists(continuityLatestStatePath(paths, planId), null);
+  return readContractIfExists(continuityLatestStatePath(paths, planId), CONTRACT_IDS.continuityLatestState, null);
 }
 
 async function persistContinuityCheckpoint(paths, plan, checkpoint, options) {
@@ -1694,8 +1745,8 @@ async function persistContinuityCheckpoint(paths, plan, checkpoint, options) {
   const checkpointsPath = continuityCheckpointLogPath(paths, plan.planId);
   const existing = await readLatestContinuityState(paths, plan.planId);
   const latest = continuityStateFromRecord(plan, checkpoint, existing);
-  await writeJson(latestPath, latest, false);
-  await appendJsonLine(checkpointsPath, checkpoint, false);
+  await writeJson(latestPath, prepareContractPayload(CONTRACT_IDS.continuityLatestState, latest), false);
+  await appendJsonLine(checkpointsPath, prepareContractPayload(CONTRACT_IDS.continuityCheckpoint, checkpoint), false);
   return {
     latestPath,
     checkpointsPath,
@@ -3661,6 +3712,7 @@ async function persistSecurityApproval(plan, securityApprovalField, securityAppr
 
 function createInitialState(runId, requestedMode, effectiveMode) {
   return {
+    schemaVersion: RUN_STATE_SCHEMA_VERSION,
     version: 7,
     runId,
     requestedMode,
@@ -3691,6 +3743,7 @@ function createInitialState(runId, requestedMode, effectiveMode) {
       activeWorkers: {},
       lastResults: {}
     },
+    eventSequence: 0,
     inProgress: null,
     stats: {
       promotions: 0,
@@ -3702,7 +3755,10 @@ function createInitialState(runId, requestedMode, effectiveMode) {
 }
 
 function normalizePersistedState(state) {
-  const normalized = { ...(state ?? {}) };
+  const normalized = state && typeof state === 'object'
+    ? { ...parseContractPayload(CONTRACT_IDS.runState, state) }
+    : {};
+  normalized.schemaVersion = asInteger(normalized.schemaVersion, RUN_STATE_SCHEMA_VERSION);
   normalized.queue = Array.isArray(normalized.queue) ? normalized.queue : [];
   normalized.completedPlanIds = Array.isArray(normalized.completedPlanIds) ? normalized.completedPlanIds : [];
   normalized.blockedPlanIds = Array.isArray(normalized.blockedPlanIds) ? normalized.blockedPlanIds : [];
@@ -3745,6 +3801,7 @@ function normalizePersistedState(state) {
     normalized.parallelState.lastResults && typeof normalized.parallelState.lastResults === 'object'
       ? normalized.parallelState.lastResults
       : {};
+  normalized.eventSequence = Math.max(0, asInteger(normalized.eventSequence, 0));
   normalized.capabilities =
     normalized.capabilities && typeof normalized.capabilities === 'object'
       ? normalized.capabilities
@@ -4230,7 +4287,7 @@ function captureImplementationBaseline(rootDir, plan) {
 
 async function saveState(paths, state, dryRun) {
   state.lastUpdated = nowIso();
-  await writeJson(paths.runStatePath, state, dryRun);
+  await writeJson(paths.runStatePath, prepareContractPayload(CONTRACT_IDS.runState, state), dryRun);
 }
 
 async function hydrateSessionStateFromRunEvents(paths, state) {
@@ -4295,7 +4352,11 @@ function sanitizeEventDetails(value, parentKey = '') {
 
 async function logEvent(paths, state, type, details, dryRun) {
   const sanitizedDetails = sanitizeEventDetails(details ?? {});
+  const nextSequence = Math.max(0, asInteger(state.eventSequence, 0)) + 1;
+  state.eventSequence = nextSequence;
   const event = {
+    schemaVersion: RUN_EVENT_SCHEMA_VERSION,
+    sequence: nextSequence,
     timestamp: nowIso(),
     runId: state.runId,
     taskId: sanitizedDetails.planId ?? null,
@@ -4304,7 +4365,7 @@ async function logEvent(paths, state, type, details, dryRun) {
     mode: state.effectiveMode,
     details: sanitizedDetails
   };
-  await appendJsonLine(paths.runEventsPath, event, dryRun);
+  await appendJsonLine(paths.runEventsPath, prepareContractPayload(CONTRACT_IDS.runEvent, event), dryRun);
 }
 
 function resolveEffectiveMode(requestedMode) {
@@ -7651,7 +7712,7 @@ async function readContactPackManifest(paths, manifestRel) {
   if (!rel) {
     return null;
   }
-  return readJsonIfExists(path.join(paths.rootDir, rel), null);
+  return readContractIfExists(path.join(paths.rootDir, rel), CONTRACT_IDS.contactPackManifest, null);
 }
 
 function selectedInputArtifactReused(selectedInput, checkpointRecord) {
@@ -9325,9 +9386,9 @@ async function runParallelWorkerPlan(plan, paths, state, options, config, parall
       if (!(await exists(workerStatePath))) {
         throw new Error(`Worker run-state missing for ${plan.planId}: ${toPosix(path.relative(paths.rootDir, workerStatePath))}`);
       }
-      workerState = await readJsonStrict(workerStatePath);
+      workerState = parseContractPayload(CONTRACT_IDS.runState, await readJsonStrict(workerStatePath));
     } else {
-      workerState = await readJsonIfExists(workerStatePath, null);
+      workerState = await readContractIfExists(workerStatePath, CONTRACT_IDS.runState, null);
     }
     const completed = new Set(Array.isArray(workerState?.completedPlanIds) ? workerState.completedPlanIds : []);
     const failed = new Set(Array.isArray(workerState?.failedPlanIds) ? workerState.failedPlanIds : []);
@@ -9461,7 +9522,7 @@ async function runParallelCommand(paths, options) {
   let modeResolution = null;
   let state = null;
   if (resumeParallel) {
-    const persisted = await readJsonIfExists(paths.runStatePath, null);
+    const persisted = await readContractIfExists(paths.runStatePath, CONTRACT_IDS.runState, null);
     if (!persisted || !persisted.runId) {
       throw new Error('No existing run-state found. Start with `run` first.');
     }
@@ -9756,7 +9817,7 @@ async function runCommand(paths, options) {
   }
   const modeResolution = resolveEffectiveMode(options.mode);
   const runId = options.runId || randomRunId();
-  const previousPersisted = await readJsonIfExists(paths.runStatePath, null);
+  const previousPersisted = await readContractIfExists(paths.runStatePath, CONTRACT_IDS.runState, null);
   const previousState =
     previousPersisted && typeof previousPersisted === 'object' && previousPersisted.runId
       ? normalizePersistedState(previousPersisted)
@@ -9887,7 +9948,7 @@ async function resumeCommand(paths, options) {
   if (asBoolean(options.allowDirty, false) && asBoolean(options.commit, config.git.atomicCommits !== false)) {
     throw new Error('Refusing --allow-dirty true with --commit true. Disable commits or start from a clean worktree.');
   }
-  const persisted = await readJsonIfExists(paths.runStatePath, null);
+  const persisted = await readContractIfExists(paths.runStatePath, CONTRACT_IDS.runState, null);
 
   if (!persisted || !persisted.runId) {
     throw new Error('No existing run-state found. Start with `run` first.');
@@ -10008,7 +10069,7 @@ function parseEventLines(raw) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     try {
-      events.push(JSON.parse(trimmed));
+      events.push(parseContractPayload(CONTRACT_IDS.runEvent, JSON.parse(trimmed)));
     } catch {
       // Ignore malformed lines to keep audit resilient.
     }

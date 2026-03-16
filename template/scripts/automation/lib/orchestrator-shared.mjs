@@ -170,18 +170,49 @@ export async function readJsonIfExists(filePath, fallback) {
   }
 }
 
+export async function writeTextFileAtomic(filePath, content, encoding = 'utf8') {
+  const directory = path.dirname(filePath);
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  await fs.mkdir(directory, { recursive: true });
+  let handle = null;
+  try {
+    handle = await fs.open(tempPath, 'w');
+    await handle.writeFile(content, encoding);
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 export async function writeJson(filePath, payload, dryRun) {
   if (dryRun) {
     return;
   }
-  await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  await writeTextFileAtomic(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
 export async function appendJsonLine(filePath, payload, dryRun) {
   if (dryRun) {
     return;
   }
-  await fs.appendFile(filePath, `${JSON.stringify(payload)}\n`, 'utf8');
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const handle = await fs.open(filePath, 'a');
+  try {
+    await handle.writeFile(`${JSON.stringify(payload)}\n`, 'utf8');
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 export function timeoutMsFromSeconds(seconds) {
@@ -248,5 +279,5 @@ export async function restoreFileState(filePath, snapshot) {
     return;
   }
   await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, snapshot.content ?? '', 'utf8');
+  await writeTextFileAtomic(filePath, snapshot.content ?? '', 'utf8');
 }

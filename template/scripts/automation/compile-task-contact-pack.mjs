@@ -11,6 +11,12 @@ import {
   parseMetadata,
   parseRiskTier
 } from './lib/plan-metadata.mjs';
+import { writeTextFileAtomic } from './lib/orchestrator-shared.mjs';
+import {
+  CONTRACT_IDS,
+  parseContractPayload,
+  prepareContractPayload
+} from './lib/contracts/index.mjs';
 
 const DEFAULT_POLICY_PATH = 'docs/governance/policy-manifest.json';
 const DEFAULT_CONFIG_PATH = 'docs/ops/automation/orchestrator.config.json';
@@ -192,7 +198,7 @@ function parseEvidenceReferences(raw, maxItems, sourceFile) {
   return unique(matches).slice(0, Math.max(0, maxItems));
 }
 
-function parseJsonLines(raw, maxItems) {
+function parseJsonLines(raw, maxItems, contractId = null) {
   const lines = String(raw ?? '')
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -200,13 +206,9 @@ function parseJsonLines(raw, maxItems) {
   const items = [];
   const limit = Number.isFinite(maxItems) ? Math.max(0, maxItems) : lines.length;
   for (const line of lines.slice(-limit)) {
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed && typeof parsed === 'object') {
-        items.push(parsed);
-      }
-    } catch {
-      // Ignore malformed historical lines; keep the pack compiler resilient.
+    const parsed = JSON.parse(line);
+    if (parsed && typeof parsed === 'object') {
+      items.push(contractId ? parseContractPayload(contractId, parsed) : parsed);
     }
   }
   return items;
@@ -667,9 +669,16 @@ export async function compileTaskContactPack(input) {
   let latestState = null;
   let recentCheckpoints = [];
   if (includeLatestState) {
-    latestState = normalizeContinuityPayload(await readJsonStrict(latestStatePath).catch(() => null));
+    const latestPayload = await readJsonStrict(latestStatePath).catch(() => null);
+    latestState = latestPayload
+      ? normalizeContinuityPayload(parseContractPayload(CONTRACT_IDS.continuityLatestState, latestPayload))
+      : null;
     const checkpointsRaw = await readUtf8IfExists(checkpointsPath);
-    recentCheckpoints = parseJsonLines(checkpointsRaw, Number.POSITIVE_INFINITY);
+    recentCheckpoints = parseJsonLines(
+      checkpointsRaw,
+      Number.POSITIVE_INFINITY,
+      CONTRACT_IDS.continuityCheckpoint
+    );
   }
   const analyticsStore = normalizeAnalyticsStore(await readJsonStrict(analyticsPath).catch(() => null));
 
@@ -859,8 +868,8 @@ export async function compileTaskContactPack(input) {
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
   const rendered = `${lines.join('\n')}\n`;
-  await fs.writeFile(outputPath, rendered, 'utf8');
-  const manifest = {
+  await writeTextFileAtomic(outputPath, rendered, 'utf8');
+  const manifest = prepareContractPayload(CONTRACT_IDS.contactPackManifest, {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
     planId,
@@ -886,8 +895,8 @@ export async function compileTaskContactPack(input) {
     candidateCount: scoredInputs.length,
     thinPack: thinPack.thinPack,
     missingCategories: thinPack.missingCategories
-  };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  });
+  await writeTextFileAtomic(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 
   const outputRel = toPosix(path.relative(rootDir, outputPath));
   const manifestRel = toPosix(path.relative(rootDir, manifestPath));

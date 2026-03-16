@@ -349,8 +349,22 @@ test('orchestrator end-to-end fixture covers resume, retry, host pending/pass, s
   assert.match(completedParentContent, /Program closeout derived from child graph state/);
 
   const runState = JSON.parse(await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-state.json'), 'utf8'));
+  assert.equal(runState.schemaVersion, 1);
   assert.equal(runState.programState['parent-program'].completedChildren, 2);
   assert.equal(runState.programState['parent-program'].childCompilationCurrent, true);
+
+  const runEventsRaw = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
+  const runEvents = runEventsRaw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  assert.ok(runEvents.length > 0);
+  assert.ok(runEvents.every((event) => event.schemaVersion === 1));
+  assert.deepEqual(
+    runEvents.map((event) => event.sequence),
+    runEvents.map((_, index) => index + 1)
+  );
 
   const auditCompleted = run('node', ['./scripts/automation/orchestrator.mjs', 'audit', '--json', 'true'], rootDir);
   assert.equal(auditCompleted.status, 0);

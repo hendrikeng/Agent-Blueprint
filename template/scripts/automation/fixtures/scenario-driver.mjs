@@ -6,6 +6,11 @@ import {
   setPlanDocumentFields,
   upsertSection
 } from '../lib/plan-document-state.mjs';
+import { writeTextFileAtomic } from '../lib/orchestrator-shared.mjs';
+import {
+  CONTRACT_IDS,
+  prepareContractPayload
+} from '../lib/contracts/index.mjs';
 
 const SCENARIO_PATHS = [
   path.join('docs', 'ops', 'automation', 'runtime', 'fixture-scenario.json'),
@@ -22,8 +27,7 @@ async function readJsonIfExists(filePath, fallback) {
 }
 
 async function writeJson(filePath, value) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  await writeTextFileAtomic(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 export async function nextScenarioStep(rootDir, group, key, fallback = {}) {
@@ -129,6 +133,6 @@ export function structuredResult(step = {}, defaults = {}) {
 }
 
 export async function writeStructuredResult(resultPath, payload) {
-  await fs.mkdir(path.dirname(resultPath), { recursive: true });
-  await fs.writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  const normalized = prepareContractPayload(CONTRACT_IDS.validationResult, payload);
+  await writeTextFileAtomic(resultPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
 }

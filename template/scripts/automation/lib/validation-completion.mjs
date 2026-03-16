@@ -23,6 +23,10 @@ import {
   recompileProgramChildrenForParentScopes
 } from './program-child-refresh.mjs';
 import {
+  CONTRACT_IDS,
+  prepareContractPayload
+} from './contracts/index.mjs';
+import {
   asBoolean,
   asInteger,
   durationSeconds,
@@ -173,7 +177,7 @@ export function normalizeValidationReferenceList(value) {
 
 export function normalizeValidationResultPayload(payload, spec, lane, command, outputLogPath = null) {
   const status = String(payload?.status ?? '').trim().toLowerCase();
-  return {
+  return prepareContractPayload(CONTRACT_IDS.validationResult, {
     validationId: String(payload?.validationId ?? spec.id).trim() || spec.id,
     command,
     lane,
@@ -186,7 +190,7 @@ export function normalizeValidationResultPayload(payload, spec, lane, command, o
     artifactRefs: normalizeValidationReferenceList(payload?.artifactRefs),
     findingFiles: normalizeValidationFindingFiles(payload?.findingFiles),
     outputLogPath
-  };
+  });
 }
 
 export function ensurePlanValidationResults(state, planId) {

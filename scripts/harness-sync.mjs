@@ -4,6 +4,11 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import {
+  CONTRACT_IDS,
+  parseContractPayload,
+  prepareContractPayload
+} from '../template/scripts/automation/lib/contracts/index.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(scriptDir, '..');
@@ -53,6 +58,30 @@ function toPosix(value) {
 async function readJson(filePath) {
   const raw = await fs.readFile(filePath, 'utf8');
   return JSON.parse(raw);
+}
+
+async function writeTextFileAtomic(filePath, content, encoding = 'utf8') {
+  const directory = path.dirname(filePath);
+  const tempPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`
+  );
+  await fs.mkdir(directory, { recursive: true });
+  let handle = null;
+  try {
+    handle = await fs.open(tempPath, 'w');
+    await handle.writeFile(content, encoding);
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    if (handle) {
+      await handle.close().catch(() => {});
+    }
+    await fs.rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 async function walkFiles(baseDir, currentDir = baseDir) {
@@ -159,7 +188,7 @@ async function loadDownstreamManifest(targetDir, manifest) {
       exists: true,
       valid: true,
       filePath,
-      manifest: await readJson(filePath)
+      manifest: parseContractPayload(CONTRACT_IDS.downstreamHarnessManifest, await readJson(filePath))
     };
   } catch (error) {
     if (error?.code === 'ENOENT') {
@@ -207,12 +236,14 @@ function validateDownstreamManifest(manifestState, sourceManifest) {
     };
   }
 
-  const payload = manifestState.manifest;
-  if (payload?.schemaVersion !== 1) {
+  let payload;
+  try {
+    payload = parseContractPayload(CONTRACT_IDS.downstreamHarnessManifest, manifestState.manifest);
+  } catch (error) {
     return {
       ok: false,
       code: 'DOWNSTREAM_MANIFEST_SCHEMA_MISMATCH',
-      message: `Unsupported downstream harness manifest schema '${payload?.schemaVersion ?? 'unknown'}'.`
+      message: error instanceof Error ? error.message : 'Unsupported downstream harness manifest schema.'
     };
   }
   if (payload?.ownershipMode !== sourceManifest.ownershipMode) {
@@ -275,17 +306,15 @@ async function compareTarget(targetDir, sourceEntries, installedManifest = null)
 
 async function writeDownstreamManifest(targetDir, manifest, sourceEntries) {
   const downstreamManifestPath = path.join(targetDir, downstreamManifestRel(manifest));
-  const payload = {
-    schemaVersion: 1,
+  const payload = prepareContractPayload(CONTRACT_IDS.downstreamHarnessManifest, {
     ownershipMode: manifest.ownershipMode,
     sourceManifest: sourceManifestId,
     sourceManifestSha256: await sha256(sourceManifestPath),
     sourceRevision: gitHeadRevision(),
     installedAt: new Date().toISOString(),
     managedFiles: sourceEntries
-  };
-  await fs.mkdir(path.dirname(downstreamManifestPath), { recursive: true });
-  await fs.writeFile(downstreamManifestPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  });
+  await writeTextFileAtomic(downstreamManifestPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
 }
 
 async function pruneEmptyDirectories(baseDir, directoryPath) {
