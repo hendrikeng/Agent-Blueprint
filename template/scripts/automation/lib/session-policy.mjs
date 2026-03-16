@@ -3,8 +3,10 @@ import { createHash } from 'node:crypto';
 import {
   classifyTouchedPath,
   disallowedWorkerTouchedPaths,
+  implementationTargetRoots,
   normalizeTouchedPathList,
-  pathMatchesRootPrefix
+  pathMatchesRootPrefix,
+  specTargetDocRoots
 } from './plan-scope.mjs';
 import {
   completionGateReadyForValidation,
@@ -60,6 +62,16 @@ export function isMeaningfulWorkerTouchPath(filePath, touchPolicy = null) {
 export function hasMeaningfulWorkerTouchSummary(summary, touchPolicy = null) {
   const touchedPaths = Array.isArray(summary?.touched) ? summary.touched : [];
   if (touchedPaths.length > 0) {
+    if (touchPolicy?.requireImplementationTouch) {
+      const implementationTouchRoots = Array.isArray(touchPolicy.implementationTouchRoots) ? touchPolicy.implementationTouchRoots : [];
+      const hasImplementationTouch = touchedPaths.some((entry) => {
+        const normalized = toPosix(String(entry ?? '').trim()).replace(/^\.?\//, '');
+        return implementationTouchRoots.some((root) => pathMatchesRootPrefix(normalized, root));
+      });
+      if (!hasImplementationTouch) {
+        return false;
+      }
+    }
     return touchedPaths.some((entry) => isMeaningfulWorkerTouchPath(entry, touchPolicy));
   }
 
@@ -71,6 +83,13 @@ export function hasMeaningfulWorkerTouchSummary(summary, touchPolicy = null) {
       return category !== 'plan-docs' && isMeaningfulWorkerTouchCategory(category, touchPolicy) && Number.isFinite(count) && count > 0;
     });
   }
+  if (touchPolicy?.requireImplementationTouch) {
+    return categories.some((entry) => {
+      const category = String(entry?.category ?? '').trim().toLowerCase();
+      const count = Number(entry?.count ?? 0);
+      return category !== 'docs' && category !== 'plan-docs' && Number.isFinite(count) && count > 0;
+    });
+  }
   return categories.some((entry) => {
     const category = String(entry?.category ?? '').trim().toLowerCase();
     const count = Number(entry?.count ?? 0);
@@ -80,6 +99,7 @@ export function hasMeaningfulWorkerTouchSummary(summary, touchPolicy = null) {
 
 export function buildWorkerTouchPolicy(plan) {
   const docsOnlyArtifactPlan = isArtifactSlicePlan(plan);
+  const productSlicePlan = isProductPlan(plan);
   const content = typeof plan?.content === 'string' ? plan.content : '';
   const documentStatus = content ? documentStatusValue(content) : '';
   const validationReady = content ? documentValidationReadyValue(content) : '';
@@ -93,15 +113,20 @@ export function buildWorkerTouchPolicy(plan) {
         toPosix(path.posix.join('docs', 'exec-plans', 'evidence-index', `${plan.planId}.md`))
       ])
     : [];
+  const implementationTouchRoots = productSlicePlan ? implementationTargetRoots(plan) : [];
+  const declaredSpecDocTouchRoots = productSlicePlan ? specTargetDocRoots(plan) : [];
   const progressLabel = allowPlanDocsOnlyTouches
     ? 'repository edits in the plan\'s scoped docs/artifact targets'
-    : 'repository edits outside plan/evidence files';
+    : 'repository edits under declared Implementation-Targets (declared Spec-Targets docs may accompany those edits)';
 
   return {
     docsOnlySpecTargets: docsOnlyArtifactPlan,
     validationOnlyPlan,
     allowPlanDocsOnlyTouches,
     allowedTouchRoots,
+    requireImplementationTouch: productSlicePlan,
+    implementationTouchRoots,
+    declaredSpecDocTouchRoots,
     progressLabel
   };
 }

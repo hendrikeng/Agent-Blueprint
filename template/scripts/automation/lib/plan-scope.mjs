@@ -167,18 +167,45 @@ export function implementationTargetRoots(plan, options = {}) {
   )];
 }
 
+export function specTargetDocRoots(plan) {
+  const specTargets = Array.isArray(plan?.specTargets) ? plan.specTargets : [];
+  return [...new Set(
+    specTargets
+      .map((entry) => toPosix(String(entry ?? '').trim()).replace(/^\.?\//, '').replace(/\/+$/, ''))
+      .filter(Boolean)
+      .filter((entry) => classifyTouchedPath(entry) === 'docs')
+  )];
+}
+
 export function disallowedWorkerTouchedPaths(plan, touchedPaths = []) {
   const normalizedPaths = normalizeTouchedPathList(touchedPaths);
   const allowedRoots = implementationTargetRoots(plan);
+  const allowedSpecDocRoots = specTargetDocRoots(plan);
   if (allowedRoots.length === 0) {
     return [];
   }
+  const hasImplementationTouch = normalizedPaths.some((filePath) => {
+    if (filePath.startsWith('docs/exec-plans/')) {
+      return false;
+    }
+    if (isTransientAutomationPath(filePath)) {
+      return false;
+    }
+    return allowedRoots.some((root) => pathMatchesRootPrefix(filePath, root));
+  });
 
   return normalizedPaths.filter((filePath) => {
     if (filePath.startsWith('docs/exec-plans/')) {
       return false;
     }
     if (isTransientAutomationPath(filePath)) {
+      return false;
+    }
+    if (
+      hasImplementationTouch &&
+      classifyTouchedPath(filePath) === 'docs' &&
+      allowedSpecDocRoots.some((root) => pathMatchesRootPrefix(filePath, root))
+    ) {
       return false;
     }
     return !allowedRoots.some((root) => pathMatchesRootPrefix(filePath, root));
