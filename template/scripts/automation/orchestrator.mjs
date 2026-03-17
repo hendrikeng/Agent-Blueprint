@@ -54,6 +54,8 @@ const DEFAULT_STALL_WARN_SECONDS = 120;
 const DEFAULT_FAILURE_TAIL_LINES = 60;
 const DEFAULT_CONTEXT_THRESHOLD_TOKENS = 12000;
 const DEFAULT_CONTEXT_THRESHOLD_PERCENT = 0.15;
+const DEFAULT_LIVE_ACTIVITY_MAX_CHARS = 0;
+const DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS = 2;
 const PRETTY_SPINNER_FRAMES = ['|', '/', '-', '\\'];
 const PRETTY_LIVE_DOT_FRAMES = ['...', '.. ', '.  ', ' ..'];
 const FUTURE_DIR = path.join('docs', 'future');
@@ -68,6 +70,31 @@ const TRANSIENT_AUTOMATION_FILES = new Set([RUN_STATE_PATH, RUN_EVENTS_PATH]);
 const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
   `${toPosix(path.join(OPS_DIR, 'runtime'))}/`,
   `${toPosix(path.join(OPS_DIR, 'handoffs'))}/`
+];
+const DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS = [
+  '(token|secret|password|passphrase|api[-_]?key|authorization|cookie|session)\\s*[:=]\\s*\\S+',
+  'ghp_[A-Za-z0-9]+',
+  'sk-[A-Za-z0-9]+'
+];
+const LIVE_ACTIVITY_PROVIDER_NAME_TOKENS = new Set(['codex', 'claude']);
+const LIVE_ACTIVITY_JSON_TYPE_HINTS = [
+  'status',
+  'progress',
+  'reasoning',
+  'thinking',
+  'task',
+  'step',
+  'tool',
+  'action',
+  'activity'
+];
+const LIVE_ACTIVITY_JSON_TYPE_DENY = [
+  'output_text',
+  'final',
+  'result',
+  'usage',
+  'token',
+  'metrics'
 ];
 let prettySpinnerIndex = 0;
 let prettyLiveDotIndex = 0;
@@ -578,6 +605,96 @@ function logLine(logging, message, level = 'run') {
   console.log(`[orchestrator] ${message}`);
 }
 
+function compileRegexList(patterns = []) {
+  const compiled = [];
+  for (const pattern of patterns) {
+    const normalized = String(pattern ?? '').trim();
+    if (!normalized) {
+      continue;
+    }
+    try {
+      compiled.push(new RegExp(normalized, 'gi'));
+    } catch {
+      // Keep log rendering resilient if a pattern is malformed.
+    }
+  }
+  return compiled;
+}
+
+function extractStringFromUnknown(value, depth = 0) {
+  if (depth > 3) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    const rendered = value.trim();
+    return rendered || null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value.slice(0, 8)) {
+      const extracted = extractStringFromUnknown(entry, depth + 1);
+      if (extracted) {
+        return extracted;
+      }
+    }
+    return null;
+  }
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const preferred = ['text', 'content', 'message', 'delta', 'summary', 'reason', 'title', 'value'];
+  for (const key of preferred) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const extracted = extractStringFromUnknown(value[key], depth + 1);
+    if (extracted) {
+      return extracted;
+    }
+  }
+  return null;
+}
+
+function normalizeJsonEventType(payload) {
+  const candidates = [
+    payload?.type,
+    payload?.event?.type,
+    payload?.eventType,
+    payload?.name,
+    payload?.event?.name
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string') {
+      continue;
+    }
+    const rendered = candidate.trim().toLowerCase();
+    if (rendered) {
+      return rendered;
+    }
+  }
+  return '';
+}
+
+function eventTypeHasLiveActivityHint(eventType) {
+  if (!eventType) {
+    return false;
+  }
+  return LIVE_ACTIVITY_JSON_TYPE_HINTS.some((token) => eventType.includes(token));
+}
+
+function eventTypeDeniedForLiveActivity(eventType) {
+  if (!eventType) {
+    return false;
+  }
+  return LIVE_ACTIVITY_JSON_TYPE_DENY.some((token) => eventType.includes(token));
+}
+
+function eventTypeIsItemEvent(eventType) {
+  if (!eventType) {
+    return false;
+  }
+  return eventType.startsWith('item.');
+}
+
 const LIVE_ACTIVITY_GENERIC_TOKENS = new Set([
   'ok',
   'done',
@@ -602,32 +719,24 @@ function isGenericLiveActivityToken(value) {
 
 function condenseVerboseLiveActivity(value) {
   const rendered = String(value ?? '').trim();
-  if (!rendered) {
-    return rendered;
-  }
-  const looksVerbose =
-    rendered.length > 140 ||
-    rendered.includes('**') ||
-    rendered.includes('](') ||
-    rendered.includes('`') ||
-    rendered.includes(' - ') ||
-    rendered.includes('• ');
-  if (!looksVerbose) {
-    return rendered;
-  }
-  const sentenceMatch = rendered.match(/^(.{1,220}?[.!?])(?:\s|$)/);
-  if (sentenceMatch?.[1]) {
-    return sentenceMatch[1].trim();
-  }
-  return rendered.slice(0, 140).trimEnd();
+  return rendered;
 }
 
-function sanitizeLiveActivityLine(line, maxChars = 160) {
+function sanitizeLiveActivityLine(line, redactionPatterns = [], maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS) {
   let rendered = stripAnsiControl(line).replace(/\s+/g, ' ').trim();
-  if (!rendered || !/[A-Za-z]/.test(rendered)) {
+  if (!rendered) {
+    return null;
+  }
+  for (const pattern of redactionPatterns) {
+    rendered = rendered.replace(pattern, '[REDACTED]');
+  }
+  if (!/[A-Za-z]/.test(rendered)) {
     return null;
   }
   const lower = rendered.toLowerCase();
+  if (LIVE_ACTIVITY_PROVIDER_NAME_TOKENS.has(lower)) {
+    return null;
+  }
   if (isGenericLiveActivityToken(lower)) {
     return null;
   }
@@ -673,6 +782,127 @@ function extractLiveActivityText(value) {
   }
 
   return null;
+}
+
+function extractLiveActivityFromJsonLine(line, redactionPatterns = [], maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS) {
+  const rendered = String(line ?? '').trim();
+  if (!rendered || !rendered.startsWith('{')) {
+    return null;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rendered);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+
+  const eventType = normalizeJsonEventType(parsed);
+  if (eventTypeDeniedForLiveActivity(eventType)) {
+    return null;
+  }
+
+  const nestedItemCandidates = [parsed.item, parsed.event?.item, parsed.data?.item, parsed.payload?.item];
+  const hasAgentMessageItem = nestedItemCandidates.some((item) => (
+    item &&
+    typeof item === 'object' &&
+    String(item.type ?? '').trim().toLowerCase() === 'agent_message'
+  ));
+
+  if (hasAgentMessageItem) {
+    if (eventType !== 'item.completed') {
+      return null;
+    }
+    for (const item of nestedItemCandidates) {
+      if (!item || typeof item !== 'object') {
+        continue;
+      }
+      if (String(item.type ?? '').trim().toLowerCase() !== 'agent_message') {
+        continue;
+      }
+      const preferred = extractStringFromUnknown(item.text ?? item.content ?? item.message);
+      if (preferred) {
+        return sanitizeLiveActivityLine(preferred, redactionPatterns, maxChars);
+      }
+    }
+    return null;
+  }
+
+  if (eventTypeIsItemEvent(eventType)) {
+    return null;
+  }
+
+  if (eventType && !eventTypeHasLiveActivityHint(eventType)) {
+    return null;
+  }
+
+  const containers = [parsed, parsed.event, parsed.data, parsed.payload, parsed.details, parsed.message];
+  const keys = ['activity', 'progress', 'summary', 'reason', 'message', 'text', 'content'];
+  for (const container of containers) {
+    if (!container || typeof container !== 'object') {
+      continue;
+    }
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(container, key)) {
+        continue;
+      }
+      const extracted = extractStringFromUnknown(container[key]);
+      if (extracted) {
+        return sanitizeLiveActivityLine(extracted, redactionPatterns, maxChars);
+      }
+    }
+  }
+
+  if (eventTypeHasLiveActivityHint(eventType)) {
+    const fallback = extractStringFromUnknown(parsed);
+    if (fallback) {
+      return sanitizeLiveActivityLine(fallback, redactionPatterns, maxChars);
+    }
+  }
+
+  return null;
+}
+
+function looksLikeJsonEnvelope(line) {
+  const rendered = String(line ?? '').trim();
+  return rendered.startsWith('{') && rendered.endsWith('}');
+}
+
+function pushLiveActivityEntry(trail, message, timestamp, maxEntries = 12) {
+  const normalizedMessage = String(message ?? '').trim();
+  if (!normalizedMessage) {
+    return trail;
+  }
+  const next = Array.isArray(trail) ? [...trail] : [];
+  const prior = next[next.length - 1];
+  if (prior?.message === normalizedMessage) {
+    next[next.length - 1] = { message: normalizedMessage, updatedAt: timestamp };
+    return next;
+  }
+  next.push({ message: normalizedMessage, updatedAt: timestamp });
+  if (next.length > maxEntries) {
+    next.splice(0, next.length - maxEntries);
+  }
+  return next;
+}
+
+function renderLiveActivityTrailLines(trail, maxItems = 8) {
+  const entries = Array.isArray(trail) ? trail.filter((entry) => entry?.message) : [];
+  if (entries.length === 0) {
+    return ['- none'];
+  }
+  const visible = entries.slice(-Math.max(1, maxItems));
+  return visible.map((entry) => {
+    const stamp = String(entry.updatedAt ?? '').trim();
+    return stamp ? `- ${stamp} ${entry.message}` : `- ${entry.message}`;
+  });
+}
+
+function formatLiveActivityForDetail(value, fallback = 'none') {
+  return sanitizeLogNarrative(value, fallback, 0);
 }
 
 function tailLines(value, maxLines) {
@@ -1177,10 +1407,11 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
   const startedAtMs = Date.now();
   let lastOutputAtMs = startedAtMs;
   let lastVisibleStatusAtMs = startedAtMs;
-  let lastLiveActivityAtMs = 0;
   let latestLiveActivity = null;
   let latestLiveActivityUpdatedAt = null;
   let liveActivityUpdates = 0;
+  let liveActivityTrail = [];
+  let lastLiveActivityAcceptedAtMs = 0;
   let lastTouchChangeAtMs = startedAtMs;
   let stdout = '';
   let stderr = '';
@@ -1193,6 +1424,9 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
   const touchBaseline = gitAvailable(cwd) ? createTouchBaseline(cwd) : null;
   let touchSummary = null;
   let lastTouchFingerprint = null;
+  let sawJsonEnvelopeOutput = false;
+  const liveActivitySampleMs = Math.max(0, DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS * 1000);
+  const liveActivityRedactionPatterns = compileRegexList(DEFAULT_LIVE_ACTIVITY_REDACT_PATTERNS);
 
   const child = spawn(command, {
     shell: true,
@@ -1201,52 +1435,44 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
-  function maybeEmitLiveActivity(line, nowMs = Date.now()) {
-    const trimmed = String(line ?? '').trim();
-    if (!trimmed) {
+  function maybeEmitLiveActivity(message, source, nowMs = Date.now()) {
+    const activityMessage = sanitizeLiveActivityLine(
+      message,
+      liveActivityRedactionPatterns,
+      DEFAULT_LIVE_ACTIVITY_MAX_CHARS
+    );
+    if (!activityMessage) {
       return;
     }
-    let message = null;
-    try {
-      message = extractLiveActivityText(JSON.parse(trimmed));
-    } catch {
-      message = sanitizeLiveActivityLine(trimmed);
-    }
-    if (!message) {
+    if (activityMessage === latestLiveActivity) {
       return;
     }
-    const activityMessage = sanitizeLogNarrative(message, 'working');
+    if (liveActivitySampleMs > 0 && nowMs - lastLiveActivityAcceptedAtMs < liveActivitySampleMs) {
+      return;
+    }
     latestLiveActivity = activityMessage;
-    latestLiveActivityUpdatedAt = nowIso();
+    latestLiveActivityUpdatedAt = new Date(nowMs).toISOString();
+    liveActivityTrail = pushLiveActivityEntry(liveActivityTrail, activityMessage, latestLiveActivityUpdatedAt);
     liveActivityUpdates += 1;
-    if (logging.mode !== 'pretty' && logging.mode !== 'ticker') {
-      return;
-    }
-    if (nowMs - lastLiveActivityAtMs < 5000) {
-      return;
-    }
+    lastLiveActivityAcceptedAtMs = nowMs;
     if (logging.mode === 'ticker') {
       logLine(
         logging,
-        `working plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} phase=${safeDisplayToken(context.phase, 'session')} activity=${safeDisplayToken(context.activity, 'working')} message=${activityMessage}`
+        `working plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} phase=${safeDisplayToken(context.phase, 'session')} activity=${safeDisplayToken(context.activity, 'working')} source=${safeDisplayToken(source, 'stdout')} message=${activityMessage}`
       );
-      lastLiveActivityAtMs = nowMs;
       lastVisibleStatusAtMs = nowMs;
       return;
     }
-    const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
-    const stamp = colorize(logging, '90', nowIso().slice(11, 19));
-    const spinner = nextPrettySpinner(logging);
-    const workingLabel = colorize(
-      logging,
-      '36',
-      `WORKING ${safeDisplayToken(context.planId, 'run')}/${safeDisplayToken(context.role, 'n/a')} (${formatDurationClock(elapsedSeconds)})`
-    );
-    const workingMessage = colorize(logging, '37', activityMessage);
-    clearLiveStatusLine();
-    printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
-    lastLiveActivityAtMs = nowMs;
-    lastVisibleStatusAtMs = nowMs;
+    if (logging.mode === 'pretty') {
+      const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
+      const stamp = colorize(logging, '90', nowIso().slice(11, 19));
+      const spinner = nextPrettySpinner(logging);
+      const workingLabel = colorize(logging, '36', `WORKING (${formatDurationClock(elapsedSeconds)})`);
+      const workingMessage = colorize(logging, '37', activityMessage);
+      clearLiveStatusLine();
+      printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
+      lastVisibleStatusAtMs = nowMs;
+    }
   }
 
   function processLiveChunks(source, text, nowMs = Date.now()) {
@@ -1260,7 +1486,28 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       stderrRemainder = remainder;
     }
     for (const line of parts) {
-      maybeEmitLiveActivity(line, nowMs);
+      const trimmed = String(line ?? '').trim();
+      if (!trimmed) {
+        continue;
+      }
+      const jsonActivity = extractLiveActivityFromJsonLine(
+        trimmed,
+        liveActivityRedactionPatterns,
+        DEFAULT_LIVE_ACTIVITY_MAX_CHARS
+      );
+      if (jsonActivity) {
+        sawJsonEnvelopeOutput = true;
+        maybeEmitLiveActivity(jsonActivity, source, nowMs);
+        continue;
+      }
+      if (looksLikeJsonEnvelope(trimmed)) {
+        sawJsonEnvelopeOutput = true;
+        continue;
+      }
+      if (sawJsonEnvelopeOutput) {
+        continue;
+      }
+      maybeEmitLiveActivity(trimmed, source, nowMs);
     }
   }
 
@@ -1400,6 +1647,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
               updatedAt: latestLiveActivityUpdatedAt
             }
           : null,
+        liveActivityTrail,
         liveActivityUpdates
       });
     };
@@ -1580,6 +1828,7 @@ function runtimePaths(rootDir, runId, planId) {
 async function writeCheckpoint(rootDir, runId, plan, role, sessionNumber, result) {
   const paths = runtimePaths(rootDir, runId, plan.planId);
   const touchSummary = normalizeTouchSummary(result?.touchSummary);
+  const liveActivityTrail = Array.isArray(result?.liveActivityTrail) ? result.liveActivityTrail.filter((entry) => entry?.message) : [];
   const checkpoint = {
     schemaVersion: 1,
     planId: plan.planId,
@@ -1600,6 +1849,7 @@ async function writeCheckpoint(rootDir, runId, plan, role, sessionNumber, result
           updatedAt: trimmedString(result.liveActivity.updatedAt)
         }
       : null,
+    liveActivityTrail,
     touchSummary: {
       count: touchSummary.count,
       categories: touchSummary.categories,
@@ -1630,6 +1880,10 @@ async function writeCheckpoint(rootDir, runId, plan, role, sessionNumber, result
     `- Touched Files: ${formatTouchSummaryForArtifact(touchSummary)}`,
     `- Current Subtask: ${result.currentSubtask || 'none'}`,
     `- Next Action: ${result.nextAction || 'none'}`,
+    '',
+    '## Recent Activity',
+    '',
+    ...renderLiveActivityTrailLines(liveActivityTrail),
     '',
     '## Touched Files',
     '',
@@ -1750,11 +2004,17 @@ async function writeCommandLog(rootDir, runId, planId, role, sessionNumber, exec
   const touchSummary = normalizeTouchSummary(metadata?.touchSummary ?? execution?.touchSummary);
   const touchedFiles = touchSummary.touched.length > 0 ? touchSummary.touched.join(', ') : 'none';
   const liveActivity = trimmedString(metadata?.liveActivity?.message ?? execution?.liveActivity?.message, 'none');
+  const liveActivityTrailSource = metadata?.liveActivityTrail ?? execution?.liveActivityTrail;
+  const liveActivityTrail = Array.isArray(liveActivityTrailSource) ? liveActivityTrailSource.filter((entry) => entry?.message) : [];
   const content = [
     `exitCode=${execution.status ?? 1}`,
     `liveActivity=${liveActivity}`,
+    `liveActivityTrail=${liveActivityTrail.length}`,
     `touchSummary=${formatTouchSummaryForArtifact(touchSummary)}`,
     `touchedFiles=${touchedFiles}`,
+    '',
+    '# Recent Activity',
+    ...renderLiveActivityTrailLines(liveActivityTrail),
     '',
     String(execution.stdout ?? ''),
     String(execution.stderr ?? '')
@@ -1814,7 +2074,8 @@ async function executeRole(rootDir, config, state, plan, role, logging) {
   );
   const logRel = await writeCommandLog(rootDir, state.runId, plan.planId, role, sessionNumber, execution, {
     touchSummary: execution.touchSummary,
-    liveActivity: execution.liveActivity
+    liveActivity: execution.liveActivity,
+    liveActivityTrail: execution.liveActivityTrail
   });
   const rawResult = await readJson(resultPath, null);
   const normalized = {
@@ -1827,6 +2088,7 @@ async function executeRole(rootDir, config, state, plan, role, logging) {
     sessionLogPath: logRel,
     touchSummary: execution.touchSummary,
     liveActivity: execution.liveActivity,
+    liveActivityTrail: execution.liveActivityTrail,
     liveActivityUpdates: execution.liveActivityUpdates ?? 0
   };
   const checkpointRefs = await writeCheckpoint(rootDir, state.runId, plan, role, sessionNumber, normalized);
@@ -2203,7 +2465,7 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
     );
     logLine(
       logging,
-      `session artifacts plan=${plan.planId} role=${role} session=${session.sessionNumber} touched=${session.result.touchSummary?.count ?? 0} sample=${previewPlanIds(session.result.touchSummary?.samples ?? [], 3)} live=${sanitizeLogNarrative(session.result.liveActivity?.message, 'none', 100)} checkpoint=${session.checkpointRefs.checkpointRel} handoff=${session.checkpointRefs.handoffRel} log=${session.logRel}`
+      `session artifacts plan=${plan.planId} role=${role} session=${session.sessionNumber} touched=${session.result.touchSummary?.count ?? 0} sample=${previewPlanIds(session.result.touchSummary?.samples ?? [], 3)} live=${formatLiveActivityForDetail(session.result.liveActivity?.message, 'none')} checkpoint=${session.checkpointRefs.checkpointRel} handoff=${session.checkpointRefs.handoffRel} log=${session.logRel}`
     );
     const contextBudget = analyzeContextBudget(session.result, config);
     if (contextBudget.triggered && !roleBoundaryComplete(plan, role) && session.result.status !== 'blocked') {

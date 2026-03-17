@@ -172,6 +172,8 @@ test('orchestrator promotes a medium-risk future, runs worker and reviewer, then
   assert.match(workerLog, /touchSummary=1 file\(s\)/);
   assert.match(workerLog, /touchedFiles=src\/red-inbox\.js/);
   assert.match(workerLog, /liveActivity=worker working on red-inbox/);
+  assert.match(workerLog, /liveActivityTrail=1/);
+  assert.match(workerLog, /# Recent Activity/);
 
   const events = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
   assert.match(events, /future_promoted/);
@@ -283,7 +285,8 @@ test('orchestrator pretty output keeps readable lifecycle tags in non-tty mode',
   assert.match(String(result.stdout), /runId\s+=\s+run-/);
   assert.match(String(result.stdout), /session start/);
   assert.match(String(result.stdout), /plan\s+=\s+pretty-plan/);
-  assert.match(String(result.stdout), /WORKING pretty-plan\/worker/);
+  assert.match(String(result.stdout), /WORKING \(\d{2}:\d{2}\)/);
+  assert.match(String(result.stdout), /worker working on pretty-plan/);
   assert.match(String(result.stdout), /file activity/);
   assert.match(String(result.stdout), /session artifacts/);
   assert.match(String(result.stdout), /phase\s+=\s+session/);
@@ -367,6 +370,7 @@ test('orchestrator forces a handoff when a worker returns too close to the conte
     'utf8'
   );
   assert.match(handoff, /Context Remaining:/);
+  assert.match(handoff, /## Recent Activity/);
   assert.match(handoff, /Touched Files:/);
   assert.match(handoff, /src\/context-threshold-wip\.js/);
 
@@ -377,6 +381,7 @@ test('orchestrator forces a handoff when a worker returns too close to the conte
   );
   assert.match(firstWorkerLog, /touchedFiles=src\/context-threshold-wip\.js/);
   assert.match(firstWorkerLog, /liveActivity=worker working on context-threshold-plan/);
+  assert.match(firstWorkerLog, /liveActivityTrail=1/);
 
   const events = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
   assert.match(events, /context_budget_low/);
