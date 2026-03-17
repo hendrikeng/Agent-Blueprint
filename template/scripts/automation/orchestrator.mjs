@@ -552,6 +552,58 @@ function logLine(logging, message, level = 'run') {
   console.log(`[orchestrator] ${message}`);
 }
 
+function sanitizeLiveActivityLine(line, maxChars = 160) {
+  let rendered = stripAnsiControl(line).replace(/\s+/g, ' ').trim();
+  if (!rendered || !/[A-Za-z]/.test(rendered)) {
+    return null;
+  }
+  const lower = rendered.toLowerCase();
+  if (['ok', 'done', 'completed', 'complete', 'pending', 'running', 'started', 'in_progress'].includes(lower)) {
+    return null;
+  }
+  if (Number.isFinite(maxChars) && maxChars > 0 && rendered.length > maxChars) {
+    rendered = `${rendered.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
+  }
+  return rendered || null;
+}
+
+function extractLiveActivityText(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    return sanitizeLiveActivityLine(value);
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const candidate = extractLiveActivityText(entry);
+      if (candidate) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+  if (typeof value !== 'object') {
+    return null;
+  }
+
+  for (const key of ['message', 'summary', 'text', 'content', 'activity', 'reasoning', 'description']) {
+    const candidate = extractLiveActivityText(value[key]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  for (const key of ['delta', 'details', 'result', 'event', 'data']) {
+    const candidate = extractLiveActivityText(value[key]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 function tailLines(value, maxLines) {
   const lines = String(value ?? '')
     .split(/\r?\n/)
@@ -767,8 +819,12 @@ function formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSecond
 async function runShellMonitored(command, cwd, env = process.env, timeoutMs = undefined, logging, context = {}) {
   const startedAtMs = Date.now();
   let lastOutputAtMs = startedAtMs;
+  let lastVisibleStatusAtMs = startedAtMs;
+  let lastLiveActivityAtMs = 0;
   let stdout = '';
   let stderr = '';
+  let stdoutRemainder = '';
+  let stderrRemainder = '';
   let timedOut = false;
   let processError = null;
   let settled = false;
@@ -781,10 +837,58 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+  function maybeEmitLiveActivity(line, nowMs = Date.now()) {
+    if (logging.mode !== 'pretty') {
+      return;
+    }
+    if (nowMs - lastLiveActivityAtMs < 5000) {
+      return;
+    }
+    const trimmed = String(line ?? '').trim();
+    if (!trimmed) {
+      return;
+    }
+    let message = null;
+    try {
+      message = extractLiveActivityText(JSON.parse(trimmed));
+    } catch {
+      message = sanitizeLiveActivityLine(trimmed);
+    }
+    if (!message) {
+      return;
+    }
+    const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
+    const stamp = colorize(logging, '90', nowIso().slice(11, 19));
+    const spinner = nextPrettySpinner(logging);
+    const workingLabel = colorize(logging, '36', `WORKING (${formatDurationClock(elapsedSeconds)})`);
+    const workingMessage = colorize(logging, '37', message);
+    clearLiveStatusLine();
+    printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
+    lastLiveActivityAtMs = nowMs;
+    lastVisibleStatusAtMs = nowMs;
+  }
+
+  function processLiveChunks(source, text, nowMs = Date.now()) {
+    const previousRemainder = source === 'stdout' ? stdoutRemainder : stderrRemainder;
+    const combined = `${previousRemainder}${text}`;
+    const parts = combined.split(/\r?\n|\r/g);
+    const remainder = parts.pop() ?? '';
+    if (source === 'stdout') {
+      stdoutRemainder = remainder;
+    } else {
+      stderrRemainder = remainder;
+    }
+    for (const line of parts) {
+      maybeEmitLiveActivity(line, nowMs);
+    }
+  }
+
   child.stdout?.on('data', (chunk) => {
     const text = chunk.toString();
+    const nowMs = Date.now();
     stdout += text;
-    lastOutputAtMs = Date.now();
+    lastOutputAtMs = nowMs;
+    processLiveChunks('stdout', text, nowMs);
     if (logging.mode === 'verbose') {
       clearLiveStatusLine();
       process.stdout.write(text);
@@ -793,8 +897,10 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
 
   child.stderr?.on('data', (chunk) => {
     const text = chunk.toString();
+    const nowMs = Date.now();
     stderr += text;
-    lastOutputAtMs = Date.now();
+    lastOutputAtMs = nowMs;
+    processLiveChunks('stderr', text, nowMs);
     if (logging.mode === 'verbose') {
       clearLiveStatusLine();
       process.stderr.write(text);
@@ -809,14 +915,16 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     const nowMs = Date.now();
     const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
     const idleSeconds = Math.floor((nowMs - lastOutputAtMs) / 1000);
-    if (supportsLiveStatusLine(logging)) {
+    if (nowMs - lastVisibleStatusAtMs >= heartbeatMs && supportsLiveStatusLine(logging)) {
       renderLiveStatusLine(logging, formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSeconds));
-    } else {
+      lastVisibleStatusAtMs = nowMs;
+    } else if (nowMs - lastVisibleStatusAtMs >= heartbeatMs) {
       logLine(
         logging,
         `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)}`,
         idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run'
       );
+      lastVisibleStatusAtMs = nowMs;
     }
     if (idleSeconds * 1000 >= stallWarnMs && !warnEmitted) {
       warnEmitted = true;
