@@ -242,7 +242,7 @@ function prettyLevelTag(logging, level = 'run') {
   if (level === 'warn') {
     return colorize(logging, '33', 'WARN');
   }
-  if (level === 'err') {
+  if (level === 'err' || level === 'error') {
     return colorize(logging, '31', 'ERR ');
   }
   return colorize(logging, '36', 'RUN ');
@@ -254,6 +254,208 @@ function supportsLiveStatusLine(logging) {
 
 function stripAnsiControl(value) {
   return String(value ?? '').replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
+function visibleTextLength(value) {
+  return stripAnsiControl(value).length;
+}
+
+function wrapTextForConsole(text, maxWidth) {
+  const rendered = String(text ?? '').trim();
+  if (!rendered) {
+    return [''];
+  }
+  if (!Number.isFinite(maxWidth) || maxWidth <= 0) {
+    return [rendered];
+  }
+
+  const words = rendered.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = '';
+
+  const splitLongToken = (token) => {
+    let remaining = token;
+    while (remaining.length > maxWidth) {
+      lines.push(remaining.slice(0, maxWidth));
+      remaining = remaining.slice(maxWidth);
+    }
+    return remaining;
+  };
+
+  for (const word of words) {
+    if (!current) {
+      current = word.length <= maxWidth ? word : splitLongToken(word);
+      continue;
+    }
+    if (current.length + 1 + word.length <= maxWidth) {
+      current = `${current} ${word}`;
+      continue;
+    }
+    lines.push(current);
+    current = word.length <= maxWidth ? word : splitLongToken(word);
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+
+  return lines.length > 0 ? lines : [rendered];
+}
+
+function printIndentedPrettyMessage(prefix, message) {
+  const renderedPrefix = String(prefix ?? '');
+  const renderedMessage = String(message ?? '').trim();
+  if (!renderedMessage) {
+    console.log(renderedPrefix.trimEnd());
+    return;
+  }
+
+  const visiblePrefixLength = visibleTextLength(renderedPrefix);
+  const consoleWidth =
+    process.stdout.isTTY && Number.isFinite(process.stdout.columns) ? Number(process.stdout.columns) : 0;
+  const maxWidth = consoleWidth > visiblePrefixLength + 12 ? consoleWidth - visiblePrefixLength : 0;
+  const lines = wrapTextForConsole(renderedMessage, maxWidth);
+
+  console.log(`${renderedPrefix}${lines[0] ?? ''}`);
+  if (lines.length <= 1) {
+    return;
+  }
+
+  const continuationPrefix = ' '.repeat(Math.max(0, visiblePrefixLength));
+  for (const line of lines.slice(1)) {
+    console.log(`${continuationPrefix}${line}`);
+  }
+}
+
+function parseStructuredLogMessage(message) {
+  const normalized = String(message ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return { headline: '', details: [] };
+  }
+  const firstDetailIndex = normalized.search(/\b[A-Za-z][A-Za-z0-9_-]*=[^\s]+/);
+  if (firstDetailIndex < 0) {
+    return { headline: normalized, details: [] };
+  }
+  const headline = normalized.slice(0, firstDetailIndex).trim();
+  const detailText = normalized.slice(firstDetailIndex).trim();
+  const details = [];
+  const keyTokenPattern = /^([A-Za-z][A-Za-z0-9_-]*)=(.*)$/;
+  let currentKey = null;
+  let currentValue = '';
+  for (const token of detailText.split(/\s+/)) {
+    const keyMatch = token.match(keyTokenPattern);
+    if (keyMatch) {
+      if (currentKey && currentValue.trim()) {
+        details.push({ key: currentKey, value: currentValue.trim() });
+      }
+      currentKey = keyMatch[1];
+      currentValue = keyMatch[2] ?? '';
+      continue;
+    }
+    if (!currentKey) {
+      continue;
+    }
+    currentValue = currentValue ? `${currentValue} ${token}` : token;
+  }
+  if (currentKey && currentValue.trim()) {
+    details.push({ key: currentKey, value: currentValue.trim() });
+  }
+  if (details.length === 0) {
+    return { headline: normalized, details: [] };
+  }
+  return { headline: headline || normalized, details };
+}
+
+function prettyColorLevel(level) {
+  if (level === 'err' || level === 'error') {
+    return 'error';
+  }
+  if (level === 'warn') {
+    return 'warn';
+  }
+  if (level === 'ok') {
+    return 'ok';
+  }
+  return 'run';
+}
+
+function colorizeStructuredHeadline(logging, headline, level = 'run') {
+  const value = String(headline ?? '').trim();
+  const lower = value.toLowerCase();
+  if (!value) {
+    return value;
+  }
+  if (lower.startsWith('heartbeat') || lower.startsWith('file activity')) {
+    return colorize(logging, '32', value);
+  }
+  if (lower.startsWith('run resumed') || lower.startsWith('run start') || lower.startsWith('grind ') || lower.startsWith('run ')) {
+    return colorize(logging, '36', value);
+  }
+  if (level === 'warn') {
+    return colorize(logging, '33', value);
+  }
+  if (level === 'error') {
+    return colorize(logging, '31', value);
+  }
+  if (level === 'ok') {
+    return colorize(logging, '32', value);
+  }
+  return value;
+}
+
+function colorizeStructuredValue(logging, key, value, level = 'run') {
+  const keyLower = String(key ?? '').trim().toLowerCase();
+  const valueText = String(value ?? '').trim();
+  const valueLower = valueText.toLowerCase();
+  if (!valueText) {
+    return valueText;
+  }
+
+  if (keyLower === 'runid') return colorize(logging, '96', valueText);
+  if (keyLower === 'plan') return colorize(logging, '36', valueText);
+  if (keyLower === 'role') return colorize(logging, '35', valueText);
+  if (keyLower === 'phase' || keyLower === 'activity') return colorize(logging, '32', valueText);
+  if (keyLower === 'elapsed' || keyLower === 'idle') return colorize(logging, '32', valueText);
+
+  if (['risk', 'status', 'commit'].includes(keyLower)) {
+    if (valueLower === 'low' || valueLower === 'completed' || valueLower === 'passed' || valueLower === 'atomic') {
+      return colorize(logging, '32', valueText);
+    }
+    if (valueLower === 'medium' || valueLower === 'pending' || valueLower === 'blocked' || valueLower === 'off') {
+      return colorize(logging, '33', valueText);
+    }
+    if (valueLower === 'high' || valueLower === 'failed' || valueLower === 'error') {
+      return colorize(logging, '31', valueText);
+    }
+  }
+
+  if (level === 'warn') return colorize(logging, '33', valueText);
+  if (level === 'error') return colorize(logging, '31', valueText);
+  return colorize(logging, '37', valueText);
+}
+
+function printPrettyRunMessage(logging, prefix, message, level = 'run') {
+  const parsed = parseStructuredLogMessage(message);
+  if (parsed.details.length === 0) {
+    const headlineText = String(parsed.headline ?? '').trim();
+    if (!headlineText) {
+      printIndentedPrettyMessage(prefix, message);
+      return;
+    }
+    printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, headlineText, level));
+    return;
+  }
+
+  const headlineText = String(parsed.headline ?? '').trim();
+  printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, headlineText, level));
+  const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
+  const keyWidth = 16;
+  for (const entry of parsed.details) {
+    const keyLabel = colorize(logging, '90', `${entry.key.padEnd(keyWidth, ' ')}`);
+    const separator = colorize(logging, '90', ' = ');
+    const valueLabel = colorizeStructuredValue(logging, entry.key, entry.value, level);
+    printIndentedPrettyMessage(`${continuationPrefix}${keyLabel}${separator}`, valueLabel);
+  }
 }
 
 function clearLiveStatusLine() {
@@ -317,7 +519,31 @@ function logLine(logging, message, level = 'run') {
   }
   if (logging.mode === 'pretty') {
     const stamp = colorize(logging, '90', nowIso().slice(11, 19));
-    console.log(`${stamp} ${nextPrettySpinner(logging)} ${prettyLevelTag(logging, level)} ${message}`);
+    const prefix = `${stamp} ${nextPrettySpinner(logging)} ${prettyLevelTag(logging, level)} `;
+    const prettyLevel = prettyColorLevel(level);
+    const renderedMessage = String(message ?? '').trim();
+    if (!renderedMessage) {
+      console.log(prefix.trimEnd());
+      return;
+    }
+    const segments = renderedMessage
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (segments.length <= 1) {
+      if (parseStructuredLogMessage(renderedMessage).details.length > 0) {
+        printPrettyRunMessage(logging, prefix, renderedMessage, prettyLevel);
+      } else {
+        printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, renderedMessage, prettyLevel));
+      }
+      return;
+    }
+    printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, segments[0], prettyLevel));
+    const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
+    const detailPrefix = `${continuationPrefix}${colorize(logging, '90', '│ ')}`;
+    for (const line of segments.slice(1)) {
+      printIndentedPrettyMessage(detailPrefix, colorizeStructuredValue(logging, 'detail', line, prettyLevel));
+    }
     return;
   }
   console.log(`[orchestrator] ${message}`);
