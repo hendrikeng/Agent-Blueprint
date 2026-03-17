@@ -1007,7 +1007,7 @@ function createRunState(runId, maxRisk) {
 async function loadRunState(rootDir, maxRisk, command) {
   const runStatePath = path.join(rootDir, RUN_STATE_PATH);
   const existing = await readJson(runStatePath, null);
-  if (!existing || command === 'run') {
+  if (!existing || command === 'run' || command === 'grind') {
     return createRunState(nextRunId(), maxRisk);
   }
   return {
@@ -1861,6 +1861,9 @@ async function main() {
   const config = await loadConfig(rootDir);
   if (commitEnabled(config, options) && !gitAvailable(rootDir)) {
     throw new Error('Atomic commits are enabled, but this repository is not inside a git work tree. Run with --commit false or initialize git first.');
+  }
+  if ((command === 'run' || command === 'grind') && dirtyRepoPaths(rootDir, { includeTransient: false }).length > 0) {
+    throw new Error('Refusing to start ' + command + ' with a dirty worktree. Commit, stash, or discard unrelated changes first, or use resume if you intend to continue the existing run.');
   }
   const maxRisk = normalizeMaxRisk(options['max-risk'] ?? options.maxRisk ?? config?.risk?.defaultMaxRisk ?? DEFAULT_MAX_RISK);
   const state = await loadRunState(rootDir, maxRisk, command);
