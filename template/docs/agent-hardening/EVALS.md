@@ -8,7 +8,7 @@ Source of Truth: This document.
 ## Eval Lifecycle
 
 - Define a stable set of golden tasks that represent high-risk and high-value workflows.
-- Maintain a dedicated continuity suite that interrupts work mid-task and scores resume quality from checkpoint/contact-pack state only.
+- Maintain a dedicated continuity suite that interrupts work mid-task and scores resume quality from the latest checkpoint and handoff state only.
 - Track pass/fail outcomes per model/runtime change.
 - Treat eval regressions as defects, not documentation-only issues.
 
@@ -45,7 +45,7 @@ Source of Truth: This document.
   - Open critical/high regressions must be at or below configured maximums.
   - Required suite IDs/statuses must be present and valid.
 - Continuity gate policy:
-  - Fixture scenarios score correctness, context carryover, duplicate-work avoidance, and handoff quality.
+  - Fixture scenarios score correctness, context carryover, duplicate-work avoidance, checkpoint quality, and handoff quality.
   - Continuity report freshness must satisfy `maxAgeDays`.
   - Continuity pass-rate must satisfy `continuityMinimumPassRate`.
   - Required continuity suite IDs/statuses must be present and valid.

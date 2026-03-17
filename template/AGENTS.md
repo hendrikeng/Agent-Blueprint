@@ -14,17 +14,18 @@ If instructions conflict, this file is the behavioral priority entrypoint.
 - Humans define intent, constraints, and acceptance criteria.
 - Agents execute scoped tasks using repository-local docs, code, and checks.
 - Continuous docs hygiene is required through repository checks.
+- The default workflow is: plan futures, then grind ready futures through the flat queue in sequence.
 
 ## Agent Handout
 
 - Treat the repo as the main operating system for agent work.
 - Keep plans, evidence, docs, code, and validation output as the source of truth.
 - Treat `## Must-Land Checklist` as the execution contract and keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` separate.
-- Use repo-local checkpoints, contact packs, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.
-- Keep context selective: load current scope, latest state, recent checkpoints, and relevant evidence; persist distilled findings and stable references, not raw session history.
-- Improve checkpoint contents, contact-pack selection, evidence compaction, validation, and observability before changing memory architecture.
+- Use repo-local checkpoints, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.
+- Keep context selective: load current scope, latest checkpoint, latest handoff, and relevant evidence; persist distilled findings instead of raw transcript history.
+- Default completion behavior is one atomic git commit per finished slice before the queue advances.
 - Do not add external retrieval, provider-thread persistence, or off-repo working memory just because work is long or context is limited.
-- Consider bigger memory changes only when repeated failures show repo-local continuity is insufficient or important context genuinely lives outside the repo.
+- Consider bigger memory changes only when repeated failures show the current repo-local checkpoint model is insufficient.
 
 ## Intent Precedence
 
@@ -32,12 +33,12 @@ If instructions conflict, this file is the behavioral priority entrypoint.
 - In normal/direct Codex sessions (outside orchestrator `run`/`resume`), follow user intent immediately.
 - If the session is switched to plan mode, treat it as planning-only unless the user explicitly asks to implement.
 - If a user asks for planning-only work (for example: "plan", "outline", "prepare for promotion", "no implementation yet"), do not modify source or test files.
-- For planning-only requests, work in `docs/future/`, keep metadata complete, and set `Status: ready-for-promotion` when the plan is decision-complete.
+- For planning-only requests, work in `docs/future/`, create or update an executable future slice immediately, and set `Status: ready-for-promotion` when the plan is decision-complete.
 - Planning outputs must separate `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` so executable scope is explicit before promotion.
-- Future authoring must be executable by default: concrete asks become `Execution-Scope: slice`; broad asks become `Execution-Scope: program` plus `Authoring-Intent: executable-default` and `## Child Slice Definitions`.
-- If a broad future cannot be decomposed safely yet, scaffold draft child definitions with `npm run plans:scaffold-children -- --plan-file <path>` instead of leaving a dead parent blueprint.
-- Only use `Authoring-Intent: blueprint-only` when the user explicitly asked for a blueprint-only artifact.
+- Future authoring is flat by default: one future file equals one executable slice. Use multiple future files plus `Dependencies` when the work is larger than one slice.
+- Do not introduce program-parent plans, child-slice generation, `Execution-Scope`, `Authoring-Intent`, or `Parent-Plan-ID` workflow.
 - Start implementation only when the user explicitly asks to implement or promote/execute the plan.
+- Treat `docs/ops/automation/LITE_QUICKSTART.md` as the canonical reference for this day-planning / later-grind workflow.
 
 ## Core Map
 
@@ -63,7 +64,7 @@ Start here, then follow linked source-of-truth docs:
 - Product state snapshot: `docs/product-specs/CURRENT-STATE.md`
 - Execution plans: `docs/exec-plans/README.md`
 - Ops automation conveyor: `docs/ops/automation/README.md`
-- Role orchestration contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`
+- Runtime role contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`
 - Lite lane onboarding: `docs/ops/automation/LITE_QUICKSTART.md`
 - Automation outcomes scorecard: `docs/ops/automation/OUTCOMES.md`
 - GitHub interop mapping: `docs/ops/automation/INTEROP_GITHUB.md`
@@ -134,6 +135,7 @@ Docs are part of done.
 - Runtime context generation is mandatory: `npm run context:compile`.
 - Iteration profile: `npm run verify:fast`.
 - Merge profile: `npm run verify:full`.
+- Queue and metadata hygiene: `npm run plans:verify`, `npm run automation:audit`, `npm run harness:verify`.
 - Canonical verification policy lives in `docs/governance/RULES.md`.
 - Add/adjust tests for behavior changes.
 - Every bug fix needs a regression test.

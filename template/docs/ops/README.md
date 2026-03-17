@@ -9,7 +9,7 @@ Source of Truth: This document.
 - Define escalation and recovery expectations for critical services.
 - Keep runbooks current with architecture and deployment changes.
 - Automation conveyor runbook: `docs/ops/automation/README.md`
-- Role orchestration contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`
+- Runtime role contract: `docs/ops/automation/ROLE_ORCHESTRATION.md`
 - Lite lane onboarding: `docs/ops/automation/LITE_QUICKSTART.md`
 - Automation outcomes scorecard: `docs/ops/automation/OUTCOMES.md`
 - GitHub interop mapping: `docs/ops/automation/INTEROP_GITHUB.md`

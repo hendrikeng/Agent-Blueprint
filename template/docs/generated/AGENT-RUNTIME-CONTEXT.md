@@ -1,13 +1,12 @@
 # Agent Runtime Context (Generated)
 
-Generated At: 2026-03-15T13:14:16.261Z
-Primary Sources: AGENTS.md, docs/agent-hardening/MEMORY_CONTEXT.md, docs/governance/policy-manifest.json, docs/ops/automation/orchestrator.config.json
+Generated At: 2026-03-16T23:50:49.029Z
+Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/automation/orchestrator.config.json
 
 ## Mission
-- Docs-first minimal: this file is a concise map, not an execution playbook.
-- Humans define intent, constraints, and acceptance criteria.
-- Agents execute scoped tasks using repository-local docs, code, and checks.
-- Continuous docs hygiene is required through repository checks.
+- Plan futures by creating or updating executable future slices directly in docs/future/.
+- Run a flat queue in sequence: promote ready slices, implement them, review medium/high risk work, validate, and close.
+- Keep the repo as the source of truth for plans, evidence, runtime state, and handoffs.
 
 ## Hard Safety Rules
 - [correctness_over_speed] Correctness over speed for critical domains.
@@ -17,48 +16,46 @@ Primary Sources: AGENTS.md, docs/agent-hardening/MEMORY_CONTEXT.md, docs/governa
 - [docs_are_part_of_done] Architecture, invariant, and user-visible changes must update canonical docs in the same change.
 - [no_destructive_git_without_instruction] Never run destructive git/file commands without explicit written instruction.
 
-## Risk Pipelines
-- low: worker
-- medium: planner -> worker -> reviewer
-- high: planner -> explorer -> worker -> reviewer
+## Planning Roles
+- planner: Turn user intent into decision-complete future slices.
+- explorer: Trace risky surfaces and dependencies before implementation when planning needs more facts.
 
-## Role Contracts
-- planner: sandbox=read-only, reasoning=medium, intent=Break down implementation into decision-complete execution steps.
-- explorer: sandbox=read-only, reasoning=medium, intent=Trace risky surfaces and dependencies before implementation.
-- worker: sandbox=full-access, reasoning=high, intent=Implement scoped changes and keep docs/evidence aligned.
-- reviewer: sandbox=read-only, reasoning=high, intent=Check correctness, security, race conditions, flaky tests, and regressions.
+## Grind Roles
+- worker: sandbox=full-access, reasoning=high
+- reviewer: sandbox=read-only, reasoning=high
+- review required for: medium, high
+- explicit security approval required for: high
+- low-context handoff threshold: <= 12000 remaining tokens or <= 15% remaining context when available
 
 ## Verification Profiles
-- fast: node ./scripts/automation/compile-runtime-context.mjs ; node ./scripts/docs/check-governance.mjs ; node ./scripts/automation/check-plan-metadata.mjs
+- fast: node ./scripts/automation/compile-runtime-context.mjs ; node ./scripts/docs/check-governance.mjs ; node ./scripts/automation/check-plan-metadata.mjs ; node ./scripts/automation/check-harness-alignment.mjs
 - full: node ./scripts/automation/compile-runtime-context.mjs ; node ./scripts/docs/check-governance.mjs ; node ./scripts/check-article-conformance.mjs ; node ./scripts/architecture/check-dependencies.mjs ; node ./scripts/agent-hardening/check-agent-hardening.mjs ; node ./scripts/agent-hardening/check-evals.mjs ; node ./scripts/automation/check-harness-alignment.mjs ; node ./scripts/automation/check-plan-metadata.mjs
+- validation lanes: always=repo:verify-fast ; host-required=repo:verify-full
 
 ## Memory Posture
 - do: Treat the repo as the main operating system for agent work.
 - do: Keep plans, evidence, docs, code, and validation output as the source of truth.
 - do: Treat `## Must-Land Checklist` as the execution contract and keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` separate.
-- do: Use repo-local checkpoints, contact packs, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.
-- do: Keep context selective: load current scope, latest state, recent checkpoints, and relevant evidence; persist distilled findings and stable references, not raw session history.
-- improve first: Better checkpoint contents. ; Better contact-pack selection. ; Better evidence compaction. ; Better validation and observability. ; Fix rolling-context and contact-pack implementation gaps before changing architecture.
-- not yet: Do not add external retrieval just because work is long. ; Do not add provider-thread persistence just because context is limited. ; Do not move important working memory outside the repo while repo-local continuity is sufficient. ; Do not treat extra memory systems as a substitute for better checkpoints and contact packs.
-- escalate when: Agents repeatedly miss important context even though it exists. ; Repo-local checkpoints and contact packs stop being enough. ; Important memory starts living outside the repo. ; You need one agent to search across many unrelated systems.
-- safe rule: If repo-local state is enough, keep this design. If important context lives outside the repo and agents keep missing it, then consider external retrieval.
-
-## Git Safety
-- forbidden-without-instruction: git reset --hard
-- forbidden-without-instruction: git checkout -- <path>
-- forbidden-without-instruction: rm -rf
-- forbidden-without-instruction: git clean -fd
-- Do not edit .env files or switch branches/worktrees unless explicitly requested in-thread.
-
-## Documentation Contract
-- Canonical entrypoints: AGENTS.md, README.md, ARCHITECTURE.md, docs/MANIFEST.md
-- Update docs in same change when affecting: architecture boundaries
-- Update docs in same change when affecting: critical invariants
-- Update docs in same change when affecting: security/compliance behavior
-- Update docs in same change when affecting: user-visible behavior
+- do: Use repo-local checkpoints, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.
+- do: Keep context selective: load current scope, latest checkpoint, latest handoff, and relevant evidence; persist distilled findings, not raw session history.
+- improve first: Better checkpoint contents.
+- improve first: Better handoff notes.
+- improve first: Better evidence compaction.
+- improve first: Better validation and observability.
+- improve first: Fix plan quality before widening the memory system.
+- not yet: Do not add external retrieval just because work is long.
+- not yet: Do not add provider-thread persistence just because context is limited.
+- not yet: Do not move important working memory outside the repo while repo-local continuity is sufficient.
+- not yet: Do not treat extra memory systems as a substitute for better plans, checkpoints, and handoffs.
+- escalate when: Agents repeatedly miss important context even though it exists.
+- escalate when: Repo-local checkpoints and handoffs stop being enough.
+- escalate when: Important memory starts living outside the repo.
+- escalate when: You need one agent to search across many unrelated systems.
+- escalate when: You can point to repeated failures, not just a vague worry.
+- safe rule: If repo-local plans, checkpoints, and handoffs are enough, keep this design. If important context lives outside the repo and agents keep missing it, then consider external retrieval.
 
 ## Execution Checklist
-- Apply scoped changes only; keep evidence links canonical.
-- Preserve required safety gates and risk-routing behavior.
-- Use fast verification during iteration, full verification before merge.
-
+- Read the current plan and latest checkpoint before editing.
+- Honor Implementation-Targets, Validation-Lanes, and Security-Approval exactly as written.
+- Write a structured result to ORCH_RESULT_PATH after each worker or reviewer session.
+- Move plans to validation only when every must-land item is checked.

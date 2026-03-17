@@ -1,45 +1,10 @@
 #!/usr/bin/env node
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import {
-  resolveRepoOrAbsolutePath,
-  writeTextFileAtomic
-} from './lib/orchestrator-shared.mjs';
-import {
-  CONTRACT_IDS,
-  parseContractPayload,
-  prepareContractPayload
-} from './lib/contracts/index.mjs';
+import { resolveRepoOrAbsolutePath, writeTextFileAtomic } from './lib/orchestrator-shared.mjs';
+import { CONTRACT_IDS, prepareContractPayload } from './lib/contracts/index.mjs';
 
-const PLAN_ID_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const rootDir = process.cwd();
 const aggregateResultPath = String(process.env.ORCH_VALIDATION_RESULT_PATH ?? '').trim();
-
-function resolvedPlanMetadataCommand() {
-  const planId = String(process.env.ORCH_PLAN_ID ?? '').trim().toLowerCase();
-  if (!planId || !PLAN_ID_REGEX.test(planId)) {
-    return 'node ./scripts/automation/check-plan-metadata.mjs';
-  }
-  return `node ./scripts/automation/check-plan-metadata.mjs --plan-id ${planId}`;
-}
-
-function fullCommands() {
-  return [
-    'node ./scripts/automation/compile-runtime-context.mjs',
-    'node ./scripts/docs/check-governance.mjs',
-    'node ./scripts/check-article-conformance.mjs',
-    'node ./scripts/architecture/check-dependencies.mjs',
-    'node ./scripts/agent-hardening/check-agent-hardening.mjs',
-    'node ./scripts/agent-hardening/check-evals.mjs',
-    'node ./scripts/automation/check-harness-alignment.mjs',
-    'node ./scripts/automation/summarize-run-outcomes.mjs',
-    'node ./scripts/automation/check-outcomes-thresholds.mjs',
-    'node ./scripts/automation/check-performance-budgets.mjs',
-    'node ./scripts/automation/verify-orchestration-state.mjs',
-    resolvedPlanMetadataCommand()
-  ];
-}
 
 function parseArgs(argv) {
   const options = {};
@@ -69,6 +34,22 @@ function asBoolean(value, fallback = false) {
   return fallback;
 }
 
+function runCommand(command, dryRun) {
+  if (dryRun) {
+    console.log(`[verify-full] dry-run: ${command}`);
+    return { status: 0 };
+  }
+  const result = spawnSync(command, {
+    shell: true,
+    stdio: 'inherit',
+    env: process.env
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  return { status: result.status ?? 1 };
+}
+
 async function writeValidationResult(payload) {
   if (!aggregateResultPath) {
     return;
@@ -80,67 +61,25 @@ async function writeValidationResult(payload) {
   const normalized = prepareContractPayload(CONTRACT_IDS.validationResult, {
     ...payload,
     command: String(payload?.command ?? 'npm run verify:full').trim(),
-    lane: String(payload?.lane ?? 'host-required').trim()
+    lane: 'host-required'
   });
   await writeTextFileAtomic(absPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
-}
-
-function subcommandResultPath(index) {
-  if (!aggregateResultPath) {
-    return null;
-  }
-  const parsed = path.parse(aggregateResultPath);
-  return path.join(parsed.dir, `${parsed.name}-command-${index + 1}.json`);
-}
-
-async function readJsonIfExists(filePath) {
-  if (!filePath) {
-    return null;
-  }
-  try {
-    const resolved = resolveRepoOrAbsolutePath(rootDir, filePath);
-    if (!resolved) {
-      return null;
-    }
-    const raw = await fs.readFile(resolved.abs, 'utf8');
-    return parseContractPayload(CONTRACT_IDS.validationResult, JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
-function runCommand(command, dryRun, env) {
-  if (dryRun) {
-    console.log(`[verify-full] dry-run: ${command}`);
-    return { status: 0 };
-  }
-  const result = spawnSync(command, {
-    shell: true,
-    stdio: 'inherit',
-    env
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  return { status: result.status ?? 1 };
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const dryRun = asBoolean(options['dry-run'], false);
-  const commands = fullCommands();
+  const commands = [
+    'node ./scripts/automation/verify-fast.mjs',
+    'node ./scripts/check-article-conformance.mjs',
+    'node ./scripts/architecture/check-dependencies.mjs',
+    'node ./scripts/agent-hardening/check-agent-hardening.mjs',
+    'node ./scripts/agent-hardening/check-evals.mjs'
+  ];
 
   console.log(`[verify-full] running ${commands.length} command(s).`);
-  const checks = [];
   for (const command of commands) {
-    const index = checks.length;
-    const childResultPath = subcommandResultPath(index);
-    const env = childResultPath
-      ? { ...process.env, ORCH_VALIDATION_RESULT_PATH: childResultPath }
-      : process.env;
-    const execution = runCommand(command, dryRun, env);
-    const childResult = await readJsonIfExists(childResultPath);
-    checks.push({ command, resultPath: childResultPath, childResult });
+    const execution = runCommand(command, dryRun);
     if (execution.status !== 0) {
       await writeValidationResult({
         validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-full',
@@ -149,14 +88,14 @@ async function main() {
         summary: `[verify-full] failed: ${command}`,
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
-        findingFiles: Array.isArray(childResult?.findingFiles) ? childResult.findingFiles : [],
-        evidenceRefs: childResultPath ? [childResultPath] : [],
+        findingFiles: [],
+        evidenceRefs: [],
         artifactRefs: []
       });
-      console.error(`[verify-full] failed: ${command}`);
       process.exit(execution.status);
     }
   }
+
   await writeValidationResult({
     validationId: process.env.ORCH_VALIDATION_ID || 'repo:verify-full',
     type: process.env.ORCH_VALIDATION_TYPE || 'host-required',
@@ -165,7 +104,7 @@ async function main() {
     startedAt: new Date().toISOString(),
     finishedAt: new Date().toISOString(),
     findingFiles: [],
-    evidenceRefs: checks.map((entry) => entry.resultPath).filter(Boolean),
+    evidenceRefs: [],
     artifactRefs: []
   });
   console.log('[verify-full] passed.');

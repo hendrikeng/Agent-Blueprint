@@ -108,7 +108,8 @@ async function main() {
     status: action.status ?? 'completed',
     summary: action.summary ?? `Fixture action ${planId}/${role}`,
     reason: action.reason ?? null,
-    contextRemaining: 64000,
+    contextRemaining: Number.isFinite(action.contextRemaining) ? action.contextRemaining : 64000,
+    contextWindow: Number.isFinite(action.contextWindow) ? action.contextWindow : 128000,
     currentSubtask: action.currentSubtask ?? `${planId}/${role}`,
     nextAction: action.nextAction ?? 'Continue orchestration.',
     stateDelta: {

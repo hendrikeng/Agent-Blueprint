@@ -8,64 +8,52 @@ Source of Truth: This document.
 ## Purpose
 
 Keep automation value measurable with a compact, repeatable scorecard.
-Use this to demonstrate that orchestration reduces blast radius and debugging overhead.
+Use this to confirm that the flat queue stays fast, predictable, and low-noise.
 
 ## Data Sources
 
 - `docs/ops/automation/run-events.jsonl`
-- runtime continuity analytics artifact generated during automation runs
-- `docs/generated/perf-comparison.json`
+- `run-state.json` in `docs/ops/automation/`
 - `docs/exec-plans/evidence-index/*.md`
-- `docs/generated/run-outcomes.json`
+- optional generated outcome reports if the repository enables them
 
 ## Scorecard Metrics
 
 - Time to first worker edit:
   - Definition: plan start to first worker session that touches repository files.
-  - Output: mean/median seconds (`summary.speed.timeToFirstWorkerEditSeconds`).
-- Stage duration by role:
-  - Definition: per-session execution duration from `session_finished` events grouped by role.
-  - Output: sample size + mean/median for planner/explorer/worker/reviewer (`summary.speed.stageDurationsSeconds`).
+  - Output: mean/median seconds across recent runs.
+- Review rate:
+  - Definition: share of completed plans that required a reviewer pass.
+  - Output: count and percentage for medium/high-risk work.
 - Lead time:
   - Definition: first plan event timestamp to terminal plan event timestamp.
   - Output: mean/median lead time seconds across plans.
 - Validation reliability:
   - Definition: counts of passed/failed host and always validation events.
   - Output: pass/fail totals and failure rate.
-- Evidence compactness:
-  - Definition: number of evidence lifecycle/compaction events per run.
-  - Output: curated vs noisy evidence trend.
-- Memory posture quality:
-  - Definition: continuity payload quality plus contact-pack richness captured from `session_finished` events.
-  - Output: derived-continuity rate, continuity-degraded rate, resume-safe checkpoint rate, thin-pack rate, mean/median evidence refs per contact pack, mean/median checkpoint items per contact pack, mean/median selected-input count, and cache-hit/generated mix.
 - Rework loops:
-  - Definition: count rollover/handoff and repeated non-terminal sessions.
-  - Output: handoff totals, handoffs-per-plan distribution, repeated handoff-loop plan count, and worker no-touch retry count.
+  - Definition: count handoffs, blocked plans, and repeated worker passes.
+  - Output: totals plus sessions-per-completed-plan distribution.
 
 ## Report Workflow
 
-1. Run automation (`automation:run` or `automation:run:parallel`).
-2. Generate scorecard JSON: `npm run outcomes:report`.
-3. Inspect `docs/generated/run-outcomes.json`.
-4. Reference key numbers in plan closure notes or release notes.
+1. Run automation (`automation:run`, `automation:resume`, or `automation:grind`).
+2. Inspect `run-events.jsonl`, the latest `run-state.json`, and recent evidence indexes.
+3. Reference the key numbers in plan closure notes or release notes.
 
 ## Interpretation Guide
 
 - Good signal:
   - Time-to-first-edit medians trend down for similar risk tiers.
-  - Planner/explorer/reviewer stage durations stay within expected budget envelopes.
+  - Sessions per completed plan stay low and stable.
   - Stable lead times for similar risk tiers.
   - Validation failures trend down over time.
-  - Evidence compaction keeps references concise.
-  - Contact packs stay rich enough to resume work without frequent synthesized continuity or thin-pack classifications.
-  - Resume-safe checkpoint rates stay high and degraded continuity stays rare.
+  - Resume succeeds from the latest checkpoint and handoff without operator confusion.
 - Investigation signal:
   - Time-to-first-edit spikes without corresponding risk increase.
-  - Long planner/explorer/reviewer sessions with zero touched files.
+  - Repeated worker/reviewer loops on the same plan.
   - Spiking handoff/rework counts.
   - Repeated validation failures on same plan group.
-  - High derived-continuity rates or thin contact packs despite repeated handoffs.
-  - Low resume-safe checkpoint rates or repeated handoff loops for the same role/subtask.
   - High event volume with low completion throughput.
 
 ## Notes

@@ -7,8 +7,8 @@ Source of Truth: This document.
 
 ## Purpose
 
-Define a stable bridge from harness policy/orchestration contracts to GitHub-native agent profile scaffolds.
-This keeps the harness provider-agnostic while making platform-native adoption easier.
+Define the optional bridge from harness policy/runtime contracts to GitHub-native agent profile scaffolds.
+Canonical policy still lives in the repository docs, not in GitHub-specific exports.
 
 ## Inputs
 
@@ -22,11 +22,11 @@ This keeps the harness provider-agnostic while making platform-native adoption e
   - Source: `policy-manifest.mandatorySafetyRules`
   - Export: baseline policy profile.
 - Role profiles:
-  - Source: `orchestrator.config.roleOrchestration.roleProfiles`
-  - Export: role capability profile per stage (`planner`, `explorer`, `worker`, `reviewer`).
+  - Source: runtime/planning role profiles in policy + executor config
+  - Export: role capability profile (`planner`, `explorer`, `worker`, `reviewer`).
 - Risk routing:
-  - Source: `orchestrator.config.roleOrchestration.pipelines`
-  - Export: lane routing map (`low`, `medium`, `high`).
+  - Source: sequential runtime routing (`low`, `medium`, `high`)
+  - Export: lane routing map for `worker` and `reviewer`.
 - Validation lanes:
   - Source: `orchestrator.config.validation`
   - Export: always/host-required checks metadata.
@@ -36,28 +36,13 @@ This keeps the harness provider-agnostic while making platform-native adoption e
 
 ## Export Contract
 
-- Command: `npm run interop:github:export`
-- Convenience write mode: `npm run interop:github:export:write`
-- Default mode: dry run (no `.github/agents/` files written).
-- Report output: `docs/generated/github-agent-export.json`
-- Optional file emission: pass `--write-profiles true` to write scaffolds under `.github/agents/`.
+- If a repository exports GitHub profiles, keep them derived from the canonical harness docs.
+- Exported files are scaffolds, not the source of truth.
+- Report output, if enabled, belongs under `docs/generated/`.
 
 ## Scaffold Files
 
-When write mode is enabled, exporter writes:
-
-- `.github/agents/harness-default.agent.md`
-- `.github/agents/harness-planner.agent.md`
-- `.github/agents/harness-explorer.agent.md`
-- `.github/agents/harness-worker.agent.md`
-- `.github/agents/harness-reviewer.agent.md`
-- `.github/agents/README.md`
-- `.github/agents/base-policy.json`
-- `.github/agents/role-profiles.json`
-- `.github/agents/risk-pipelines.json`
-
-`.agent.md` files are YAML-frontmatter markdown scaffolds intended for GitHub custom-agent workflows.
-All exported files may require project-specific adjustments.
+When write mode is enabled, exporter should write only derived profile scaffolds and a small README explaining that the repository docs remain canonical.
 
 ## Platform Caveats
 
@@ -69,4 +54,4 @@ All exported files may require project-specific adjustments.
 
 - Enforcing a single platform-specific schema in governance checks.
 - Replacing canonical harness policy docs.
-- Auto-enabling orchestration features not explicitly configured.
+- Auto-enabling runtime behavior not explicitly configured in the repository.

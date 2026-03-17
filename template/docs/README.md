@@ -54,7 +54,7 @@ This file is the navigation and usage entrypoint for `docs/`. Use `docs/MANIFEST
 ## Agent Consumption Order
 
 - Humans and general-purpose agents start with `AGENTS.md`, `README.md`, and `docs/MANIFEST.md`.
-- Orchestrated role sessions consume `docs/generated/AGENT-RUNTIME-CONTEXT.md` plus task contact packs as the primary compact context.
+- Queue runtime sessions consume `docs/generated/AGENT-RUNTIME-CONTEXT.md`, the current plan, the latest checkpoint, the latest handoff note, and only the evidence needed for the active slice.
 - Platform-native feature agents should prefer exported scaffolds from `docs/ops/automation/INTEROP_GITHUB.md` rather than copying policy into ad-hoc prompt files.
 - When canonical policy changes, regenerate derived surfaces instead of editing generated or exported files by hand.
 
@@ -63,5 +63,7 @@ This file is the navigation and usage entrypoint for `docs/`. Use `docs/MANIFEST
 - Keep docs concise, canonical, and linked from `AGENTS.md`/`README.md`/`docs/MANIFEST.md`.
 - Update docs in the same change as behavior or boundary changes.
 - Prefer canonical docs over ad-hoc notes.
-- When updating strategic plans, keep upstream capability coverage and prior completed-plan reconciliation explicit instead of relying on implicit history.
+- Use one executable slice per future/active plan file and express larger efforts with multiple plan files linked by `Dependencies`.
+- Keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` explicit so broader vision does not silently become executable scope.
+- Do not reintroduce program parents, child-slice generation, or legacy metadata such as `Execution-Scope`, `Authoring-Intent`, and `Parent-Plan-ID`.
 - Do not move platform-specific agent instructions into canonical governance docs unless they are truly cross-provider policy.

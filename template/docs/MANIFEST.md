@@ -30,9 +30,6 @@ Use `docs/README.md` for navigation, usage, and authoring guidance.
 - `docs/generated/`
 - `docs/generated/README.md`
 - `docs/generated/AGENT-RUNTIME-CONTEXT.md`
-- `docs/generated/perf-comparison.json`
-- `docs/generated/run-outcomes.json`
-- `docs/generated/github-agent-export.json`
 - `docs/governance/`
 - `docs/governance/policy-manifest.json`
 - `docs/governance/policy-manifest.schema.json`

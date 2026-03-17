@@ -7,7 +7,7 @@ Source of Truth: This document.
 
 ## Purpose
 
-Define the minimum provider CLI contract required by the automation conveyor.
+Define the minimum provider CLI contract required by the sequential automation conveyor.
 Keep this file current when changing provider commands, flags, or output behavior.
 
 ## Supported Providers
@@ -21,17 +21,16 @@ Every provider command must support:
 
 - Non-interactive invocation suitable for orchestration runs.
 - Prompt injection via `{prompt}` placeholder.
-- Role model selection via `{role_model}` placeholder.
+- Runtime role selection for `worker` and `reviewer`.
 - Command exit status propagation.
-- Structured result payload written by executor wrapper to `ORCH_RESULT_PATH`.
-- Prompt templates must support task-scoped contact packs via `{contact_pack_file}`.
+- Structured result payload written to `ORCH_RESULT_PATH`.
 
 Provider live-progress text is optional and best-effort only; it is not part of the required execution contract.
 
 ## Baseline Command Templates
 
-- Codex: `codex exec --json --full-auto -c model_reasoning_effort={role_reasoning_effort} -m {role_model} {prompt}`
-- Claude: `claude -p --model {role_model} {prompt}`
+- Codex: `codex exec --json --full-auto -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}`
+- Claude: `claude -p --model {model} {prompt}`
 
 These are baseline templates, not universal guarantees across all versions.
 
@@ -40,19 +39,26 @@ These are baseline templates, not universal guarantees across all versions.
 - If a provider CLI version removes or changes required flags, update:
   - `docs/ops/automation/orchestrator.config.json`
   - this document
-  - any exported interop scaffolds
+- any exported interop scaffolds
 - Prefer explicit pinning in project setup docs when reproducibility matters.
 
 ## Structured Payload Guarantee
 
-The orchestrator relies on the executor wrapper to enforce structured output:
+The orchestrator relies on the executor contract to enforce structured output:
 
 - Required payload fields: `status`, `summary`, `reason`, `contextRemaining`
-- Recommended payload fields when available: `contextWindow`, `contextUsedRatio`
+- Recommended payload fields when available: `contextWindow`, `currentSubtask`, `nextAction`, `stateDelta`
 - Payload path: `ORCH_RESULT_PATH`
 - Allowed status values: `completed`, `blocked`, `handoff_required`, `pending`
 
 If payload is missing or invalid, orchestration treats the session as incomplete and forces safe continuation behavior.
+
+## Low-Context Handoff Behavior
+
+- Providers must report a truthful `contextRemaining` estimate for each session result.
+- Providers should report `contextWindow` when possible so percent-based thresholds can be enforced.
+- If a session is near the configured threshold and the current role boundary is not safely complete, return `handoff_required` with a concrete `nextAction` and `pendingActions`.
+- The runtime may override a misleading `completed` result into a forced handoff when the reported remaining context is too low for safe continuation.
 
 ## Live Activity Telemetry (Optional)
 
@@ -60,7 +66,6 @@ If payload is missing or invalid, orchestration treats the session as incomplete
 - For Codex, `--json` output is preferred so orchestrator can parse structured progress/status events.
 - This channel is informational only and must not control retries, completion, or policy gates.
 - Missing, delayed, or format-shifted provider text must not fail orchestration.
-- If enabled, `provider_activity` events in `run-events.jsonl` are optional telemetry and may be sparse/rate-limited.
 
 ## GitHub Interop Caveat
 
@@ -74,5 +79,4 @@ When updating provider commands:
 
 1. Run `npm run verify:fast`.
 2. Run `npm run verify:full`.
-3. Run `npm run interop:github:export -- --dry-run true`.
-4. Confirm role placeholders remain present (`{prompt}`, `{role_model}`, `{role_reasoning_effort}` for Codex).
+3. Confirm required placeholders remain present (`{prompt}`, `{model}`, `{reasoning_effort}` when used).

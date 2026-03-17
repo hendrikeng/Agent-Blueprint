@@ -1,66 +1,62 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { extractProgramChildUnitDeclarations } from './plan-metadata.mjs';
+import {
+  inferPlanId,
+  metadataValue,
+  parseMetadata,
+  parseMustLandChecklist,
+  parseValidationLanes,
+  setMetadataFields
+} from './plan-metadata.mjs';
 
-test('extractProgramChildUnitDeclarations reads numbered remaining execution slices', () => {
-  const declarations = extractProgramChildUnitDeclarations(`
-## Remaining Execution Slices
+test('parseMetadata reads bullet metadata from the Metadata section', () => {
+  const content = [
+    '# Plan',
+    '',
+    '## Metadata',
+    '',
+    '- Plan-ID: red-inbox',
+    '- Status: queued',
+    '- Validation-Lanes: always, host-required'
+  ].join('\n');
 
-### 1. Lifecycle Workbench, Availability Graph, And Smart Calendar
-### 2. Execution Assist And Collaboration
-
-## Recommended Implementation Order
-
-### 1. Not A Child Unit
-`);
-
-  assert.deepEqual(
-    declarations.map((entry) => ({
-      sectionTitle: entry.sectionTitle,
-      title: entry.title,
-      planIdHint: entry.planIdHint
-    })),
-    [
-      {
-        sectionTitle: 'Remaining Execution Slices',
-        title: 'Lifecycle Workbench, Availability Graph, And Smart Calendar',
-        planIdHint: null
-      },
-      {
-        sectionTitle: 'Remaining Execution Slices',
-        title: 'Execution Assist And Collaboration',
-        planIdHint: null
-      }
-    ]
-  );
+  const metadata = parseMetadata(content);
+  assert.equal(metadataValue(metadata, 'Plan-ID'), 'red-inbox');
+  assert.deepEqual(parseValidationLanes(metadataValue(metadata, 'Validation-Lanes'), []), ['always', 'host-required']);
 });
 
-test('extractProgramChildUnitDeclarations reads portfolio unit plan-id hints', () => {
-  const declarations = extractProgramChildUnitDeclarations(`
-## 2026-2027 Portfolio Units
+test('parseMustLandChecklist extracts stable must-land identifiers', () => {
+  const checklist = parseMustLandChecklist([
+    '## Must-Land Checklist',
+    '',
+    '- [x] `ml-red-inbox` Make the inbox red.',
+    '- [ ] `ml-red-inbox-tests` Add tests.'
+  ].join('\n'));
 
-### PU-01 (Q2 2026): organizer-wizard-v2-step-ia-and-progress
-### PU-02 (Q2 2026): organizer-wizard-v2-save-resume-center
-`);
+  assert.deepEqual(checklist.map((entry) => entry.id), ['ml-red-inbox', 'ml-red-inbox-tests']);
+  assert.deepEqual(checklist.map((entry) => entry.checked), [true, false]);
+});
 
-  assert.deepEqual(
-    declarations.map((entry) => ({
-      sectionTitle: entry.sectionTitle,
-      title: entry.title,
-      planIdHint: entry.planIdHint
-    })),
-    [
-      {
-        sectionTitle: '2026-2027 Portfolio Units',
-        title: 'organizer-wizard-v2-step-ia-and-progress',
-        planIdHint: 'organizer-wizard-v2-step-ia-and-progress'
-      },
-      {
-        sectionTitle: '2026-2027 Portfolio Units',
-        title: 'organizer-wizard-v2-save-resume-center',
-        planIdHint: 'organizer-wizard-v2-save-resume-center'
-      }
-    ]
-  );
+test('setMetadataFields updates values and preserves order', () => {
+  const updated = setMetadataFields([
+    '# Plan',
+    '',
+    '## Metadata',
+    '',
+    '- Plan-ID: red-inbox',
+    '- Status: draft'
+  ].join('\n'), {
+    Status: 'queued',
+    'Risk-Tier': 'medium'
+  });
+
+  assert.match(updated, /- Plan-ID: red-inbox/);
+  assert.match(updated, /- Status: queued/);
+  assert.match(updated, /- Risk-Tier: medium/);
+});
+
+test('inferPlanId falls back to the dated filename stem', () => {
+  const planId = inferPlanId('# Plan\n', '/tmp/docs/future/2026-03-17-red-inbox.md');
+  assert.equal(planId, 'red-inbox');
 });

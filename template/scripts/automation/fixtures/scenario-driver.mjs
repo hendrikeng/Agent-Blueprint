@@ -115,6 +115,7 @@ export function structuredResult(step = {}, defaults = {}) {
     summary: String(step.summary ?? defaults.summary ?? `${status} via fixture stub`).trim(),
     reason: String(step.reason ?? defaults.reason ?? '').trim() || null,
     contextRemaining: Number.isFinite(step.contextRemaining) ? step.contextRemaining : 48000,
+    contextWindow: Number.isFinite(step.contextWindow) ? step.contextWindow : 128000,
     currentSubtask: String(step.currentSubtask ?? defaults.currentSubtask ?? 'fixture-execution').trim(),
     nextAction: String(step.nextAction ?? defaults.nextAction ?? 'Continue deterministic fixture flow').trim(),
     stateDelta: {

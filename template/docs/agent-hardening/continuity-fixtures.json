@@ -6,40 +6,40 @@
       "suite": "continuity-fixture-resume",
       "expectedStatus": "completed",
       "alreadyCompletedWork": [
-        "Added continuity incident bundle writer"
+        "Added latest checkpoint writer"
       ],
       "requiredContext": {
         "facts": [
-          "contact pack manifests must include stable item ids",
-          "incident bundles must include validation refs"
+          "latest checkpoints must retain stable item ids",
+          "handoff notes must include validation refs"
         ],
         "decisions": [
-          "promotion thresholds block full verification only"
+          "resume should rely on the newest checkpoint and handoff only"
         ],
         "artifacts": [
-          "docs/generated/run-outcomes.json"
+          "docs/ops/automation/runtime/state/example-plan/latest.json"
         ]
       },
       "resumeOutput": {
         "status": "completed",
-        "currentSubtask": "Finish outcomes threshold enforcement",
-        "nextAction": "Wire outcomes verify into full verification",
+        "currentSubtask": "Finish checkpoint resume enforcement",
+        "nextAction": "Wire resume-safe checkpoint checks into verification",
         "stateDelta": {
           "completedWork": [
-            "Added outcomes threshold verifier"
+            "Added checkpoint resume verifier"
           ],
           "acceptedFacts": [
-            "contact pack manifests must include stable item ids",
-            "incident bundles must include validation refs"
+            "latest checkpoints must retain stable item ids",
+            "handoff notes must include validation refs"
           ],
           "decisions": [
-            "promotion thresholds block full verification only"
+            "resume should rely on the newest checkpoint and handoff only"
           ],
           "recentResults": [
-            "Generated run outcomes now include thin pack rate"
+            "Latest checkpoint now captures stable pending action refs"
           ],
           "artifacts": [
-            "docs/generated/run-outcomes.json"
+            "docs/ops/automation/runtime/state/example-plan/latest.json"
           ],
           "evidence": {
             "validationRefs": [
@@ -104,35 +104,35 @@
           "host validation should remain outside executor sessions"
         ],
         "decisions": [
-          "continuity thresholds use run outcomes data only when sample size is non-zero"
+          "validation summaries should append to plan evidence before completion"
         ],
         "artifacts": [
-          "docs/ops/automation/runtime/incidents/example.json"
+          "docs/ops/automation/handoffs/example-plan.md"
         ]
       },
       "resumeOutput": {
         "status": "completed",
         "currentSubtask": "Close validation handoff",
-        "nextAction": "Re-run verify full after outcomes report generation",
+        "nextAction": "Re-run verify:full after host validation completes",
         "stateDelta": {
           "completedWork": [
-            "Linked outcomes verification into validation flow"
+            "Linked host validation results into plan closeout"
           ],
           "acceptedFacts": [
             "host validation should remain outside executor sessions"
           ],
           "decisions": [
-            "continuity thresholds use run outcomes data only when sample size is non-zero"
+            "validation summaries should append to plan evidence before completion"
           ],
           "recentResults": [
             "Validation handoff closed cleanly"
           ],
           "artifacts": [
-            "docs/ops/automation/runtime/incidents/example.json"
+            "docs/ops/automation/handoffs/example-plan.md"
           ],
           "evidence": {
             "validationRefs": [
-              "npm run outcomes:verify"
+              "npm run verify:full"
             ]
           }
         }
@@ -145,31 +145,31 @@
       "alreadyCompletedWork": [],
       "requiredContext": {
         "facts": [
-          "failed or degraded sessions must emit incident bundles"
+          "failed sessions must retain the latest checkpoint and command log"
         ],
         "decisions": [
-          "continuity-degraded sessions remain reportable even when execution does not fail"
+          "retries should start from the newest durable checkpoint"
         ],
         "artifacts": [
-          "docs/ops/automation/runtime/incidents/run-1/plan-a/session-1.json"
+          "docs/ops/automation/runtime/run-example/example-plan/logs/01-worker.log"
         ]
       },
       "resumeOutput": {
         "status": "failed",
-        "currentSubtask": "Capture failed session replay bundle",
-        "nextAction": "Inspect incident bundle and selected inputs before retry",
+        "currentSubtask": "Capture failed session handoff",
+        "nextAction": "Inspect the latest checkpoint and command log before retry",
         "stateDelta": {
           "acceptedFacts": [
-            "failed or degraded sessions must emit incident bundles"
+            "failed sessions must retain the latest checkpoint and command log"
           ],
           "decisions": [
-            "continuity-degraded sessions remain reportable even when execution does not fail"
+            "retries should start from the newest durable checkpoint"
           ],
           "recentResults": [
             "Session failed before completion"
           ],
           "artifacts": [
-            "docs/ops/automation/runtime/incidents/run-1/plan-a/session-1.json"
+            "docs/ops/automation/runtime/run-example/example-plan/logs/01-worker.log"
           ],
           "reasoning": {
             "blockers": [

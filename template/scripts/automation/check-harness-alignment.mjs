@@ -1,861 +1,151 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {
-  CANONICAL_EXECUTOR_PROMPT_TEMPLATE_REF,
-  DEFAULT_EXECUTOR_PROMPT_TEMPLATE,
-  resolveExecutorPromptTemplate
-} from './lib/executor-policy.mjs';
 
 const rootDir = process.cwd();
 const findings = [];
-const advisories = [];
+const requiredScripts = new Set([
+  'context:compile',
+  'docs:verify',
+  'harness:verify',
+  'plans:verify',
+  'verify:fast',
+  'verify:full',
+  'automation:run',
+  'automation:resume',
+  'automation:grind',
+  'automation:audit'
+]);
+const retiredScripts = [
+  'automation:run:medium',
+  'automation:run:high',
+  'automation:run:parallel',
+  'automation:resume:parallel',
+  'automation:resume:high:non-atomic',
+  'plans:compile',
+  'plans:migrate',
+  'plans:scaffold-children',
+  'state:verify'
+];
 
-const requiredPaths = {
-  orchestrator: path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
-  wrapper: path.join(rootDir, 'scripts', 'automation', 'executor-wrapper.mjs'),
-  executorPolicy: path.join(rootDir, 'scripts', 'automation', 'lib', 'executor-policy.mjs'),
-  orchestratorShared: path.join(rootDir, 'scripts', 'automation', 'lib', 'orchestrator-shared.mjs'),
-  planDocumentState: path.join(rootDir, 'scripts', 'automation', 'lib', 'plan-document-state.mjs'),
-  sessionPolicy: path.join(rootDir, 'scripts', 'automation', 'lib', 'session-policy.mjs'),
-  atomicCommitPolicy: path.join(rootDir, 'scripts', 'automation', 'lib', 'atomic-commit-policy.mjs'),
-  validationCompletion: path.join(rootDir, 'scripts', 'automation', 'lib', 'validation-completion.mjs'),
-  config: path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json'),
-  contextCompiler: path.join(rootDir, 'scripts', 'automation', 'compile-runtime-context.mjs'),
-  contactPackCompiler: path.join(rootDir, 'scripts', 'automation', 'compile-task-contact-pack.mjs'),
-  verifyFast: path.join(rootDir, 'scripts', 'automation', 'verify-fast.mjs'),
-  verifyFull: path.join(rootDir, 'scripts', 'automation', 'verify-full.mjs'),
-  perfCollector: path.join(rootDir, 'scripts', 'automation', 'collect-performance-baseline.mjs'),
-  policyManifest: path.join(rootDir, 'docs', 'governance', 'policy-manifest.json'),
-  policySchema: path.join(rootDir, 'docs', 'governance', 'policy-manifest.schema.json')
-};
-
-function addFinding(code, message, filePath = null) {
+function addFinding(code, message, filePath) {
   findings.push({ code, message, filePath });
 }
 
-function addAdvisory(code, message, filePath = null) {
-  advisories.push({ code, message, filePath });
-}
-
-function rel(filePath) {
-  return path.relative(rootDir, filePath).split(path.sep).join('/');
-}
-
-async function fileExists(filePath) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function readJsonStrict(filePath) {
+async function readJson(filePath) {
   const raw = await fs.readFile(filePath, 'utf8');
-  try {
-    return JSON.parse(raw);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSON in ${rel(filePath)}: ${message}`);
-  }
-}
-
-async function readUtf8IfExists(filePath) {
-  try {
-    return await fs.readFile(filePath, 'utf8');
-  } catch {
-    return null;
-  }
-}
-
-function commandIncludesPromptAndRoleModel(command) {
-  const value = String(command ?? '').trim();
-  return value.includes('{prompt}') && value.includes('{role_model}');
-}
-
-function codexCommandIncludesRoleReasoning(command) {
-  const value = String(command ?? '').trim();
-  if (!value) {
-    return false;
-  }
-  return value.includes('{role_reasoning_effort}');
-}
-
-function ensureScriptSignatures(
-  orchestratorRaw,
-  wrapperRaw,
-  executorPolicyRaw,
-  contextCompilerRaw,
-  contactPackCompilerRaw,
-  moduleRaws = {}
-) {
-  if (!orchestratorRaw.includes("const DEFAULT_OUTPUT_MODE = 'pretty';")) {
-    addFinding(
-      'MISSING_PRETTY_DEFAULT',
-      "scripts/automation/orchestrator.mjs must default to output mode 'pretty'.",
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  if (!orchestratorRaw.includes('function isPrettyOutput(')) {
-    addFinding(
-      'MISSING_PRETTY_MODE_SUPPORT',
-      'scripts/automation/orchestrator.mjs is missing pretty-mode support helpers.',
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  if (!orchestratorRaw.includes('function shouldCaptureCommandOutput(')) {
-    addFinding(
-      'MISSING_OUTPUT_CAPTURE_POLICY',
-      'scripts/automation/orchestrator.mjs is missing command output capture policy.',
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  if (!orchestratorRaw.includes('function runShellMonitored(')) {
-    addFinding(
-      'MISSING_LIVE_EXECUTION_MONITOR',
-      'scripts/automation/orchestrator.mjs must include monitored command execution for live heartbeat status.',
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  if (!orchestratorRaw.includes('function renderLiveStatusLine(')) {
-    addFinding(
-      'MISSING_LIVE_STATUS_RENDERER',
-      'scripts/automation/orchestrator.mjs must include a single-line live status renderer.',
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  if (!wrapperRaw.includes('enforceRoleModelSelection')) {
-    addFinding(
-      'MISSING_ROLE_MODEL_ENFORCEMENT',
-      "scripts/automation/executor-wrapper.mjs must enforce role-model selection policy.",
-      'scripts/automation/executor-wrapper.mjs'
-    );
-  }
-  if (!wrapperRaw.includes('./lib/executor-policy.mjs')) {
-    addFinding(
-      'MISSING_SHARED_EXECUTOR_POLICY_IMPORT',
-      'scripts/automation/executor-wrapper.mjs must import the shared executor policy module.',
-      'scripts/automation/executor-wrapper.mjs'
-    );
-  }
-  const requiredOrchestratorImports = [
-    './lib/plan-document-state.mjs',
-    './lib/session-policy.mjs',
-    './lib/atomic-commit-policy.mjs',
-    './lib/validation-completion.mjs'
-  ];
-  for (const importRef of requiredOrchestratorImports) {
-    if (!orchestratorRaw.includes(importRef)) {
-      addFinding(
-        'MISSING_ORCHESTRATOR_MODULE_IMPORT',
-        `scripts/automation/orchestrator.mjs must import ${importRef}.`,
-        'scripts/automation/orchestrator.mjs'
-      );
-    }
-  }
-  if (!orchestratorRaw.includes('const validationCompletionOps = createValidationCompletionOps(')) {
-    addFinding(
-      'MISSING_VALIDATION_COMPLETION_FACTORY',
-      'scripts/automation/orchestrator.mjs must construct validationCompletionOps from the shared validation/completion module.',
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  const sharedRaw = String(moduleRaws.orchestratorShared ?? '');
-  const planDocumentRaw = String(moduleRaws.planDocumentState ?? '');
-  const sessionPolicyRaw = String(moduleRaws.sessionPolicy ?? '');
-  const atomicCommitRaw = String(moduleRaws.atomicCommitPolicy ?? '');
-  const validationCompletionRaw = String(moduleRaws.validationCompletion ?? '');
-  if (!sharedRaw.includes('export function resolveSafeRepoPath(')) {
-    addFinding(
-      'MISSING_SHARED_SAFE_PATH_HELPER',
-      'scripts/automation/lib/orchestrator-shared.mjs must export resolveSafeRepoPath.',
-      'scripts/automation/lib/orchestrator-shared.mjs'
-    );
-  }
-  if (!planDocumentRaw.includes('export async function setPlanStatus(')) {
-    addFinding(
-      'MISSING_PLAN_DOCUMENT_STATUS_WRITER',
-      'scripts/automation/lib/plan-document-state.mjs must export setPlanStatus.',
-      'scripts/automation/lib/plan-document-state.mjs'
-    );
-  }
-  if (!sessionPolicyRaw.includes('export function disallowedTouchedPathsForRole(')) {
-    addFinding(
-      'MISSING_SESSION_POLICY_SCOPE_ENFORCEMENT',
-      'scripts/automation/lib/session-policy.mjs must export disallowedTouchedPathsForRole.',
-      'scripts/automation/lib/session-policy.mjs'
-    );
-  }
-  if (!atomicCommitRaw.includes('export function evaluateAtomicCommitReadiness(')) {
-    addFinding(
-      'MISSING_ATOMIC_COMMIT_PREFLIGHT',
-      'scripts/automation/lib/atomic-commit-policy.mjs must export evaluateAtomicCommitReadiness.',
-      'scripts/automation/lib/atomic-commit-policy.mjs'
-    );
-  }
-  if (
-    orchestratorRaw.includes('function captureImplementationBaseline(') &&
-    orchestratorRaw.includes('implementationEvidenceFingerprint(') &&
-    !orchestratorRaw.includes('implementationEvidenceFingerprint,')
-  ) {
-    addFinding(
-      'MISSING_IMPLEMENTATION_EVIDENCE_FINGERPRINT_IMPORT',
-      'scripts/automation/orchestrator.mjs must import implementationEvidenceFingerprint from ./lib/atomic-commit-policy.mjs when captureImplementationBaseline uses it.',
-      'scripts/automation/orchestrator.mjs'
-    );
-  }
-  if (!validationCompletionRaw.includes('export function createValidationCompletionOps(')) {
-    addFinding(
-      'MISSING_VALIDATION_COMPLETION_MODULE',
-      'scripts/automation/lib/validation-completion.mjs must export createValidationCompletionOps.',
-      'scripts/automation/lib/validation-completion.mjs'
-    );
-  }
-  if (!executorPolicyRaw.includes('Must-Land Checklist')) {
-    addFinding(
-      'MISSING_MUST_LAND_PROMPT_POLICY',
-      "scripts/automation/lib/executor-policy.mjs must instruct executors to honor '## Must-Land Checklist' as the completion contract.",
-      'scripts/automation/lib/executor-policy.mjs'
-    );
-  }
-  if (!executorPolicyRaw.includes('Prior Completed Plan Reconciliation')) {
-    addFinding(
-      'MISSING_RECONCILIATION_PROMPT_POLICY',
-      "scripts/automation/lib/executor-policy.mjs must instruct executors to honor '## Prior Completed Plan Reconciliation' for future blueprints and strategic phase plans.",
-      'scripts/automation/lib/executor-policy.mjs'
-    );
-  }
-  if (!executorPolicyRaw.includes('Delivery-Class') || !executorPolicyRaw.includes('Execution-Scope')) {
-    addFinding(
-      'MISSING_PLAN_CLASS_PROMPT_POLICY',
-      "scripts/automation/lib/executor-policy.mjs must instruct executors to honor 'Delivery-Class' and 'Execution-Scope'.",
-      'scripts/automation/lib/executor-policy.mjs'
-    );
-  }
-  if (!executorPolicyRaw.includes('Implementation-Targets')) {
-    addFinding(
-      'MISSING_IMPLEMENTATION_TARGETS_PROMPT_POLICY',
-      "scripts/automation/lib/executor-policy.mjs must instruct product slices to honor 'Implementation-Targets'.",
-      'scripts/automation/lib/executor-policy.mjs'
-    );
-  }
-  if (!executorPolicyRaw.includes('currentSubtask') || !executorPolicyRaw.includes('stateDelta')) {
-    addFinding(
-      'MISSING_STRUCTURED_CONTINUITY_PROMPT_POLICY',
-      'scripts/automation/lib/executor-policy.mjs must require structured continuity fields in ORCH_RESULT_PATH payloads.',
-      'scripts/automation/lib/executor-policy.mjs'
-    );
-  }
-  if (!contextCompilerRaw.includes('## Memory Posture')) {
-    addFinding(
-      'MISSING_MEMORY_POSTURE_RUNTIME_CONTEXT',
-      'scripts/automation/compile-runtime-context.mjs must emit a Memory Posture section.',
-      'scripts/automation/compile-runtime-context.mjs'
-    );
-  }
-  if (!contextCompilerRaw.includes('docs/agent-hardening/MEMORY_CONTEXT.md')) {
-    addFinding(
-      'MISSING_MEMORY_CONTEXT_SOURCE',
-      'scripts/automation/compile-runtime-context.mjs must cite docs/agent-hardening/MEMORY_CONTEXT.md as a primary source.',
-      'scripts/automation/compile-runtime-context.mjs'
-    );
-  }
-  if (!contactPackCompilerRaw.includes('## Memory Posture')) {
-    addFinding(
-      'MISSING_MEMORY_POSTURE_CONTACT_PACK',
-      'scripts/automation/compile-task-contact-pack.mjs must emit a Memory Posture section.',
-      'scripts/automation/compile-task-contact-pack.mjs'
-    );
-  }
-}
-
-function gatherPipelineRoles(config) {
-  const pipelines = config?.roleOrchestration?.pipelines ?? {};
-  const roles = new Set();
-  for (const entries of Object.values(pipelines)) {
-    if (!Array.isArray(entries)) continue;
-    for (const entry of entries) {
-      const role = String(entry ?? '').trim().toLowerCase();
-      if (role) roles.add(role);
-    }
-  }
-  return [...roles];
-}
-
-function ensureManifestPolicy(manifest, manifestRaw, schemaRaw, manifestPath, schemaPath) {
-  if (!manifestPath || !schemaPath) {
-    addFinding(
-      'MISSING_MANIFEST_PATH',
-      'Could not resolve policy manifest paths while validating memory posture requirements.'
-    );
-    return;
-  }
-  const memoryPosture = manifest?.memoryPosture;
-  if (!memoryPosture || typeof memoryPosture !== 'object') {
-    addFinding(
-      'MISSING_MEMORY_POSTURE_MANIFEST',
-      'docs/governance/policy-manifest.json must define memoryPosture.',
-      rel(manifestPath)
-    );
-    return;
-  }
-  for (const field of ['whatToDo', 'improveBeforeRearchitecture', 'doNotAddYet', 'escalateWhen']) {
-    if (!Array.isArray(memoryPosture[field]) || memoryPosture[field].length === 0) {
-      addFinding(
-        'INVALID_MEMORY_POSTURE_MANIFEST',
-        `docs/governance/policy-manifest.json memoryPosture.${field} must be a non-empty array.`,
-        rel(manifestPath)
-      );
-    }
-  }
-  if (typeof memoryPosture.safeRule !== 'string' || memoryPosture.safeRule.trim().length === 0) {
-    addFinding(
-      'INVALID_MEMORY_POSTURE_SAFE_RULE',
-      'docs/governance/policy-manifest.json memoryPosture.safeRule must be a non-empty string.',
-      rel(manifestPath)
-    );
-  }
-  if (!String(manifestRaw ?? '').includes('"memoryPosture"')) {
-    addFinding(
-      'MISSING_MEMORY_POSTURE_MANIFEST_RAW',
-      'docs/governance/policy-manifest.json must retain the memoryPosture contract in source form.',
-      rel(manifestPath)
-    );
-  }
-  for (const token of ['"memoryPosture"', '"improveBeforeRearchitecture"', '"doNotAddYet"', '"escalateWhen"', '"safeRule"']) {
-    if (!String(schemaRaw ?? '').includes(token)) {
-      addFinding(
-        'MISSING_MEMORY_POSTURE_SCHEMA',
-        `docs/governance/policy-manifest.schema.json must describe ${token}.`,
-        rel(schemaPath)
-      );
-    }
-  }
-}
-
-function ensureConfigPolicy(config, configPath) {
-  const provider = String(config?.executor?.provider ?? 'codex').trim().toLowerCase();
-  const roleProfiles = config?.roleOrchestration?.roleProfiles ?? {};
-  const providerRoleProfiles = config?.roleOrchestration?.providers?.[provider]?.roleProfiles ?? {};
-  const providerRoles = config?.roleOrchestration?.providers?.[provider]?.roles ?? {};
-  const fallbackProviderCommand = config?.executor?.providers?.[provider]?.command ?? '';
-
-  if (config?.executor?.enforceRoleModelSelection !== true) {
-    addFinding(
-      'ROLE_MODEL_ENFORCEMENT_DISABLED',
-      "executor.enforceRoleModelSelection must be true.",
-      rel(configPath)
-    );
-  }
-  const executorCommand = String(config?.executor?.command ?? '').trim();
-  if (!executorCommand.includes('{contact_pack_file}')) {
-    addFinding(
-      'MISSING_CONTACT_PACK_EXECUTOR_TOKEN',
-      "executor.command must include '{contact_pack_file}'.",
-      rel(configPath)
-    );
-  }
-
-  const runtimeContextPath = String(config?.context?.runtimeContextPath ?? '').trim();
-  if (!runtimeContextPath) {
-    addFinding(
-      'MISSING_RUNTIME_CONTEXT_PATH',
-      "context.runtimeContextPath must be set.",
-      rel(configPath)
-    );
-  }
-
-  const maxTokens = Number.parseInt(String(config?.context?.maxTokens ?? ''), 10);
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) {
-    addFinding(
-      'INVALID_RUNTIME_CONTEXT_MAX_TOKENS',
-      'context.maxTokens must be a positive integer.',
-      rel(configPath)
-    );
-  }
-  const rawPromptTemplate = String(config?.executor?.promptTemplate ?? '').trim();
-  const promptTemplate = resolveExecutorPromptTemplate(rawPromptTemplate);
-  if (rawPromptTemplate !== CANONICAL_EXECUTOR_PROMPT_TEMPLATE_REF) {
-    addFinding(
-      'EXECUTOR_PROMPT_TEMPLATE_NOT_CANONICAL',
-      `executor.promptTemplate must be '${CANONICAL_EXECUTOR_PROMPT_TEMPLATE_REF}' so the canonical policy lives in one shared source.`,
-      rel(configPath)
-    );
-  }
-  if (promptTemplate !== DEFAULT_EXECUTOR_PROMPT_TEMPLATE) {
-    addFinding(
-      'EXECUTOR_PROMPT_TEMPLATE_MISMATCH',
-      'Resolved executor prompt template does not match the canonical shared policy text.',
-      rel(configPath)
-    );
-  }
-  if (!promptTemplate.includes('{contact_pack_file}')) {
-    addFinding(
-      'MISSING_CONTACT_PACK_PROMPT_PLACEHOLDER',
-      "executor.promptTemplate must include '{contact_pack_file}'.",
-      rel(configPath)
-    );
-  }
-  if (!promptTemplate.includes('Must-Land Checklist')) {
-    addFinding(
-      'MISSING_MUST_LAND_PROMPT_TEMPLATE',
-      "executor.promptTemplate must mention '## Must-Land Checklist' completion policy.",
-      rel(configPath)
-    );
-  }
-  if (!promptTemplate.includes('Prior Completed Plan Reconciliation')) {
-    addFinding(
-      'MISSING_RECONCILIATION_PROMPT_TEMPLATE',
-      "executor.promptTemplate must mention '## Prior Completed Plan Reconciliation' policy.",
-      rel(configPath)
-    );
-  }
-  if (!promptTemplate.includes('Delivery-Class') || !promptTemplate.includes('Execution-Scope')) {
-    addFinding(
-      'MISSING_PLAN_CLASS_PROMPT_TEMPLATE',
-      "executor.promptTemplate must mention 'Delivery-Class' and 'Execution-Scope'.",
-      rel(configPath)
-    );
-  }
-  if (!promptTemplate.includes('Implementation-Targets')) {
-    addFinding(
-      'MISSING_IMPLEMENTATION_TARGETS_PROMPT_TEMPLATE',
-      "executor.promptTemplate must mention 'Implementation-Targets' for product slices.",
-      rel(configPath)
-    );
-  }
-  if (!promptTemplate.includes('currentSubtask') || !promptTemplate.includes('stateDelta')) {
-    addFinding(
-      'MISSING_STRUCTURED_CONTINUITY_PROMPT_TEMPLATE',
-      "executor.promptTemplate must require structured continuity fields (`currentSubtask`, `nextAction`, `stateDelta`).",
-      rel(configPath)
-    );
-  }
-  const contactPacks = config?.context?.contactPacks ?? {};
-  if (typeof contactPacks.enabled !== 'boolean') {
-    addFinding(
-      'INVALID_CONTACT_PACK_ENABLED',
-      'context.contactPacks.enabled must be a boolean.',
-      rel(configPath)
-    );
-  }
-  const maxPolicyBullets = Number.parseInt(String(contactPacks.maxPolicyBullets ?? ''), 10);
-  if (!Number.isFinite(maxPolicyBullets) || maxPolicyBullets <= 0) {
-    addFinding(
-      'INVALID_CONTACT_PACK_MAX_POLICY_BULLETS',
-      'context.contactPacks.maxPolicyBullets must be a positive integer.',
-      rel(configPath)
-    );
-  }
-  if (typeof contactPacks.includeRecentEvidence !== 'boolean') {
-    addFinding(
-      'INVALID_CONTACT_PACK_INCLUDE_RECENT_EVIDENCE',
-      'context.contactPacks.includeRecentEvidence must be a boolean.',
-      rel(configPath)
-    );
-  }
-  const maxRecentEvidenceItems = Number.parseInt(String(contactPacks.maxRecentEvidenceItems ?? ''), 10);
-  if (!Number.isFinite(maxRecentEvidenceItems) || maxRecentEvidenceItems < 0) {
-    addFinding(
-      'INVALID_CONTACT_PACK_MAX_RECENT_EVIDENCE_ITEMS',
-      'context.contactPacks.maxRecentEvidenceItems must be an integer >= 0.',
-      rel(configPath)
-    );
-  }
-  if (typeof contactPacks.includeLatestState !== 'boolean') {
-    addFinding(
-      'INVALID_CONTACT_PACK_INCLUDE_LATEST_STATE',
-      'context.contactPacks.includeLatestState must be a boolean.',
-      rel(configPath)
-    );
-  }
-  const maxRecentCheckpointItems = Number.parseInt(String(contactPacks.maxRecentCheckpointItems ?? ''), 10);
-  if (!Number.isFinite(maxRecentCheckpointItems) || maxRecentCheckpointItems < 0) {
-    addFinding(
-      'INVALID_CONTACT_PACK_MAX_RECENT_CHECKPOINT_ITEMS',
-      'context.contactPacks.maxRecentCheckpointItems must be an integer >= 0.',
-      rel(configPath)
-    );
-  }
-  const maxStateListItems = Number.parseInt(String(contactPacks.maxStateListItems ?? ''), 10);
-  if (!Number.isFinite(maxStateListItems) || maxStateListItems <= 0) {
-    addFinding(
-      'INVALID_CONTACT_PACK_MAX_STATE_LIST_ITEMS',
-      'context.contactPacks.maxStateListItems must be a positive integer.',
-      rel(configPath)
-    );
-  }
-  const selection = contactPacks.selection ?? {};
-  const selectionMaxItems = Number.parseInt(String(selection.maxItems ?? ''), 10);
-  if (!Number.isFinite(selectionMaxItems) || selectionMaxItems <= 0) {
-    addFinding(
-      'INVALID_CONTACT_PACK_SELECTION_MAX_ITEMS',
-      'context.contactPacks.selection.maxItems must be a positive integer.',
-      rel(configPath)
-    );
-  }
-
-  const continuity = config?.continuity ?? {};
-  const minCompletedScore = Number(continuity?.checkpointQuality?.minCompletedScore ?? NaN);
-  if (!Number.isFinite(minCompletedScore) || minCompletedScore < 0 || minCompletedScore > 1) {
-    addFinding(
-      'INVALID_CONTINUITY_MIN_COMPLETED_SCORE',
-      'continuity.checkpointQuality.minCompletedScore must be within [0,1].',
-      rel(configPath)
-    );
-  }
-  const maxDerivedContinuityRate = Number(continuity?.thresholds?.maxDerivedContinuityRate ?? NaN);
-  if (!Number.isFinite(maxDerivedContinuityRate) || maxDerivedContinuityRate < 0 || maxDerivedContinuityRate > 1) {
-    addFinding(
-      'INVALID_CONTINUITY_MAX_DERIVED_RATE',
-      'continuity.thresholds.maxDerivedContinuityRate must be within [0,1].',
-      rel(configPath)
-    );
-  }
-  const minResumeSafeCheckpointRate = Number(continuity?.thresholds?.minResumeSafeCheckpointRate ?? NaN);
-  if (!Number.isFinite(minResumeSafeCheckpointRate) || minResumeSafeCheckpointRate < 0 || minResumeSafeCheckpointRate > 1) {
-    addFinding(
-      'INVALID_CONTINUITY_MIN_RESUME_SAFE_RATE',
-      'continuity.thresholds.minResumeSafeCheckpointRate must be within [0,1].',
-      rel(configPath)
-    );
-  }
-  const maxThinPackRate = Number(continuity?.thresholds?.maxThinPackRate ?? NaN);
-  if (!Number.isFinite(maxThinPackRate) || maxThinPackRate < 0 || maxThinPackRate > 1) {
-    addFinding(
-      'INVALID_CONTINUITY_MAX_THIN_PACK_RATE',
-      'continuity.thresholds.maxThinPackRate must be within [0,1].',
-      rel(configPath)
-    );
-  }
-  const maxRepeatedHandoffLoopPlans = Number.parseInt(String(continuity?.thresholds?.maxRepeatedHandoffLoopPlans ?? ''), 10);
-  if (!Number.isFinite(maxRepeatedHandoffLoopPlans) || maxRepeatedHandoffLoopPlans < 0) {
-    addFinding(
-      'INVALID_CONTINUITY_MAX_REPEATED_HANDOFF_LOOP_PLANS',
-      'continuity.thresholds.maxRepeatedHandoffLoopPlans must be an integer >= 0.',
-      rel(configPath)
-    );
-  }
-
-  if (config?.logging?.output !== 'pretty') {
-    addFinding(
-      'PRETTY_NOT_DEFAULT',
-      "logging.output must be 'pretty'.",
-      rel(configPath)
-    );
-  }
-
-  const failureTailLines = Number.parseInt(String(config?.logging?.failureTailLines ?? ''), 10);
-  if (!Number.isFinite(failureTailLines) || failureTailLines <= 0) {
-    addFinding(
-      'INVALID_FAILURE_TAIL_LINES',
-      'logging.failureTailLines must be a positive integer.',
-      rel(configPath)
-    );
-  }
-  const heartbeatSeconds = Number.parseInt(String(config?.logging?.heartbeatSeconds ?? ''), 10);
-  if (!Number.isFinite(heartbeatSeconds) || heartbeatSeconds <= 0) {
-    addFinding(
-      'INVALID_HEARTBEAT_SECONDS',
-      'logging.heartbeatSeconds must be a positive integer.',
-      rel(configPath)
-    );
-  }
-  const stallWarnSeconds = Number.parseInt(String(config?.logging?.stallWarnSeconds ?? ''), 10);
-  if (!Number.isFinite(stallWarnSeconds) || stallWarnSeconds <= 0) {
-    addFinding(
-      'INVALID_STALL_WARN_SECONDS',
-      'logging.stallWarnSeconds must be a positive integer.',
-      rel(configPath)
-    );
-  }
-  if (Number.isFinite(heartbeatSeconds) && Number.isFinite(stallWarnSeconds) && stallWarnSeconds < heartbeatSeconds) {
-    addFinding(
-      'STALL_WARN_TOO_LOW',
-      'logging.stallWarnSeconds must be greater than or equal to logging.heartbeatSeconds.',
-      rel(configPath)
-    );
-  }
-  const touchSummary = config?.logging?.touchSummary;
-  if (typeof touchSummary !== 'boolean') {
-    addFinding(
-      'INVALID_TOUCH_SUMMARY',
-      'logging.touchSummary must be a boolean.',
-      rel(configPath)
-    );
-  }
-  const touchSampleSize = Number.parseInt(String(config?.logging?.touchSampleSize ?? ''), 10);
-  if (!Number.isFinite(touchSampleSize) || touchSampleSize <= 0) {
-    addFinding(
-      'INVALID_TOUCH_SAMPLE_SIZE',
-      'logging.touchSampleSize must be a positive integer.',
-      rel(configPath)
-    );
-  }
-
-  if (!commandIncludesPromptAndRoleModel(fallbackProviderCommand)) {
-    addFinding(
-      'MISSING_ROLE_MODEL_IN_PROVIDER_COMMAND',
-      `executor.providers.${provider}.command must include '{prompt}' and '{role_model}'.`,
-      rel(configPath)
-    );
-  }
-  if (provider === 'codex' && !codexCommandIncludesRoleReasoning(fallbackProviderCommand)) {
-    addFinding(
-      'MISSING_ROLE_REASONING_IN_PROVIDER_COMMAND',
-      `executor.providers.${provider}.command must include '{role_reasoning_effort}' so role profiles control reasoning depth.`,
-      rel(configPath)
-    );
-  }
-
-  const pipelineRoles = gatherPipelineRoles(config);
-  for (const role of pipelineRoles) {
-    const roleCommand = providerRoles?.[role]?.command ?? fallbackProviderCommand;
-    if (!commandIncludesPromptAndRoleModel(roleCommand)) {
-      addFinding(
-        'MISSING_ROLE_MODEL_IN_ROLE_COMMAND',
-        `roleOrchestration.providers.${provider}.roles.${role}.command must include '{prompt}' and '{role_model}'.`,
-        rel(configPath)
-      );
-    }
-    if (provider === 'codex' && !codexCommandIncludesRoleReasoning(roleCommand)) {
-      addFinding(
-        'MISSING_ROLE_REASONING_IN_ROLE_COMMAND',
-        `roleOrchestration.providers.${provider}.roles.${role}.command must include '{role_reasoning_effort}' so role profiles control reasoning depth.`,
-        rel(configPath)
-      );
-    }
-
-    const model = String(providerRoleProfiles?.[role]?.model ?? roleProfiles?.[role]?.model ?? '').trim();
-    if (!model) {
-      addFinding(
-        'MISSING_ROLE_MODEL_PROFILE',
-        `Role '${role}' is missing a configured model in roleOrchestration.roleProfiles or provider override.`,
-        rel(configPath)
-      );
-    }
-  }
-
-  const stageReuse = config?.roleOrchestration?.stageReuse ?? {};
-  if (stageReuse.enabled !== true) {
-    addFinding(
-      'STAGE_REUSE_DISABLED',
-      "roleOrchestration.stageReuse.enabled must be true.",
-      rel(configPath)
-    );
-  }
-  const roles = Array.isArray(stageReuse.roles)
-    ? stageReuse.roles.map((entry) => String(entry).trim().toLowerCase()).filter(Boolean)
-    : [];
-  if (roles.length === 0 || !roles.includes('planner') || !roles.includes('explorer')) {
-    addFinding(
-      'INVALID_STAGE_REUSE_ROLES',
-      "roleOrchestration.stageReuse.roles must include 'planner' and 'explorer'.",
-      rel(configPath)
-    );
-  }
-  if (stageReuse.sameRunOnly !== false) {
-    addFinding(
-      'STAGE_REUSE_SAME_RUN_ONLY_MUST_BE_FALSE',
-      'roleOrchestration.stageReuse.sameRunOnly must be false to allow safe reuse across resume runs.',
-      rel(configPath)
-    );
-  }
-  const stageBudgets = config?.roleOrchestration?.stageBudgetsSeconds ?? {};
-  for (const role of ['planner', 'explorer', 'reviewer']) {
-    const value = Number.parseInt(String(stageBudgets[role] ?? ''), 10);
-    if (!Number.isFinite(value) || value <= 0) {
-      addFinding(
-        'INVALID_STAGE_BUDGET_SECONDS',
-        `roleOrchestration.stageBudgetsSeconds.${role} must be a positive integer.`,
-        rel(configPath)
-      );
-    }
-  }
-}
-
-async function ensurePragmaticScaffold() {
-  const readmePath = path.join(rootDir, 'README.md');
-  const liteQuickstartDocPath = path.join(rootDir, 'docs', 'ops', 'automation', 'LITE_QUICKSTART.md');
-  const outcomesDocPath = path.join(rootDir, 'docs', 'ops', 'automation', 'OUTCOMES.md');
-  const interopDocPath = path.join(rootDir, 'docs', 'ops', 'automation', 'INTEROP_GITHUB.md');
-  const providerCompatDocPath = path.join(rootDir, 'docs', 'ops', 'automation', 'PROVIDER_COMPATIBILITY.md');
-  const packageJsonPath = path.join(rootDir, 'package.json');
-  const scriptsFragmentPath = path.join(rootDir, 'package.scripts.fragment.json');
-
-  const readmeRaw = await readUtf8IfExists(readmePath);
-  if (!readmeRaw) {
-    addAdvisory('MISSING_README_FOR_ADOPTION_LANES', 'README.md not found for adoption-lane guidance checks.', 'README.md');
-  } else {
-    if (!readmeRaw.includes('## Adoption Lanes')) {
-      addAdvisory(
-        'MISSING_ADOPTION_LANES_SECTION',
-        "README.md should include an 'Adoption Lanes' section to keep orchestration optional by risk.",
-        'README.md'
-      );
-    }
-    for (const lane of ['Lite', 'Guarded', 'Conveyor']) {
-      if (!readmeRaw.includes(`\`${lane}\``)) {
-        addAdvisory(
-          'MISSING_ADOPTION_LANE_ENTRY',
-          `README.md should include adoption lane '${lane}'.`,
-          'README.md'
-        );
-      }
-    }
-    if (!readmeRaw.includes('Lite Quickstart') && !readmeRaw.includes('Lite-First Onboarding')) {
-      addAdvisory(
-        'MISSING_LITE_QUICKSTART_SECTION',
-        "README.md should include a short Lite-first onboarding section for low-overhead adoption.",
-        'README.md'
-      );
-    }
-  }
-
-  if (!(await fileExists(liteQuickstartDocPath))) {
-    addAdvisory(
-      'MISSING_LITE_QUICKSTART_DOC',
-      'Expected optional Lite onboarding doc at docs/ops/automation/LITE_QUICKSTART.md.',
-      rel(liteQuickstartDocPath)
-    );
-  }
-
-  if (!(await fileExists(outcomesDocPath))) {
-    addAdvisory(
-      'MISSING_OUTCOMES_DOC',
-      'Expected optional outcomes scorecard doc at docs/ops/automation/OUTCOMES.md.',
-      rel(outcomesDocPath)
-    );
-  }
-  if (!(await fileExists(interopDocPath))) {
-    addAdvisory(
-      'MISSING_INTEROP_DOC',
-      'Expected optional GitHub interop mapping doc at docs/ops/automation/INTEROP_GITHUB.md.',
-      rel(interopDocPath)
-    );
-  }
-  if (!(await fileExists(providerCompatDocPath))) {
-    addAdvisory(
-      'MISSING_PROVIDER_COMPAT_DOC',
-      'Expected provider compatibility doc at docs/ops/automation/PROVIDER_COMPATIBILITY.md.',
-      rel(providerCompatDocPath)
-    );
-  }
-
-  const scriptsSourcePath = (await fileExists(packageJsonPath)) ? packageJsonPath : scriptsFragmentPath;
-  const scriptsSourceRel = rel(scriptsSourcePath);
-  const scriptsRaw = await readUtf8IfExists(scriptsSourcePath);
-  if (!scriptsRaw) {
-    addAdvisory(
-      'MISSING_SCRIPT_SOURCE',
-      'Could not check optional outcomes/interop scripts because package.json or package.scripts.fragment.json is missing.',
-      scriptsSourceRel
-    );
-    return;
-  }
-
-  if (!scriptsRaw.includes('"outcomes:report"')) {
-    addAdvisory(
-      'MISSING_OUTCOMES_SCRIPT',
-      "Add 'outcomes:report' script for optional run outcome summarization.",
-      scriptsSourceRel
-    );
-  }
-  if (!scriptsRaw.includes('"interop:github:export"')) {
-    addAdvisory(
-      'MISSING_GITHUB_INTEROP_SCRIPT',
-      "Add 'interop:github:export' script for optional GitHub-native profile export.",
-      scriptsSourceRel
-    );
-  }
+  return JSON.parse(raw);
 }
 
 async function main() {
-  for (const filePath of Object.values(requiredPaths)) {
-    if (!(await fileExists(filePath))) {
-      addFinding('MISSING_REQUIRED_FILE', `Missing required file '${rel(filePath)}'.`, rel(filePath));
+  const packageScriptsPath = path.join(rootDir, 'package.scripts.fragment.json');
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  const policyPath = path.join(rootDir, 'docs', 'governance', 'policy-manifest.json');
+  const packageScripts = await readJson(packageScriptsPath);
+  const config = await readJson(configPath);
+  const policy = await readJson(policyPath);
+  const scripts = packageScripts?.scripts ?? {};
+
+  for (const scriptName of requiredScripts) {
+    if (!String(scripts[scriptName] ?? '').trim()) {
+      addFinding('MISSING_SCRIPT', `Missing required script '${scriptName}'.`, 'package.scripts.fragment.json');
+    }
+  }
+  for (const scriptName of retiredScripts) {
+    if (Object.prototype.hasOwnProperty.call(scripts, scriptName)) {
+      addFinding('RETIRED_SCRIPT', `Retired script '${scriptName}' should not exist.`, 'package.scripts.fragment.json');
     }
   }
 
+  const roleNames = Object.keys(config?.executor?.roles ?? {}).sort();
+  if (roleNames.join(',') !== 'reviewer,worker') {
+    addFinding(
+      'INVALID_EXECUTION_ROLES',
+      `executor.roles must contain only worker and reviewer (found: ${roleNames.join(', ') || 'none'}).`,
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+
+  const reviewRequired = Array.isArray(config?.risk?.reviewRequired) ? [...config.risk.reviewRequired].sort() : [];
+  if (reviewRequired.join(',') !== 'high,medium') {
+    addFinding(
+      'INVALID_REVIEW_POLICY',
+      `risk.reviewRequired must be ['medium', 'high'] (found: ${reviewRequired.join(', ') || 'none'}).`,
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+
+  const securityApprovalRequired = Array.isArray(config?.risk?.securityApprovalRequired)
+    ? [...config.risk.securityApprovalRequired].sort()
+    : [];
+  if (securityApprovalRequired.join(',') !== 'high') {
+    addFinding(
+      'INVALID_SECURITY_APPROVAL_POLICY',
+      `risk.securityApprovalRequired must be ['high'] (found: ${securityApprovalRequired.join(', ') || 'none'}).`,
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+
+  if (!Array.isArray(config?.validation?.always) || config.validation.always.length === 0) {
+    addFinding('MISSING_ALWAYS_VALIDATION', 'validation.always must contain at least one command.', 'docs/ops/automation/orchestrator.config.json');
+  }
+  if (!Array.isArray(config?.validation?.hostRequired) || config.validation.hostRequired.length === 0) {
+    addFinding(
+      'MISSING_HOST_VALIDATION',
+      'validation.hostRequired must contain at least one command.',
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+
+  const minRemaining = Number(config?.executor?.contextBudget?.minRemaining);
+  if (!Number.isFinite(minRemaining) || minRemaining < 0) {
+    addFinding(
+      'INVALID_CONTEXT_BUDGET_TOKENS',
+      'executor.contextBudget.minRemaining must be a non-negative number.',
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+
+  const minRemainingPercent = Number(config?.executor?.contextBudget?.minRemainingPercent);
+  if (!Number.isFinite(minRemainingPercent) || minRemainingPercent < 0 || minRemainingPercent > 1) {
+    addFinding(
+      'INVALID_CONTEXT_BUDGET_PERCENT',
+      'executor.contextBudget.minRemainingPercent must be between 0 and 1.',
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+
+  const roleContracts = Object.keys(policy?.roleContracts ?? {});
+  for (const roleName of ['planner', 'explorer', 'worker', 'reviewer']) {
+    if (!roleContracts.includes(roleName)) {
+      addFinding(
+        'MISSING_ROLE_CONTRACT',
+        `policy-manifest.json must describe role '${roleName}'.`,
+        'docs/governance/policy-manifest.json'
+      );
+    }
+  }
+  if ((policy?.memoryPosture?.whatToDo ?? []).some((entry) => String(entry).includes('contact pack'))) {
+    addFinding(
+      'STALE_MEMORY_POSTURE',
+      'policy-manifest.json should not describe contact packs in the flat queue harness.',
+      'docs/governance/policy-manifest.json'
+    );
+  }
+
   if (findings.length > 0) {
-    console.error(`[harness-verify] failed with ${findings.length} issue(s):`);
+    console.error(`[harness:verify] failed with ${findings.length} issue(s).`);
     for (const finding of findings) {
-      const pathSuffix = finding.filePath ? ` (${finding.filePath})` : '';
-      console.error(`- [${finding.code}] ${finding.message}${pathSuffix}`);
+      console.error(`- [${finding.code}] ${finding.message} (${finding.filePath})`);
     }
     process.exit(1);
   }
 
-  const [
-    orchestratorRaw,
-    wrapperRaw,
-    executorPolicyRaw,
-    orchestratorSharedRaw,
-    planDocumentStateRaw,
-    sessionPolicyRaw,
-    atomicCommitPolicyRaw,
-    validationCompletionRaw,
-    contextCompilerRaw,
-    contactPackCompilerRaw,
-    config,
-    manifest,
-    manifestRaw,
-    schemaRaw
-  ] = await Promise.all([
-    fs.readFile(requiredPaths.orchestrator, 'utf8'),
-    fs.readFile(requiredPaths.wrapper, 'utf8'),
-    fs.readFile(requiredPaths.executorPolicy, 'utf8'),
-    fs.readFile(requiredPaths.orchestratorShared, 'utf8'),
-    fs.readFile(requiredPaths.planDocumentState, 'utf8'),
-    fs.readFile(requiredPaths.sessionPolicy, 'utf8'),
-    fs.readFile(requiredPaths.atomicCommitPolicy, 'utf8'),
-    fs.readFile(requiredPaths.validationCompletion, 'utf8'),
-    fs.readFile(requiredPaths.contextCompiler, 'utf8'),
-    fs.readFile(requiredPaths.contactPackCompiler, 'utf8'),
-    readJsonStrict(requiredPaths.config)
-    ,
-    readJsonStrict(requiredPaths.policyManifest),
-    fs.readFile(requiredPaths.policyManifest, 'utf8'),
-    fs.readFile(requiredPaths.policySchema, 'utf8')
-  ]);
-
-  ensureScriptSignatures(orchestratorRaw, wrapperRaw, executorPolicyRaw, contextCompilerRaw, contactPackCompilerRaw, {
-    orchestratorShared: orchestratorSharedRaw,
-    planDocumentState: planDocumentStateRaw,
-    sessionPolicy: sessionPolicyRaw,
-    atomicCommitPolicy: atomicCommitPolicyRaw,
-    validationCompletion: validationCompletionRaw
-  });
-  ensureManifestPolicy(manifest, manifestRaw, schemaRaw, requiredPaths.policyManifest, requiredPaths.policySchema);
-  ensureConfigPolicy(config, requiredPaths.config);
-  await ensurePragmaticScaffold();
-
-  if (findings.length > 0) {
-    console.error(`[harness-verify] failed with ${findings.length} issue(s):`);
-    for (const finding of findings) {
-      const pathSuffix = finding.filePath ? ` (${finding.filePath})` : '';
-      console.error(`- [${finding.code}] ${finding.message}${pathSuffix}`);
-    }
-    process.exit(1);
-  }
-
-  const provider = String(config?.executor?.provider ?? 'codex').trim().toLowerCase();
-  const roleCount = gatherPipelineRoles(config).length;
-  if (advisories.length > 0) {
-    console.log(`[harness-verify] advisories (${advisories.length}):`);
-    for (const advisory of advisories) {
-      const pathSuffix = advisory.filePath ? ` (${advisory.filePath})` : '';
-      console.log(`- [${advisory.code}] ${advisory.message}${pathSuffix}`);
-    }
-  }
-  console.log(
-    `[harness-verify] passed (provider=${provider}, pipelineRoles=${roleCount}, output=${config.logging.output}, advisories=${advisories.length}).`
-  );
+  console.log('[harness:verify] ok.');
 }
 
 main().catch((error) => {
-  console.error('[harness-verify] failed with an unexpected error.');
+  console.error('[harness:verify] failed with an unexpected error.');
   console.error(error instanceof Error ? error.stack : String(error));
   process.exit(1);
 });

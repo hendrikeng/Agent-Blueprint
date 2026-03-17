@@ -7,6 +7,12 @@ Source of Truth: This document delegates to `docs/exec-plans/README.md`.
 
 Use execution plans for all implemented changes so intent, decisions, and rollout state stay discoverable.
 
+The canonical workflow is:
+
+1. Plan in `docs/future/`.
+2. Make future slices decision-complete.
+3. Promote and run ready futures through the flat queue in sequence.
+
 ## Work Classes
 
 Use `docs/future/` before execution when any of these are true:
@@ -14,7 +20,7 @@ Use `docs/future/` before execution when any of these are true:
 - The change spans multiple domains, apps, or deployment steps.
 - The change affects architecture boundaries or critical invariants.
 - The implementation is expected to span multiple pull requests.
-- The rollout risk is medium/high and benefits from staged promotion.
+- The rollout risk is medium/high and benefits from explicit promotion into the active queue.
 
 Use direct `docs/exec-plans/active/` entry for quick/manual fixes when all of these are true:
 
@@ -35,28 +41,24 @@ Examples:
 3. Record decisions and acceptance criteria before implementation.
 4. Split plan text into three explicit scopes before implementation:
    `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons`.
-   Future blueprints must also include `## Master Plan Coverage` or `## Capability Coverage Matrix`, `## Prior Completed Plan Reconciliation`, and `## Promotion Blockers`, so upstream strategy, prior implementation history, and unresolved gates are explicit.
 5. Implement the smallest safe slice and update tests/docs in the same change.
 6. Validate plan metadata with `npm run plans:verify`.
 7. During implementation, run `npm run verify:fast`.
 8. Before merge/completion, run `npm run verify:full` plus relevant domain tests.
 9. Complete by moving to `docs/exec-plans/completed/` with concise summary/closure and canonical `Done-Evidence` index references.
 
-Orchestration is the default execution driver. Manual execution is valid only if it preserves status transitions, metadata integrity, and evidence/index curation behavior.
+Orchestration is the default execution driver for non-trivial queued work. Manual execution is valid only if it preserves status transitions, metadata integrity, and evidence/index curation behavior.
 
 ## Plan-Only Requests
 
 When the user asks for planning only (no implementation yet):
 
-1. Update or create the blueprint in `docs/future/`.
+1. Update or create the executable future slice in `docs/future/`.
 2. Do not edit source/test/runtime files.
 3. Make `## Must-Land Checklist` the exact executable contract for the future promotion.
-4. Add `## Master Plan Coverage` or `## Capability Coverage Matrix` so nothing from upstream strategy is silently omitted.
-5. Add `## Prior Completed Plan Reconciliation` so overlapping completed plans are classified as preserved, refactored, superseded, obsolete, or reopened.
-6. Add `## Promotion Blockers` so the remaining gates to safe promotion are explicit.
-7. For future `Execution-Scope: program`, declare `Authoring-Intent`.
-8. Broad executable futures must include `## Child Slice Definitions`; if safe decomposition is not ready yet, scaffold draft child definitions with `npm run plans:scaffold-children -- --plan-file <path>` instead of leaving a childless parent.
-9. Set `Status: ready-for-promotion` when the plan is implementation-ready.
+4. Keep `Dependencies` explicit when the work depends on earlier slices.
+5. Use separate future files instead of program parents when one ask expands into multiple executable slices.
+6. Set `Status: ready-for-promotion` when the plan is implementation-ready.
 
 This also applies when the agent/session is explicitly set to plan mode: default to `docs/future` planning outputs until implementation is explicitly requested.
 

@@ -36,29 +36,30 @@
     "planner": {
       "sandboxMode": "read-only",
       "reasoningEffort": "medium",
-      "intent": "Break down implementation into decision-complete execution steps."
+      "intent": "Turn user intent into decision-complete future slices."
     },
     "explorer": {
       "sandboxMode": "read-only",
       "reasoningEffort": "medium",
-      "intent": "Trace risky surfaces and dependencies before implementation."
+      "intent": "Trace risky surfaces and dependencies before implementation when planning needs more facts."
     },
     "worker": {
       "sandboxMode": "full-access",
       "reasoningEffort": "high",
-      "intent": "Implement scoped changes and keep docs/evidence aligned."
+      "intent": "Implement one active slice and keep plan, docs, and evidence aligned."
     },
     "reviewer": {
       "sandboxMode": "read-only",
       "reasoningEffort": "high",
-      "intent": "Check correctness, security, race conditions, flaky tests, and regressions."
+      "intent": "Review medium/high-risk slices for correctness, regressions, and missing scope before validation."
     }
   },
   "validationPolicy": {
     "fastIteration": [
       "node ./scripts/automation/compile-runtime-context.mjs",
       "node ./scripts/docs/check-governance.mjs",
-      "node ./scripts/automation/check-plan-metadata.mjs"
+      "node ./scripts/automation/check-plan-metadata.mjs",
+      "node ./scripts/automation/check-harness-alignment.mjs"
     ],
     "fullGate": [
       "node ./scripts/automation/compile-runtime-context.mjs",
@@ -77,30 +78,30 @@
       "Treat the repo as the main operating system for agent work.",
       "Keep plans, evidence, docs, code, and validation output as the source of truth.",
       "Treat `## Must-Land Checklist` as the execution contract and keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` separate.",
-      "Use repo-local checkpoints, contact packs, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.",
-      "Keep context selective: load current scope, latest state, recent checkpoints, and relevant evidence; persist distilled findings and stable references, not raw session history."
+      "Use repo-local checkpoints, explicit handoffs, evidence indexes, and resumable orchestration as the default memory system.",
+      "Keep context selective: load current scope, latest checkpoint, latest handoff, and relevant evidence; persist distilled findings, not raw session history."
     ],
     "improveBeforeRearchitecture": [
       "Better checkpoint contents.",
-      "Better contact-pack selection.",
+      "Better handoff notes.",
       "Better evidence compaction.",
       "Better validation and observability.",
-      "Fix rolling-context and contact-pack implementation gaps before changing architecture."
+      "Fix plan quality before widening the memory system."
     ],
     "doNotAddYet": [
       "Do not add external retrieval just because work is long.",
       "Do not add provider-thread persistence just because context is limited.",
       "Do not move important working memory outside the repo while repo-local continuity is sufficient.",
-      "Do not treat extra memory systems as a substitute for better checkpoints and contact packs."
+      "Do not treat extra memory systems as a substitute for better plans, checkpoints, and handoffs."
     ],
     "escalateWhen": [
       "Agents repeatedly miss important context even though it exists.",
-      "Repo-local checkpoints and contact packs stop being enough.",
+      "Repo-local checkpoints and handoffs stop being enough.",
       "Important memory starts living outside the repo.",
       "You need one agent to search across many unrelated systems.",
       "You can point to repeated failures, not just a vague worry."
     ],
-    "safeRule": "If repo-local state is enough, keep this design. If important context lives outside the repo and agents keep missing it, then consider external retrieval."
+    "safeRule": "If repo-local plans, checkpoints, and handoffs are enough, keep this design. If important context lives outside the repo and agents keep missing it, then consider external retrieval."
   },
   "docContract": {
     "canonicalEntryPoints": [
