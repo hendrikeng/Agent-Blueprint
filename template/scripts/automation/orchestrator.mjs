@@ -332,6 +332,9 @@ function parseStructuredLogMessage(message) {
   if (!normalized) {
     return { headline: '', details: [] };
   }
+  if (normalized.includes(' | ')) {
+    return { headline: normalized, details: [] };
+  }
   const firstDetailIndex = normalized.search(/\b[A-Za-z][A-Za-z0-9_-]*=[^\s]+/);
   if (firstDetailIndex < 0) {
     return { headline: normalized, details: [] };
