@@ -39,6 +39,10 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
+function sleep(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 function loadAction(scenario, state, planId, role) {
   const actionList = scenario?.providerActions?.[planId]?.[role] ?? [];
   const key = `${planId}:${role}`;
@@ -97,6 +101,11 @@ async function main() {
     type: 'progress',
     activity: action.liveActivity ?? `${role} working on ${planId}`
   })}\n`);
+
+  const delayMs = Number(action?.delayMs);
+  if (Number.isFinite(delayMs) && delayMs > 0) {
+    await sleep(delayMs);
+  }
 
   for (const file of action.writeFiles ?? []) {
     const targetPath = path.join(rootDir, file.path);

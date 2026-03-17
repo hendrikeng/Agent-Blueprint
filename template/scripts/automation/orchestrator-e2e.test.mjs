@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 
 import { createTemplateRepo, loadJson, runNode } from './test-helpers.mjs';
 
@@ -108,6 +108,36 @@ async function writeActiveEvidence(rootDir, planSlug) {
 function commitFixtureChanges(rootDir, message) {
   spawnSync('git', ['add', '.'], { cwd: rootDir, stdio: 'pipe' });
   spawnSync('git', ['commit', '-m', message], { cwd: rootDir, stdio: 'pipe' });
+}
+
+function waitForChild(child) {
+  return new Promise((resolve, reject) => {
+    let stdout = '';
+    let stderr = '';
+    child.stdout?.on('data', (chunk) => {
+      stdout += String(chunk);
+    });
+    child.stderr?.on('data', (chunk) => {
+      stderr += String(chunk);
+    });
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      resolve({ code, signal, stdout, stderr });
+    });
+  });
+}
+
+async function waitForPath(filePath, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
 }
 
 test('orchestrator promotes a medium-risk future, runs worker and reviewer, then completes it', async () => {
@@ -602,6 +632,61 @@ test('resume normalizes legacy session-budget blockers and continues the existin
 
   const events = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
   assert.match(events, /run_resumed/);
+});
+
+test('orchestrator refuses a second concurrent run in the same repository', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'locked-plan': {
+        worker: [
+          {
+            delayMs: 1500,
+            status: 'completed',
+            summary: 'Worker finished after lock contention.',
+            writeFiles: [{ path: 'src/locked-plan.js', content: 'export const locked = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:locked-plan': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-locked-plan.md'),
+    directFuturePlan({ planId: 'locked-plan', riskTier: 'low' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed lock contention plan');
+
+  const scriptPath = path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs');
+  const firstRun = spawn('node', [scriptPath, 'grind', '--max-risk', 'low', '--output', 'minimal'], {
+    cwd: rootDir,
+    env: process.env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const firstRunDone = waitForChild(firstRun);
+  await waitForPath(path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'orchestrator.lock.json'));
+
+  const secondRun = runNode(scriptPath, ['resume', '--max-risk', 'low', '--output', 'minimal'], rootDir);
+  assert.notEqual(secondRun.status, 0);
+  assert.match(String(secondRun.stderr), /Another orchestrator run is already active/);
+
+  const firstResult = await firstRunDone;
+  assert.equal(firstResult.code, 0, String(firstResult.stderr));
+
+  await assert.rejects(
+    fs.access(path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'orchestrator.lock.json'))
+  );
 });
 
 test('orchestrator still validates and completes when must-land work finishes on the last allowed session', async () => {

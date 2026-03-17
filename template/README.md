@@ -123,6 +123,7 @@ Start with:
 - If you omit `--max-risk`, these commands use the repo's configured `risk.defaultMaxRisk`. The template default is `high`.
 - If you omit `--max-sessions-per-plan`, these commands use `executor.maxSessionsPerPlan`. The template default is `12`.
 - Plans that stop only because they hit the session cap move to `Status: budget-exhausted`; resume them with a higher `--max-sessions-per-plan`.
+- Only one orchestrator process should run per repository at a time. `automation:run`, `automation:resume`, and `automation:grind` now enforce that with a repo-local runtime lock and fail fast if another run is already active.
 - Inspect ready, active, blocked, and completed state: `npm run automation:audit`
 - Canonical details live in `docs/ops/automation/README.md`, `docs/ops/automation/ROLE_ORCHESTRATION.md`, and `docs/ops/automation/LITE_QUICKSTART.md`.
 

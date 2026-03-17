@@ -69,6 +69,7 @@ const EVIDENCE_INDEX_DIR = path.join('docs', 'exec-plans', 'evidence-index');
 const OPS_DIR = path.join('docs', 'ops', 'automation');
 const RUN_STATE_PATH = path.join(OPS_DIR, 'run-state.json');
 const RUN_EVENTS_PATH = path.join(OPS_DIR, 'run-events.jsonl');
+const ORCHESTRATOR_LOCK_PATH = path.join(OPS_DIR, 'runtime', 'orchestrator.lock.json');
 const TRANSIENT_AUTOMATION_FILES = new Set([RUN_STATE_PATH, RUN_EVENTS_PATH]);
 const TRANSIENT_AUTOMATION_DIR_PREFIXES = [
   `${toPosix(path.join(OPS_DIR, 'runtime'))}/`,
@@ -1832,6 +1833,127 @@ function nextRunId() {
   return `run-${timestamp}`;
 }
 
+function orchestratorLockPath(rootDir) {
+  return path.join(rootDir, ORCHESTRATOR_LOCK_PATH);
+}
+
+function buildOrchestratorLock(command, rootDir, overrides = {}) {
+  return {
+    schemaVersion: 1,
+    ownerToken: createHash('sha1')
+      .update(`${process.pid}:${Date.now()}:${Math.random()}`)
+      .digest('hex'),
+    pid: process.pid,
+    command,
+    cwd: rootDir,
+    acquiredAt: nowIso(),
+    runId: null,
+    ...overrides
+  };
+}
+
+function processIsRunning(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error && (error.code === 'ESRCH' || error.code === 'EINVAL')) {
+      return false;
+    }
+    if (error && error.code === 'EPERM') {
+      return true;
+    }
+    throw error;
+  }
+}
+
+function activeLockErrorMessage(existingLock) {
+  const pid = asInteger(existingLock?.pid, null);
+  const runId = trimmedString(existingLock?.runId);
+  const command = trimmedString(existingLock?.command, 'unknown');
+  const acquiredAt = trimmedString(existingLock?.acquiredAt, 'unknown');
+  return `Another orchestrator run is already active${runId ? ` for runId=${runId}` : ''} (pid=${pid ?? 'unknown'}, command=${command}, acquiredAt=${acquiredAt}). Wait for it to finish before starting another run in this repository.`;
+}
+
+async function acquireOrchestratorLock(rootDir, command) {
+  const lockPath = orchestratorLockPath(rootDir);
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+
+  for (let attempts = 0; attempts < 3; attempts += 1) {
+    const lock = buildOrchestratorLock(command, rootDir);
+    try {
+      const handle = await fs.open(lockPath, 'wx');
+      try {
+        await handle.writeFile(`${JSON.stringify(lock, null, 2)}\n`, 'utf8');
+      } finally {
+        await handle.close();
+      }
+      return { ...lock, filePath: lockPath };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') {
+        throw error;
+      }
+
+      const existingLock = await readJson(lockPath, null);
+      if (processIsRunning(asInteger(existingLock?.pid, null))) {
+        throw new Error(activeLockErrorMessage(existingLock));
+      }
+
+      try {
+        await fs.unlink(lockPath);
+      } catch (unlinkError) {
+        if (unlinkError?.code !== 'ENOENT') {
+          throw unlinkError;
+        }
+      }
+    }
+  }
+
+  throw new Error(`Unable to acquire orchestrator lock at ${toPosix(path.relative(rootDir, lockPath))}.`);
+}
+
+async function updateOrchestratorLock(lock, updates = {}) {
+  if (!lock?.filePath) {
+    return lock;
+  }
+  const nextLock = {
+    ...lock,
+    ...updates,
+    updatedAt: nowIso()
+  };
+  await writeTextFileAtomic(lock.filePath, `${JSON.stringify(nextLock, null, 2)}\n`);
+  return nextLock;
+}
+
+function releaseOrchestratorLock(lock) {
+  if (!lock?.filePath) {
+    return;
+  }
+
+  try {
+    const raw = fsSync.readFileSync(lock.filePath, 'utf8');
+    const currentLock = JSON.parse(raw);
+    if (trimmedString(currentLock?.ownerToken) && currentLock.ownerToken !== lock.ownerToken) {
+      return;
+    }
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return;
+    }
+  }
+
+  try {
+    fsSync.unlinkSync(lock.filePath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
 function createRunState(runId, maxRisk) {
   const timestamp = nowIso();
   return {
@@ -2437,7 +2559,22 @@ async function finalizeCompletedPlan(rootDir, state, plan, validationResults) {
 }
 
 async function refreshPlan(rootDir, plan) {
-  return readPlan(plan.filePath, plan.phase, rootDir);
+  try {
+    return await readPlan(plan.filePath, plan.phase, rootDir);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      throw error;
+    }
+    const relocatedPlan = (await collectPlans(rootDir)).find((candidate) => candidate.planId === plan.planId) ?? null;
+    if (relocatedPlan) {
+      return relocatedPlan;
+    }
+    const wrappedError = new Error(
+      `Plan ${plan.planId} no longer exists at ${toPosix(path.relative(rootDir, plan.filePath))} and could not be relocated.`
+    );
+    wrappedError.cause = error;
+    throw wrappedError;
+  }
 }
 
 async function readLatestCheckpoint(rootDir, runId, planId) {
@@ -2508,6 +2645,12 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
   let plan = initialPlan;
   while (true) {
     plan = await refreshPlan(rootDir, plan);
+    if (plan.phase === 'completed' || plan.status === 'completed') {
+      state.completedPlanIds = addTrackedPlan(state.completedPlanIds, plan.planId);
+      clearTrackedPlanState(state, plan.planId);
+      logLine(logging, `plan completed plan=${plan.planId} status=completed path=${plan.rel}`, 'ok');
+      return 'completed';
+    }
     if (effectivePlanStatus(plan) === STATUS_BUDGET_EXHAUSTED) {
       plan = await prepareBudgetResumablePlan(rootDir, config, state, plan);
     }
@@ -2648,6 +2791,12 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
       logging,
       `session artifacts plan=${plan.planId} role=${role} session=${session.sessionNumber} touched=${session.result.touchSummary?.count ?? 0} sample=${previewPlanIds(session.result.touchSummary?.samples ?? [], 3)} live=${formatLiveActivityForDetail(session.result.liveActivity?.message, 'none')} checkpoint=${session.checkpointRefs.checkpointRel} handoff=${session.checkpointRefs.handoffRel} log=${session.logRel}`
     );
+    if (plan.phase === 'completed' || plan.status === 'completed') {
+      state.completedPlanIds = addTrackedPlan(state.completedPlanIds, plan.planId);
+      clearTrackedPlanState(state, plan.planId);
+      logLine(logging, `plan completed plan=${plan.planId} status=completed path=${plan.rel}`, 'ok');
+      return 'completed';
+    }
     const contextBudget = analyzeContextBudget(session.result, config);
     if (contextBudget.triggered && !roleBoundaryComplete(plan, role) && session.result.status !== 'blocked') {
       session.result.status = 'handoff_required';
@@ -2976,64 +3125,89 @@ async function main() {
   if ((command === 'run' || command === 'grind') && dirtyRepoPaths(rootDir, { includeTransient: false }).length > 0) {
     throw new Error('Refusing to start ' + command + ' with a dirty worktree. Commit, stash, or discard unrelated changes first, or use resume if you intend to continue the existing run.');
   }
-  const maxRisk = normalizeMaxRisk(options['max-risk'] ?? options.maxRisk ?? config?.risk?.defaultMaxRisk ?? DEFAULT_MAX_RISK);
-  const state = await loadRunState(rootDir, maxRisk, command);
-  const logging = resolveLogging(config, options);
-  await appendRunEvent(rootDir, state, command === 'resume' ? 'run_resumed' : 'run_started', null, { maxRisk });
-  logLine(
-    logging,
-    `${command} runId=${state.runId} maxRisk=${maxRisk} output=${logging.mode} heartbeat=${logging.heartbeatSeconds}s stallWarn=${logging.stallWarnSeconds}s sessionLimit=${maxSessionsPerPlan(config, options)} commit=${commitEnabled(config, options) ? 'atomic' : 'off'}`
-  );
-  const startingPlans = await normalizeLegacyBudgetBlockedPlans(rootDir, state, await collectPlans(rootDir));
-  const startingCompleted = new Set(startingPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
-  const startingQueue = actionableActivePlans(startingPlans, startingCompleted, maxRisk, config, state, maxSessionsPerPlan(config, options));
-  const startingOverview = buildQueueOverview(startingPlans, startingCompleted, startingQueue, maxRisk);
-  if (logging.mode === 'pretty') {
-    printSummaryBlock(logging, `${command.toUpperCase()} OVERVIEW`, [
-      ['runId', state.runId],
-      ['max risk', maxRisk],
-      ['next', startingOverview.nextPlanId],
-      ['queue', startingOverview.queueCount],
-      ['future ready', `${startingOverview.futureReadyCount} (${startingOverview.futureReadyPreview})`],
-      ['future draft', `${startingOverview.futureDraftCount} (${startingOverview.futureDraftPreview})`],
-      ['active queued', `${startingOverview.activeQueuedCount} (${startingOverview.activeQueuedPreview})`],
-      ['active in-progress', `${startingOverview.activeInProgressCount} (${startingOverview.activeInProgressPreview})`],
-      ['active in-review', `${startingOverview.activeInReviewCount} (${startingOverview.activeInReviewPreview})`],
-      ['active validation', `${startingOverview.activeValidationCount} (${startingOverview.activeValidationPreview})`],
-      ['budget paused', `${startingOverview.activeBudgetExhaustedCount} (${startingOverview.activeBudgetExhaustedPreview})`],
-      ['active blocked', `${startingOverview.activeBlockedCount} (${startingOverview.activeBlockedPreview})`],
-      ['completed', startingOverview.completedCount]
-    ]);
-  } else {
-    logQueueOverview(logging, state, startingOverview, `${command} overview`);
+  let lock = await acquireOrchestratorLock(rootDir, command);
+  let releasedLock = false;
+  const releaseLock = () => {
+    if (releasedLock) {
+      return;
+    }
+    releasedLock = true;
+    releaseOrchestratorLock(lock);
+  };
+  const handleSignal = (signal) => {
+    releaseLock();
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  };
+  process.once('SIGINT', handleSignal);
+  process.once('SIGTERM', handleSignal);
+  process.once('exit', releaseLock);
+
+  try {
+    const maxRisk = normalizeMaxRisk(options['max-risk'] ?? options.maxRisk ?? config?.risk?.defaultMaxRisk ?? DEFAULT_MAX_RISK);
+    const state = await loadRunState(rootDir, maxRisk, command);
+    lock = await updateOrchestratorLock(lock, { runId: state.runId });
+    const logging = resolveLogging(config, options);
+    await appendRunEvent(rootDir, state, command === 'resume' ? 'run_resumed' : 'run_started', null, { maxRisk });
+    logLine(
+      logging,
+      `${command} runId=${state.runId} maxRisk=${maxRisk} output=${logging.mode} heartbeat=${logging.heartbeatSeconds}s stallWarn=${logging.stallWarnSeconds}s sessionLimit=${maxSessionsPerPlan(config, options)} commit=${commitEnabled(config, options) ? 'atomic' : 'off'}`
+    );
+    const startingPlans = await normalizeLegacyBudgetBlockedPlans(rootDir, state, await collectPlans(rootDir));
+    const startingCompleted = new Set(startingPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
+    const startingQueue = actionableActivePlans(startingPlans, startingCompleted, maxRisk, config, state, maxSessionsPerPlan(config, options));
+    const startingOverview = buildQueueOverview(startingPlans, startingCompleted, startingQueue, maxRisk);
+    if (logging.mode === 'pretty') {
+      printSummaryBlock(logging, `${command.toUpperCase()} OVERVIEW`, [
+        ['runId', state.runId],
+        ['max risk', maxRisk],
+        ['next', startingOverview.nextPlanId],
+        ['queue', startingOverview.queueCount],
+        ['future ready', `${startingOverview.futureReadyCount} (${startingOverview.futureReadyPreview})`],
+        ['future draft', `${startingOverview.futureDraftCount} (${startingOverview.futureDraftPreview})`],
+        ['active queued', `${startingOverview.activeQueuedCount} (${startingOverview.activeQueuedPreview})`],
+        ['active in-progress', `${startingOverview.activeInProgressCount} (${startingOverview.activeInProgressPreview})`],
+        ['active in-review', `${startingOverview.activeInReviewCount} (${startingOverview.activeInReviewPreview})`],
+        ['active validation', `${startingOverview.activeValidationCount} (${startingOverview.activeValidationPreview})`],
+        ['budget paused', `${startingOverview.activeBudgetExhaustedCount} (${startingOverview.activeBudgetExhaustedPreview})`],
+        ['active blocked', `${startingOverview.activeBlockedCount} (${startingOverview.activeBlockedPreview})`],
+        ['completed', startingOverview.completedCount]
+      ]);
+    } else {
+      logQueueOverview(logging, state, startingOverview, `${command} overview`);
+    }
+    const startedAtMs = Date.parse(state.startedAt) || Date.now();
+    const processedPlans = await processQueue(rootDir, config, state, options);
+    await saveRunState(rootDir, state);
+    await appendRunEvent(rootDir, state, 'run_finished', null, {
+      completed: state.completedPlanIds.length,
+      budgetExhausted: state.budgetExhaustedPlanIds.length,
+      blocked: state.blockedPlanIds.length,
+      queue: state.queue.length,
+      commits: state.stats.commits
+    });
+    const endingPlans = await normalizeLegacyBudgetBlockedPlans(rootDir, state, await collectPlans(rootDir));
+    const endingCompleted = new Set(endingPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
+    const endingQueue = actionableActivePlans(endingPlans, endingCompleted, maxRisk, config, state, maxSessionsPerPlan(config, options));
+    const endingOverview = buildQueueOverview(endingPlans, endingCompleted, endingQueue, maxRisk);
+    printRunSummary(
+      logging,
+      command,
+      state,
+      processedPlans,
+      Math.max(0, (Date.now() - startedAtMs) / 1000),
+      endingOverview
+    );
+    logLine(
+      logging,
+      `finished runId=${state.runId} queue=${state.queue.length} completed=${state.completedPlanIds.length} budgetPaused=${state.budgetExhaustedPlanIds.length} blocked=${state.blockedPlanIds.length} commits=${state.stats.commits}`,
+      'ok'
+    );
+  } finally {
+    process.removeListener('SIGINT', handleSignal);
+    process.removeListener('SIGTERM', handleSignal);
+    process.removeListener('exit', releaseLock);
+    releaseLock();
   }
-  const startedAtMs = Date.parse(state.startedAt) || Date.now();
-  const processedPlans = await processQueue(rootDir, config, state, options);
-  await saveRunState(rootDir, state);
-  await appendRunEvent(rootDir, state, 'run_finished', null, {
-    completed: state.completedPlanIds.length,
-    budgetExhausted: state.budgetExhaustedPlanIds.length,
-    blocked: state.blockedPlanIds.length,
-    queue: state.queue.length,
-    commits: state.stats.commits
-  });
-  const endingPlans = await normalizeLegacyBudgetBlockedPlans(rootDir, state, await collectPlans(rootDir));
-  const endingCompleted = new Set(endingPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
-  const endingQueue = actionableActivePlans(endingPlans, endingCompleted, maxRisk, config, state, maxSessionsPerPlan(config, options));
-  const endingOverview = buildQueueOverview(endingPlans, endingCompleted, endingQueue, maxRisk);
-  printRunSummary(
-    logging,
-    command,
-    state,
-    processedPlans,
-    Math.max(0, (Date.now() - startedAtMs) / 1000),
-    endingOverview
-  );
-  logLine(
-    logging,
-    `finished runId=${state.runId} queue=${state.queue.length} completed=${state.completedPlanIds.length} budgetPaused=${state.budgetExhaustedPlanIds.length} blocked=${state.blockedPlanIds.length} commits=${state.stats.commits}`,
-    'ok'
-  );
 }
 
 main().catch((error) => {
