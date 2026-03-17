@@ -58,7 +58,6 @@ function buildContent(policy, config) {
 
   return `# Agent Runtime Context (Generated)
 
-Generated At: ${new Date().toISOString()}
 Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/automation/orchestrator.config.json
 
 ## Mission

@@ -386,7 +386,8 @@ function commitEnabled(config, options) {
   return asBoolean(options.commit, asBoolean(config?.git?.atomicCommits, true));
 }
 
-function atomicCommitRootsForPlan(plan) {
+function atomicCommitRootsForPlan(plan, config) {
+  const runtimeContextFile = trimmedString(config?.runtime?.contextPath, 'docs/generated/AGENT-RUNTIME-CONTEXT.md');
   const planFileName = path.basename(plan.filePath);
   return [
     ...plan.implementationTargets,
@@ -395,7 +396,8 @@ function atomicCommitRootsForPlan(plan) {
     path.join(FUTURE_DIR, planFileName),
     path.join(ACTIVE_DIR, planFileName),
     path.join(COMPLETED_DIR, planFileName),
-    path.join(EVIDENCE_INDEX_DIR, `${plan.planId}.md`)
+    path.join(EVIDENCE_INDEX_DIR, `${plan.planId}.md`),
+    runtimeContextFile
   ]
     .map((entry) => normalizeRepoRelativePath(entry))
     .filter(Boolean)
@@ -406,13 +408,13 @@ function shellJoinArgs(args) {
   return args.map((entry) => shellEscape(entry)).join(' ');
 }
 
-function createAtomicCommit(rootDir, plan) {
+function createAtomicCommit(rootDir, plan, config) {
   const changedPaths = dirtyRepoPaths(rootDir, { includeTransient: false });
   if (changedPaths.length === 0) {
     return { ok: true, committed: false, reason: 'no changes' };
   }
 
-  const allowedRoots = atomicCommitRootsForPlan(plan);
+  const allowedRoots = atomicCommitRootsForPlan(plan, config);
   const outsideScope = changedPaths.filter((entry) => !allowedRoots.some((root) => pathMatchesRootPrefix(entry, root)));
   if (outsideScope.length > 0) {
     return {
@@ -1231,7 +1233,7 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
       }
       const completedPlan = await finalizeCompletedPlan(rootDir, state, validation.plan, validation.results);
       if (commitEnabled(config, options)) {
-        const commitResult = createAtomicCommit(rootDir, completedPlan);
+        const commitResult = createAtomicCommit(rootDir, completedPlan, config);
         if (!commitResult.ok) {
           await appendRunEvent(rootDir, state, 'plan_commit_failed', completedPlan.planId, {
             reason: commitResult.reason ?? 'atomic commit failed'
@@ -1263,7 +1265,7 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
       }
       const completedPlan = await finalizeCompletedPlan(rootDir, state, validation.plan, validation.results);
       if (commitEnabled(config, options)) {
-        const commitResult = createAtomicCommit(rootDir, completedPlan);
+        const commitResult = createAtomicCommit(rootDir, completedPlan, config);
         if (!commitResult.ok) {
           await appendRunEvent(rootDir, state, 'plan_commit_failed', completedPlan.planId, {
             reason: commitResult.reason ?? 'atomic commit failed'
