@@ -70,9 +70,10 @@ function detectChangedFiles() {
 }
 
 function buildCommandSet(changedFiles) {
+  const inOrchestratedPlanRun = String(process.env.ORCH_PLAN_ID ?? '').trim() !== '';
   const commands = [
     'node ./scripts/automation/compile-runtime-context.mjs',
-    asBoolean(process.env.CI, false)
+    asBoolean(process.env.CI, false) || inOrchestratedPlanRun
       ? 'node ./scripts/docs/repair-plan-references.mjs --dry-run'
       : 'node ./scripts/docs/repair-plan-references.mjs',
     'node ./scripts/docs/check-governance.mjs',

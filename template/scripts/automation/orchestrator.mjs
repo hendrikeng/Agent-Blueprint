@@ -56,6 +56,7 @@ const PRETTY_SPINNER_FRAMES = ['|', '/', '-', '\\'];
 const PRETTY_LIVE_DOT_FRAMES = ['...', '.. ', '.  ', ' ..'];
 const FUTURE_DIR = path.join('docs', 'future');
 const ACTIVE_DIR = path.join('docs', 'exec-plans', 'active');
+const ACTIVE_EVIDENCE_DIR = path.join(ACTIVE_DIR, 'evidence');
 const COMPLETED_DIR = path.join('docs', 'exec-plans', 'completed');
 const EVIDENCE_INDEX_DIR = path.join('docs', 'exec-plans', 'evidence-index');
 const OPS_DIR = path.join('docs', 'ops', 'automation');
@@ -386,6 +387,10 @@ function commitEnabled(config, options) {
   return asBoolean(options.commit, asBoolean(config?.git?.atomicCommits, true));
 }
 
+function activeEvidencePathForPlan(planId) {
+  return path.join(ACTIVE_EVIDENCE_DIR, `${planId}.md`);
+}
+
 function atomicCommitRootsForPlan(plan, config) {
   const runtimeContextFile = trimmedString(config?.runtime?.contextPath, 'docs/generated/AGENT-RUNTIME-CONTEXT.md');
   const planFileName = path.basename(plan.filePath);
@@ -395,6 +400,7 @@ function atomicCommitRootsForPlan(plan, config) {
     ...parseListField(metadataValue(plan.metadata, 'Atomic-Roots')),
     path.join(FUTURE_DIR, planFileName),
     path.join(ACTIVE_DIR, planFileName),
+    activeEvidencePathForPlan(plan.planId),
     path.join(COMPLETED_DIR, planFileName),
     path.join(EVIDENCE_INDEX_DIR, `${plan.planId}.md`),
     runtimeContextFile
@@ -1074,6 +1080,25 @@ async function writeValidationEvidence(rootDir, state, plan, results) {
   return writePlan(rootDir, plan, content);
 }
 
+async function rewritePerPlanActiveEvidence(rootDir, plan, targetRel) {
+  const evidenceRel = activeEvidencePathForPlan(plan.planId);
+  const evidenceAbs = path.join(rootDir, evidenceRel);
+  let content;
+  try {
+    content = await fs.readFile(evidenceAbs, 'utf8');
+  } catch {
+    return;
+  }
+
+  const fromRel = toPosix(path.relative(rootDir, plan.filePath));
+  const toRel = toPosix(targetRel);
+  if (!fromRel || !toRel || !content.includes(fromRel)) {
+    return;
+  }
+
+  await fs.writeFile(evidenceAbs, content.replaceAll(fromRel, toRel), 'utf8');
+}
+
 async function runValidation(rootDir, config, state, plan, logging) {
   const commands = validationCommandsForPlan(plan, config);
   if (commands.length === 0) {
@@ -1175,6 +1200,7 @@ async function finalizeCompletedPlan(rootDir, state, plan, validationResults) {
   const targetPath = path.join(rootDir, COMPLETED_DIR, path.basename(plan.filePath));
   await fs.mkdir(path.dirname(targetPath), { recursive: true });
   await fs.writeFile(targetPath, content, 'utf8');
+  await rewritePerPlanActiveEvidence(rootDir, plan, path.relative(rootDir, targetPath));
   await fs.unlink(plan.filePath);
   state.completedPlanIds = [...new Set([...state.completedPlanIds, plan.planId])];
   state.blockedPlanIds = state.blockedPlanIds.filter((entry) => entry !== plan.planId);
@@ -1390,7 +1416,7 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
   return 'blocked';
 }
 
-async function promoteReadyFutures(rootDir, state, plans, maxRisk, logging) {
+async function promoteNextReadyFuture(rootDir, state, plans, maxRisk, logging) {
   const completedPlanIds = new Set(plans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
   const futurePlans = orderPlans(plans.filter((plan) => plan.phase === 'future' && plan.status === 'ready-for-promotion'));
   for (const plan of futurePlans) {
@@ -1401,7 +1427,9 @@ async function promoteReadyFutures(rootDir, state, plans, maxRisk, logging) {
       continue;
     }
     await promoteFuturePlan(rootDir, state, plan, logging);
+    return true;
   }
+  return false;
 }
 
 function actionableActivePlans(plans, completedPlanIds, maxRisk) {
@@ -1467,15 +1495,22 @@ async function processQueue(rootDir, config, state, options) {
   let processedPlans = 0;
 
   while (maxPlans === 0 || processedPlans < maxPlans) {
-    const plans = await collectPlans(rootDir);
-    await promoteReadyFutures(rootDir, state, plans, maxRisk, logging);
-    const refreshedPlans = await collectPlans(rootDir);
-    const completedPlanIds = new Set(refreshedPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
+    let refreshedPlans = await collectPlans(rootDir);
+    let completedPlanIds = new Set(refreshedPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
+    let queue = actionableActivePlans(refreshedPlans, completedPlanIds, maxRisk);
+    if (queue.length === 0) {
+      const promoted = await promoteNextReadyFuture(rootDir, state, refreshedPlans, maxRisk, logging);
+      if (promoted) {
+        refreshedPlans = await collectPlans(rootDir);
+        completedPlanIds = new Set(refreshedPlans.filter((plan) => plan.phase === 'completed').map((plan) => plan.planId));
+        queue = actionableActivePlans(refreshedPlans, completedPlanIds, maxRisk);
+      }
+    }
+
     state.completedPlanIds = [...completedPlanIds];
     state.blockedPlanIds = refreshedPlans
       .filter((plan) => plan.phase === 'active' && plan.status === 'blocked')
       .map((plan) => plan.planId);
-    const queue = actionableActivePlans(refreshedPlans, completedPlanIds, maxRisk);
     state.queue = queue.map((plan) => plan.planId);
     await saveRunState(rootDir, state);
 

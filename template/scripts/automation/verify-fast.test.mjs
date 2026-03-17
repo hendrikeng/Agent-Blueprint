@@ -29,3 +29,16 @@ test('verify-fast adds architecture verification when architecture files changed
   assert.equal(result.status, 0, String(result.stderr));
   assert.match(String(result.stdout), /check-dependencies/);
 });
+
+test('verify-fast uses dry-run plan reference repair during orchestrated validation', async () => {
+  const rootDir = await createTemplateRepo();
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'verify-fast.mjs'),
+    ['--dry-run'],
+    rootDir,
+    { ORCH_PLAN_ID: 'red-inbox' }
+  );
+
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.match(String(result.stdout), /repair-plan-references\.mjs --dry-run/);
+});

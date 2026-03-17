@@ -90,6 +90,21 @@ async function configureFixtureRepo(rootDir, scenario) {
   spawnSync('git', ['commit', '-m', 'chore: seed orchestrator fixture'], { cwd: rootDir, stdio: 'pipe' });
 }
 
+async function writeActiveEvidence(rootDir, planSlug) {
+  await fs.mkdir(path.join(rootDir, 'docs', 'exec-plans', 'active', 'evidence'), { recursive: true });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'active', 'evidence', `${planSlug}.md`),
+    [
+      `# Active Evidence: ${planSlug}`,
+      '',
+      `- Plan-ID: ${planSlug}`,
+      `- Source Plan: \`docs/exec-plans/active/2026-03-17-${planSlug}.md\``,
+      `- Canonical Index: \`docs/exec-plans/evidence-index/${planSlug}.md\``
+    ].join('\n'),
+    'utf8'
+  );
+}
+
 test('orchestrator promotes a medium-risk future, runs worker and reviewer, then completes it', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {
@@ -255,4 +270,81 @@ test('orchestrator blocks high-risk work without explicit security approval', as
   );
   assert.match(blockedPlan, /^Status: blocked$/m);
   assert.match(blockedPlan, /Security-Approval must be approved/);
+});
+
+test('orchestrator commits per-plan active evidence without leaking it into the next slice', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'first-slice': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'First slice delivered.',
+            writeFiles: [{ path: 'src/first-slice.js', content: 'export const first = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ]
+      },
+      'second-slice': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'Second slice delivered.',
+            writeFiles: [{ path: 'src/second-slice.js', content: 'export const second = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:first-slice': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed for first slice.'
+        }
+      ],
+      'always:second-slice': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed for second slice.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-first-slice.md'),
+    directFuturePlan({ planId: 'first-slice', riskTier: 'low' }),
+    'utf8'
+  );
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-second-slice.md'),
+    directFuturePlan({ planId: 'second-slice', riskTier: 'low' }),
+    'utf8'
+  );
+  await writeActiveEvidence(rootDir, 'first-slice');
+  spawnSync('git', ['add', '.'], { cwd: rootDir, stdio: 'pipe' });
+  spawnSync('git', ['commit', '-m', 'docs: seed sequential-slice fixture'], { cwd: rootDir, stdio: 'pipe' });
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'low', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const evidence = await fs.readFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'active', 'evidence', 'first-slice.md'),
+    'utf8'
+  );
+  assert.match(evidence, /docs\/exec-plans\/completed\/2026-03-17-first-slice\.md/);
+
+  const history = spawnSync('git', ['log', '--oneline', '--max-count', '3'], { cwd: rootDir, stdio: 'pipe', encoding: 'utf8' });
+  assert.equal(history.status, 0);
+  assert.match(String(history.stdout), /complete first-slice/);
+  assert.match(String(history.stdout), /complete second-slice/);
 });
