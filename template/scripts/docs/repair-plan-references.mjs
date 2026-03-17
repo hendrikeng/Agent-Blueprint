@@ -168,8 +168,53 @@ async function loadPlanCatalog(rootDir) {
   const activeDir = path.join(rootDir, 'docs/exec-plans/active');
   const completedDir = path.join(rootDir, 'docs/exec-plans/completed');
   const futureDir = path.join(rootDir, 'docs/future');
+  const legacyRoadmapsDir = path.join(rootDir, 'docs/roadmaps/legacy-programs');
   const planById = new Map();
   const existingPaths = new Set();
+
+  async function readPlanTree(directoryAbs, phase) {
+    const results = [];
+
+    async function walk(currentDir) {
+      let entries = [];
+      try {
+        entries = await fs.readdir(currentDir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      for (const entry of entries) {
+        const abs = path.join(currentDir, entry.name);
+        if (entry.isDirectory()) {
+          await walk(abs);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md') || entry.name.toLowerCase() === 'readme.md') {
+          continue;
+        }
+
+        const rel = toPosix(path.relative(rootDir, abs));
+        existingPaths.add(rel);
+        const content = await fs.readFile(abs, 'utf8');
+        const metadata = parseMetadata(content);
+        const parsedPlanId = parsePlanId(metadataValue(metadata, 'Plan-ID'), null) ?? inferPlanId(content, abs);
+        if (!parsedPlanId) {
+          continue;
+        }
+
+        const stat = await fs.stat(abs);
+        results.push({
+          phase,
+          planId: parsedPlanId,
+          relPath: rel,
+          mtimeMs: stat.mtimeMs
+        });
+      }
+    }
+
+    await walk(directoryAbs);
+    return results;
+  }
 
   async function readPlanDirectory(directoryAbs, phase) {
     let entries = [];
@@ -209,10 +254,11 @@ async function loadPlanCatalog(rootDir) {
   const active = await readPlanDirectory(activeDir, 'active');
   const completed = await readPlanDirectory(completedDir, 'completed');
   const future = await readPlanDirectory(futureDir, 'future');
-  const all = [...active, ...completed, ...future];
+  const legacy = await readPlanTree(legacyRoadmapsDir, 'legacy');
+  const all = [...active, ...completed, ...future, ...legacy];
   all.sort((a, b) => {
     if (a.phase !== b.phase) {
-      const phasePriority = { active: 0, completed: 1, future: 2 };
+      const phasePriority = { active: 0, completed: 1, future: 2, legacy: 3 };
       return (phasePriority[a.phase] ?? 99) - (phasePriority[b.phase] ?? 99);
     }
     if (a.mtimeMs !== b.mtimeMs) {

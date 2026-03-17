@@ -2,7 +2,10 @@
   "docsIndexPath": "docs/MANIFEST.md",
   "markdownExcludePrefixes": [
     "docs/ops/automation/runtime/",
-    "docs/ops/automation/handoffs/"
+    "docs/ops/automation/handoffs/",
+    "docs/exec-plans/active/evidence/",
+    "docs/exec-plans/evidence-index/",
+    "docs/roadmaps/legacy-programs/"
   ],
   "scanFiles": [
     "ARCHITECTURE.md",
@@ -410,9 +413,12 @@
       "Owner",
       "Acceptance-Criteria",
       "Delivery-Class",
-      "Execution-Scope",
       "Dependencies",
       "Spec-Targets",
+      "Implementation-Targets",
+      "Risk-Tier",
+      "Validation-Lanes",
+      "Security-Approval",
       "Done-Evidence"
     ]
   },
