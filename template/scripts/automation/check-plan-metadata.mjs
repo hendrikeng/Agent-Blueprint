@@ -62,6 +62,11 @@ function parseArgs(argv) {
   return options;
 }
 
+function normalizeScope(value) {
+  const normalized = String(value ?? 'future-active').trim().toLowerCase();
+  return normalized === 'all' ? 'all' : 'future-active';
+}
+
 function rel(filePath) {
   return path.relative(rootDir, filePath).split(path.sep).join('/');
 }
@@ -295,8 +300,9 @@ function validatePlanSections(plan, findings) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const filterPlanId = parsePlanId(options['plan-id'] ?? options.planId, null);
+  const scope = normalizeScope(options.scope);
   const findings = [];
-  const plans = await loadPlans();
+  const plans = (await loadPlans()).filter((plan) => scope === 'all' || plan.phase !== 'completed');
   const seenPlanIds = new Set();
   const allPlanIds = new Set(plans.map((plan) => plan.planId).filter(Boolean));
 
@@ -320,7 +326,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`[plans:verify] ok (${filterPlanId ? `plan=${filterPlanId}` : `${plans.length} plan(s)`}).`);
+  console.log(`[plans:verify] ok (${filterPlanId ? `plan=${filterPlanId}` : `${plans.length} plan(s)`} scope=${scope}).`);
 }
 
 main().catch((error) => {
