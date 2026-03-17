@@ -252,8 +252,21 @@ function supportsLiveStatusLine(logging) {
   return logging.mode === 'pretty' && process.stdout.isTTY;
 }
 
+function stripAnsiControl(value) {
+  return String(value ?? '').replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
+}
+
 function clearLiveStatusLine() {
-  if (!process.stdout.isTTY || liveStatusLineLength <= 0) {
+  if (!process.stdout.isTTY) {
+    return;
+  }
+  if (typeof process.stdout.clearLine === 'function' && typeof process.stdout.cursorTo === 'function') {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+    liveStatusLineLength = 0;
+    return;
+  }
+  if (liveStatusLineLength <= 0) {
     return;
   }
   process.stdout.write(`\r${' '.repeat(liveStatusLineLength)}\r`);
@@ -268,10 +281,28 @@ function renderLiveStatusLine(logging, message) {
   if (!normalized) {
     return;
   }
-  const width = Math.max(normalized.length, liveStatusLineLength);
-  const padded = `${normalized}${' '.repeat(Math.max(0, width - normalized.length))}`;
+
+  const width = Number.isFinite(process.stdout.columns) ? Number(process.stdout.columns) : 0;
+  const visible = stripAnsiControl(normalized);
+  let rendered = normalized;
+  let visibleLength = visible.length;
+  if (width > 3 && visibleLength >= width) {
+    const clipped = visible.slice(0, Math.max(1, width - 2)).trimEnd();
+    rendered = `${clipped}…`;
+    visibleLength = stripAnsiControl(rendered).length;
+  }
+
+  if (typeof process.stdout.clearLine === 'function' && typeof process.stdout.cursorTo === 'function') {
+    process.stdout.clearLine(0);
+    process.stdout.cursorTo(0);
+    process.stdout.write(rendered);
+    liveStatusLineLength = visibleLength;
+    return;
+  }
+
+  const padded = rendered.padEnd(Math.max(liveStatusLineLength, visibleLength), ' ');
   process.stdout.write(`\r${padded}`);
-  liveStatusLineLength = width;
+  liveStatusLineLength = Math.max(visibleLength, stripAnsiControl(padded).length);
 }
 
 function logLine(logging, message, level = 'run') {
@@ -471,17 +502,36 @@ function safeDisplayToken(value, fallback = 'n/a') {
   return rendered.length > 0 ? rendered : fallback;
 }
 
+function compactDisplayToken(value, fallback, maxLength) {
+  const rendered = safeDisplayToken(value, fallback);
+  if (!Number.isFinite(maxLength) || maxLength <= 1 || rendered.length <= maxLength) {
+    return rendered;
+  }
+  return `${rendered.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+function formatDurationClock(totalSeconds) {
+  const normalized = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const hours = Math.floor(normalized / 3600);
+  const minutes = Math.floor((normalized % 3600) / 60);
+  const seconds = normalized % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
 function formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSeconds) {
   const stamp = colorize(logging, '90', nowIso().slice(11, 19));
   const dots = nextPrettyLiveDots(logging);
   const tag = prettyLevelTag(logging, idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run');
-  const phase = safeDisplayToken(context.phase, 'session');
-  const planId = safeDisplayToken(context.planId, 'run');
-  const role = safeDisplayToken(context.role, 'n/a');
-  const activity = safeDisplayToken(context.activity, phase);
+  const phase = compactDisplayToken(context.phase, 'session', 10);
+  const planId = compactDisplayToken(context.planId, 'run', 26);
+  const role = compactDisplayToken(context.role, 'n/a', 10);
+  const activity = compactDisplayToken(context.activity, phase, 16);
   return (
     `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity} ` +
-    `elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)}`
+    `elapsed=${formatDurationClock(elapsedSeconds)} idle=${formatDurationClock(idleSeconds)}`
   );
 }
 
