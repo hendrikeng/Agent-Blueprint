@@ -646,7 +646,8 @@ async function collectPlans(rootDir) {
   for (const phase of phases) {
     const files = await listMarkdownFiles(planPhaseDir(rootDir, phase));
     for (const filePath of files) {
-      if (path.basename(filePath) === 'README.md') {
+      const relative = toPosix(path.relative(rootDir, filePath));
+      if (path.basename(filePath) === 'README.md' || relative.includes('/evidence/')) {
         continue;
       }
       plans.push(await readPlan(filePath, phase, rootDir));

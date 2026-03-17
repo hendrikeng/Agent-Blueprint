@@ -71,6 +71,14 @@ function rel(filePath) {
   return path.relative(rootDir, filePath).split(path.sep).join('/');
 }
 
+function shouldSkipPlanFile(filePath) {
+  const relative = rel(filePath);
+  if (relative.includes('/evidence/')) {
+    return true;
+  }
+  return false;
+}
+
 function addFinding(findings, code, message, filePath) {
   findings.push({ code, message, filePath });
 }
@@ -101,7 +109,7 @@ async function loadPlans() {
   for (const [phase, directoryPath] of Object.entries(directories)) {
     const files = await listMarkdownFiles(directoryPath);
     for (const filePath of files) {
-      if (path.basename(filePath) === 'README.md') {
+      if (path.basename(filePath) === 'README.md' || shouldSkipPlanFile(filePath)) {
         continue;
       }
       const content = await fs.readFile(filePath, 'utf8');
