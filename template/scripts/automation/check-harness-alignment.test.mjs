@@ -80,3 +80,21 @@ test('harness:verify fails when codex executor command omits role sandbox wiring
   assert.match(String(result.stderr), /INVALID_CODEX_FULL_AUTO/);
   assert.match(String(result.stderr), /MISSING_NONINTERACTIVE_APPROVAL_POLICY/);
 });
+
+test('harness:verify fails when codex approval flag is placed after exec', async () => {
+  const rootDir = await createTemplateRepo();
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  config.executor.command =
+    'codex exec --json -a never --sandbox {sandbox_mode} -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}';
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'check-harness-alignment.mjs'),
+    [],
+    rootDir
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(String(result.stderr), /MISPLACED_APPROVAL_FLAG/);
+});

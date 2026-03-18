@@ -29,7 +29,7 @@ Provider live-progress text is optional and best-effort only; it is not part of 
 
 ## Baseline Command Templates
 
-- Codex: `codex exec --json -a never --sandbox {sandbox_mode} -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}`
+- Codex: `codex -a never exec --json --sandbox {sandbox_mode} -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}`
 - Claude: `claude -p --model {model} {prompt}`
 
 These are baseline templates, not universal guarantees across all versions.

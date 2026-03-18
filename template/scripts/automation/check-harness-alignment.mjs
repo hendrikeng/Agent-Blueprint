@@ -185,6 +185,15 @@ function validateExecutorCommand(config) {
       'docs/ops/automation/orchestrator.config.json'
     );
   }
+  const execIndex = command.indexOf(' exec');
+  const approvalIndex = command.search(/(^|\s)(--ask-for-approval|-a)\s+never(?=\s|$)/);
+  if (execIndex !== -1 && approvalIndex > execIndex) {
+    addFinding(
+      'MISPLACED_APPROVAL_FLAG',
+      "Codex executor.command must place '-a never' before 'exec'; 'codex exec -a never' is invalid in current Codex CLI.",
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
 }
 
 async function main() {
