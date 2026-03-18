@@ -3072,7 +3072,8 @@ function actionableActivePlans(plans, completedPlanIds, maxRisk, config, state, 
       effectivePlanStatus(plan) !== 'blocked' &&
       (effectivePlanStatus(plan) !== STATUS_BUDGET_EXHAUSTED || canResumeBudgetExhaustedPlan(plan, state, sessionLimit)) &&
       riskAllowed(plan, maxRisk) &&
-      dependenciesComplete(plan, completedPlanIds)
+      dependenciesComplete(plan, completedPlanIds) &&
+      !(securityApprovalRequired(plan, config) && plan.securityApproval !== 'approved')
     ))
   );
 }
