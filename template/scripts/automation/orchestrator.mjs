@@ -2271,9 +2271,18 @@ async function loadStructuredResultArtifact(filePath) {
 }
 
 async function loadStructuredResultFallback(execution, resultPath) {
-  const stdoutResult = extractStructuredResultFromOutput(execution?.stdout);
-  const stderrResult = stdoutResult ? null : extractStructuredResultFromOutput(execution?.stderr);
-  const payload = stdoutResult ?? stderrResult;
+  const candidates = [
+    { source: 'stdout', value: extractStructuredResultFromOutput(execution?.stdout) },
+    { source: 'stderr', value: extractStructuredResultFromOutput(execution?.stderr) },
+    { source: 'liveActivity', value: extractStructuredResultFromOutput(execution?.liveActivity?.message) },
+    ...((Array.isArray(execution?.liveActivityTrail) ? execution.liveActivityTrail : [])
+      .map((entry, index) => ({
+        source: `liveActivityTrail:${index + 1}`,
+        value: extractStructuredResultFromOutput(entry?.message)
+      })))
+  ];
+  const match = candidates.find((entry) => entry.value);
+  const payload = match?.value ?? null;
   if (!payload) {
     return { ok: false, code: 'missing' };
   }
@@ -2285,7 +2294,7 @@ async function loadStructuredResultFallback(execution, resultPath) {
   return {
     ok: true,
     value: payload,
-    source: stdoutResult ? 'stdout' : 'stderr'
+    source: match?.source ?? 'stdout'
   };
 }
 

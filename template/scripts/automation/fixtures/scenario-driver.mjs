@@ -141,3 +141,13 @@ export async function writeStructuredResult(resultPath, payload) {
 export function emitStructuredResultEnvelope(payload, stream = process.stdout) {
   stream.write(`${JSON.stringify({ type: 'orch_result', payload })}\n`);
 }
+
+export function emitAgentMessageStructuredResultEvent(payload, stream = process.stdout) {
+  stream.write(`${JSON.stringify({
+    type: 'item.completed',
+    item: {
+      type: 'agent_message',
+      text: JSON.stringify({ type: 'orch_result', payload })
+    }
+  })}\n`);
+}

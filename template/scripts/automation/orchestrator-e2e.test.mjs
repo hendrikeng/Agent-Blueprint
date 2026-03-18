@@ -296,6 +296,81 @@ test('orchestrator accepts a streamed reviewer result when read-only execution c
   assert.match(events, /session_result_stream_fallback/);
 });
 
+test('orchestrator accepts a reviewer result wrapped in an agent-message event when ORCH_RESULT_PATH is not written', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'agent-message-reviewer-result': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'Worker delivered agent-message reviewer result fixture.',
+            writeFiles: [{ path: 'src/agent-message-reviewer-result.js', content: 'export const wrapped = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ],
+        reviewer: [
+          {
+            status: 'completed',
+            summary: 'Reviewer approved via agent_message result event.',
+            emitAgentMessageResultEvent: true,
+            skipResultWrite: true
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:agent-message-reviewer-result': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-agent-message-reviewer-result.md'),
+    directFuturePlan({ planId: 'agent-message-reviewer-result', riskTier: 'medium' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed agent message reviewer result plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'medium', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const completedPlan = await fs.readFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'completed', '2026-03-17-agent-message-reviewer-result.md'),
+    'utf8'
+  );
+  assertPlanMetadataStatus(completedPlan, 'completed');
+
+  const runState = JSON.parse(await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-state.json'), 'utf8'));
+  const reviewerResult = JSON.parse(await fs.readFile(
+    path.join(
+      rootDir,
+      'docs',
+      'ops',
+      'automation',
+      'runtime',
+      runState.runId,
+      'agent-message-reviewer-result',
+      'results',
+      '02-reviewer.json'
+    ),
+    'utf8'
+  ));
+  assert.equal(reviewerResult.summary, 'Reviewer approved via agent_message result event.');
+
+  const events = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
+  assert.match(events, /session_result_stream_fallback/);
+});
+
 test('orchestrator ticker output keeps timestamped lifecycle lines', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {

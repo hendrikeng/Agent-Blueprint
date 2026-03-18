@@ -5,7 +5,10 @@ import {
   setPlanDocumentFields,
   upsertSection
 } from '../lib/plan-document-state.mjs';
-import { emitStructuredResultEnvelope } from './scenario-driver.mjs';
+import {
+  emitAgentMessageStructuredResultEvent,
+  emitStructuredResultEnvelope
+} from './scenario-driver.mjs';
 
 function parseArgs(argv) {
   const options = {};
@@ -154,6 +157,9 @@ async function main() {
   };
   if (action.emitResultEnvelope === true) {
     emitStructuredResultEnvelope(payload);
+  }
+  if (action.emitAgentMessageResultEvent === true) {
+    emitAgentMessageStructuredResultEvent(payload);
   }
   if (action.skipResultWrite !== true) {
     await writeJson(resultPath, payload);
