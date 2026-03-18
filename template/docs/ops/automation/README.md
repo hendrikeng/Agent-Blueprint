@@ -76,7 +76,7 @@ Treat `docs/ops/automation/LITE_QUICKSTART.md` as the simplest explanation of ho
 - `executor.maxSessionsPerPlan` defines the default per-plan worker/reviewer session budget before the run pauses that plan as `budget-exhausted`.
 - `executor.contextBudget.minRemaining` defines the low-watermark token threshold for forced handoff.
 - `executor.contextBudget.minRemainingPercent` defines the low-watermark ratio when the provider can report total context window.
-- Provider commands must be non-interactive and must honor `ORCH_RESULT_PATH`.
+- Provider commands must be non-interactive and must honor `ORCH_RESULT_PATH`, or emit a single-line `{"type":"orch_result","payload":...}` stdout envelope when sandbox policy prevents direct writes.
 - `validation.always` and `validation.hostRequired` define the completion gates.
 - `runtimeContextPath` should point at `docs/generated/AGENT-RUNTIME-CONTEXT.md`.
 - `logging.output`, `logging.failureTailLines`, `logging.heartbeatSeconds`, and `logging.stallWarnSeconds` tune grind readability and liveness signaling.

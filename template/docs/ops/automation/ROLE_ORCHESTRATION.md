@@ -62,6 +62,7 @@ Recommended baseline:
   - `ORCH_RUNTIME_CONTEXT_PATH`
 
 Runtime prompts also include the current low-context handoff thresholds so the agent can stop before grinding into the edge of the window.
+If a read-only sandbox prevents writing `ORCH_RESULT_PATH`, the provider must emit the equivalent single-line `{"type":"orch_result","payload":...}` stdout envelope instead.
 
 ## Provider Adapters
 

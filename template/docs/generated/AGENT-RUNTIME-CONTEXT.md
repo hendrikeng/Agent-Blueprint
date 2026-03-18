@@ -56,5 +56,5 @@ Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/autom
 ## Execution Checklist
 - Read the current plan and latest checkpoint before editing.
 - Honor Implementation-Targets, Validation-Lanes, and Security-Approval exactly as written.
-- Write a structured result to ORCH_RESULT_PATH after each worker or reviewer session.
+- Write a structured result to ORCH_RESULT_PATH after each worker or reviewer session, or emit a single-line {"type":"orch_result","payload":...} stdout envelope if the sandbox prevents direct writes.
 - Move plans to validation only when every must-land item is checked.

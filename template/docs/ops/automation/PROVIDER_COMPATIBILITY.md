@@ -23,7 +23,7 @@ Every provider command must support:
 - Prompt injection via `{prompt}` placeholder.
 - Runtime role selection for `worker` and `reviewer`.
 - Command exit status propagation.
-- Structured result payload written to `ORCH_RESULT_PATH`.
+- Structured result payload written to `ORCH_RESULT_PATH`, or the equivalent single-line `{"type":"orch_result","payload":...}` stdout envelope when direct writes are blocked by sandbox policy.
 
 Provider live-progress text is optional and best-effort only; it is not part of the required execution contract.
 
@@ -49,7 +49,8 @@ The orchestrator relies on the executor contract to enforce structured output:
 
 - Required payload fields: `status`, `summary`, `reason`, `contextRemaining`
 - Recommended payload fields when available: `contextWindow`, `currentSubtask`, `nextAction`, `stateDelta`
-- Payload path: `ORCH_RESULT_PATH`
+- Preferred payload path: `ORCH_RESULT_PATH`
+- Fallback envelope: single-line `{"type":"orch_result","payload":...}` on stdout
 - Allowed status values: `completed`, `blocked`, `handoff_required`, `pending`
 
 If payload is missing or invalid, orchestration treats the session as incomplete and forces safe continuation behavior.

@@ -137,3 +137,7 @@ export async function writeStructuredResult(resultPath, payload) {
   const normalized = prepareContractPayload(CONTRACT_IDS.validationResult, payload);
   await writeTextFileAtomic(resultPath, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
 }
+
+export function emitStructuredResultEnvelope(payload, stream = process.stdout) {
+  stream.write(`${JSON.stringify({ type: 'orch_result', payload })}\n`);
+}

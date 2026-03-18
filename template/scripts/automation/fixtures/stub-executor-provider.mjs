@@ -2,6 +2,7 @@
 import path from 'node:path';
 
 import {
+  emitStructuredResultEnvelope,
   applyPlanStep,
   applyTouches,
   nextScenarioStep,
@@ -65,7 +66,12 @@ async function main() {
     currentSubtask: `${planId}:${role}`,
     nextAction: `Return control to orchestrator for ${planId}`
   });
-  await writeStructuredResult(path.join(rootDir, resultPath), payload);
+  if (step.emitResultEnvelope === true) {
+    emitStructuredResultEnvelope(payload);
+  }
+  if (step.skipResultWrite !== true) {
+    await writeStructuredResult(path.join(rootDir, resultPath), payload);
+  }
 }
 
 main().catch((error) => {

@@ -5,6 +5,7 @@ import {
   setPlanDocumentFields,
   upsertSection
 } from '../lib/plan-document-state.mjs';
+import { emitStructuredResultEnvelope } from './scenario-driver.mjs';
 
 function parseArgs(argv) {
   const options = {};
@@ -118,9 +119,6 @@ async function main() {
   }
 
   await writeJson(statePath, state);
-  if (action.skipResultWrite === true) {
-    return;
-  }
   if (typeof action.rawResultText === 'string') {
     await fs.mkdir(path.dirname(resultPath), { recursive: true });
     await fs.writeFile(resultPath, action.rawResultText, 'utf8');
@@ -130,7 +128,7 @@ async function main() {
     }
     return;
   }
-  await writeJson(resultPath, {
+  const payload = {
     status: action.status ?? 'completed',
     summary: action.summary ?? `Fixture action ${planId}/${role}`,
     reason: action.reason ?? null,
@@ -153,7 +151,13 @@ async function main() {
       },
       evidence: action.evidence ?? []
     }
-  });
+  };
+  if (action.emitResultEnvelope === true) {
+    emitStructuredResultEnvelope(payload);
+  }
+  if (action.skipResultWrite !== true) {
+    await writeJson(resultPath, payload);
+  }
 
   const exitCode = Number.isFinite(action?.exitCode) ? Number(action.exitCode) : 0;
   if (exitCode !== 0) {

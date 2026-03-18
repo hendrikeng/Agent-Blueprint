@@ -27,7 +27,7 @@ Reviewer expectations:
 - If the plan is ready for validation, set Status to validation.
 - If context is near the threshold before you can finish review safely, stop and return handoff_required with a precise next action.
 
-Always write a JSON result file to ORCH_RESULT_PATH with:
+Prefer writing a JSON result file to ORCH_RESULT_PATH with:
 - status: completed | blocked | handoff_required | pending
 - summary
 - reason
@@ -36,6 +36,9 @@ Always write a JSON result file to ORCH_RESULT_PATH with:
 - currentSubtask
 - nextAction
 - stateDelta with arrays for completedWork, acceptedFacts, decisions, openQuestions, pendingActions, recentResults, artifacts, risks, reasoning, evidence
+
+If the sandbox or provider prevents writing ORCH_RESULT_PATH, emit one final single-line JSON object to stdout exactly once and without markdown fences:
+- {"type":"orch_result","payload":{...same result fields...}}
 
 Use blocked only for real external/manual blockers. Use pending or handoff_required only when another worker pass is actually required.
 Session task: plan={plan_id} role={role} risk={risk_tier} session={session}.

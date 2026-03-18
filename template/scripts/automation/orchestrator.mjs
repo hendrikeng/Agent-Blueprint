@@ -978,6 +978,68 @@ function looksLikeJsonEnvelope(line) {
   return rendered.startsWith('{') && rendered.endsWith('}');
 }
 
+function parseJsonLine(line) {
+  const rendered = String(line ?? '').trim();
+  if (!rendered || !rendered.startsWith('{') || !rendered.endsWith('}')) {
+    return null;
+  }
+  try {
+    return JSON.parse(rendered);
+  } catch {
+    return null;
+  }
+}
+
+function extractStructuredResultCandidate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  if (String(value.type ?? '').trim().toLowerCase() === 'orch_result' && value.payload && typeof value.payload === 'object') {
+    return value.payload;
+  }
+  return null;
+}
+
+function extractStructuredResultFromJsonLine(line) {
+  const parsed = parseJsonLine(line);
+  if (!parsed) {
+    return null;
+  }
+  const direct = extractStructuredResultCandidate(parsed);
+  if (direct) {
+    return direct;
+  }
+  const nestedItemCandidates = [parsed.item, parsed.event?.item, parsed.data?.item, parsed.payload?.item];
+  for (const item of nestedItemCandidates) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+    if (String(item.type ?? '').trim().toLowerCase() !== 'agent_message') {
+      continue;
+    }
+    const texts = [item.text, item.content, item.message];
+    for (const text of texts) {
+      const nested = extractStructuredResultFromJsonLine(text);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+  return null;
+}
+
+function extractStructuredResultFromOutput(text) {
+  const lines = String(text ?? '').split(/\r?\n|\r/g);
+  let candidate = null;
+  for (const line of lines) {
+    const extracted = extractStructuredResultFromJsonLine(line);
+    if (extracted) {
+      candidate = extracted;
+    }
+  }
+  return candidate;
+}
+
 function pushLiveActivityEntry(trail, message, timestamp, maxEntries = 12) {
   const normalizedMessage = String(message ?? '').trim();
   if (!normalizedMessage) {
@@ -2208,6 +2270,25 @@ async function loadStructuredResultArtifact(filePath) {
   }
 }
 
+async function loadStructuredResultFallback(execution, resultPath) {
+  const stdoutResult = extractStructuredResultFromOutput(execution?.stdout);
+  const stderrResult = stdoutResult ? null : extractStructuredResultFromOutput(execution?.stderr);
+  const payload = stdoutResult ?? stderrResult;
+  if (!payload) {
+    return { ok: false, code: 'missing' };
+  }
+  try {
+    await fs.writeFile(resultPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    return { ok: false, code: 'unwritable', error };
+  }
+  return {
+    ok: true,
+    value: payload,
+    source: stdoutResult ? 'stdout' : 'stderr'
+  };
+}
+
 function protocolFailureReason(actorLabel, artifactEnvName, artifactRel, logRel, artifactLoad, exitCode) {
   const statusLabel = exitCode === 0 ? 'exited successfully' : `exited ${exitCode ?? 1}`;
   const artifactRef = `${artifactEnvName} (${artifactRel})`;
@@ -2396,7 +2477,23 @@ async function executeRole(rootDir, config, state, plan, role, logging) {
     liveActivity: execution.liveActivity,
     liveActivityTrail: execution.liveActivityTrail
   });
-  const artifactLoad = await loadStructuredResultArtifact(resultPath);
+  let artifactLoad = await loadStructuredResultArtifact(resultPath);
+  if (!artifactLoad.ok) {
+    const fallbackLoad = await loadStructuredResultFallback(execution, resultPath);
+    if (fallbackLoad.ok) {
+      artifactLoad = {
+        ok: true,
+        value: fallbackLoad.value
+      };
+      await appendRunEvent(rootDir, state, 'session_result_stream_fallback', plan.planId, {
+        role,
+        session: sessionNumber,
+        source: fallbackLoad.source,
+        result: resultRel,
+        log: logRel
+      });
+    }
+  }
   let normalized;
   if (!artifactLoad.ok) {
     const reason = protocolFailureReason(
