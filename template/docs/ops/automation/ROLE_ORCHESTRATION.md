@@ -68,6 +68,7 @@ Runtime prompts also include the current low-context handoff thresholds so the a
 - Provider command templates must be non-interactive and must include `{prompt}`.
 - Runtime profiles only need to cover `worker` and `reviewer`.
 - Use non-interactive provider modes only.
+- Provider adapters must map the portable `sandboxMode` profile onto the provider's native flag. For Codex, `full-access` maps to `--sandbox danger-full-access`.
 
 ## Operational Notes
 

@@ -143,6 +143,18 @@ function normalizeMaxRisk(value, fallback = DEFAULT_MAX_RISK) {
   return Object.prototype.hasOwnProperty.call(RISK_ORDER, normalized) ? normalized : fallback;
 }
 
+function resolveExecutorSandboxMode(role, roleConfig = {}) {
+  const fallback = role === ROLE_REVIEWER ? 'read-only' : 'danger-full-access';
+  const requested = trimmedString(roleConfig?.sandboxMode, role === ROLE_REVIEWER ? 'read-only' : 'full-access').toLowerCase();
+  if (requested === 'full-access') {
+    return 'danger-full-access';
+  }
+  if (requested === 'read-only' || requested === 'workspace-write' || requested === 'danger-full-access') {
+    return requested;
+  }
+  return fallback;
+}
+
 function planPriorityWeight(priority) {
   const order = { p0: 0, p1: 1, p2: 2, p3: 3 };
   return Object.prototype.hasOwnProperty.call(order, priority) ? order[priority] : 99;
@@ -2348,6 +2360,7 @@ async function executeRole(rootDir, config, state, plan, role, logging) {
     prompt,
     model: roleConfig.model ?? '',
     reasoning_effort: roleConfig.reasoningEffort ?? 'high',
+    sandbox_mode: resolveExecutorSandboxMode(role, roleConfig),
     role,
     plan_id: plan.planId,
     plan_file: plan.rel,
@@ -3072,8 +3085,7 @@ function actionableActivePlans(plans, completedPlanIds, maxRisk, config, state, 
       effectivePlanStatus(plan) !== 'blocked' &&
       (effectivePlanStatus(plan) !== STATUS_BUDGET_EXHAUSTED || canResumeBudgetExhaustedPlan(plan, state, sessionLimit)) &&
       riskAllowed(plan, maxRisk) &&
-      dependenciesComplete(plan, completedPlanIds) &&
-      !(securityApprovalRequired(plan, config) && plan.securityApproval !== 'approved')
+      dependenciesComplete(plan, completedPlanIds)
     ))
   );
 }

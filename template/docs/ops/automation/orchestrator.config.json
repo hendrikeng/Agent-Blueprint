@@ -1,6 +1,6 @@
 {
   "executor": {
-    "command": "codex exec --json --full-auto -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}",
+    "command": "codex exec --json -a never --sandbox {sandbox_mode} -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}",
     "promptTemplate": "@canonical-executor-prompt",
     "timeoutSeconds": 1800,
     "maxSessionsPerPlan": 12,

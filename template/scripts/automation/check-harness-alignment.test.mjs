@@ -59,3 +59,24 @@ test('harness:verify fails when canonical docs reference retired harness command
   assert.match(String(result.stderr), /RETIRED_DOC_REFERENCE/);
   assert.match(String(result.stderr), /docs\/PLANS\.md/);
 });
+
+test('harness:verify fails when codex executor command omits role sandbox wiring', async () => {
+  const rootDir = await createTemplateRepo();
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  const config = JSON.parse(await fs.readFile(configPath, 'utf8'));
+  config.executor.command =
+    'codex exec --json --full-auto -c model_reasoning_effort={reasoning_effort} -m {model} {prompt}';
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'check-harness-alignment.mjs'),
+    [],
+    rootDir
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(String(result.stderr), /MISSING_SANDBOX_PLACEHOLDER/);
+  assert.match(String(result.stderr), /MISSING_SANDBOX_FLAG/);
+  assert.match(String(result.stderr), /INVALID_CODEX_FULL_AUTO/);
+  assert.match(String(result.stderr), /MISSING_NONINTERACTIVE_APPROVAL_POLICY/);
+});

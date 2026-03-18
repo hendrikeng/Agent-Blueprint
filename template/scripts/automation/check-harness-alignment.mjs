@@ -144,6 +144,49 @@ function validateCanonicalDocs(docPayloads) {
   }
 }
 
+function validateExecutorCommand(config) {
+  const command = String(config?.executor?.command ?? '').trim();
+  if (!command) {
+    addFinding(
+      'MISSING_EXECUTOR_COMMAND',
+      'executor.command must be configured.',
+      'docs/ops/automation/orchestrator.config.json'
+    );
+    return;
+  }
+  if (!command.includes('codex exec')) {
+    return;
+  }
+  if (!command.includes('{sandbox_mode}')) {
+    addFinding(
+      'MISSING_SANDBOX_PLACEHOLDER',
+      "Codex executor.command must include '{sandbox_mode}' so role sandbox policy is enforced.",
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+  if (!/(^|\s)(--sandbox|-s)\s+\{sandbox_mode\}(?=\s|$)/.test(command)) {
+    addFinding(
+      'MISSING_SANDBOX_FLAG',
+      "Codex executor.command must pass '--sandbox {sandbox_mode}'.",
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+  if (/\s--full-auto(\s|$)/.test(command)) {
+    addFinding(
+      'INVALID_CODEX_FULL_AUTO',
+      "Codex executor.command must not use '--full-auto' because it forces workspace-write and overrides role sandbox policy.",
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+  if (!/(^|\s)(--ask-for-approval|-a)\s+never(?=\s|$)/.test(command)) {
+    addFinding(
+      'MISSING_NONINTERACTIVE_APPROVAL_POLICY',
+      "Codex executor.command must set '-a never' for non-interactive orchestration.",
+      'docs/ops/automation/orchestrator.config.json'
+    );
+  }
+}
+
 async function main() {
   const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
   const policyPath = path.join(rootDir, 'docs', 'governance', 'policy-manifest.json');
@@ -166,6 +209,7 @@ async function main() {
     docPayloads[docFile] = await readText(path.join(rootDir, docFile));
   }
   validateCanonicalDocs(docPayloads);
+  validateExecutorCommand(config);
 
   const roleNames = Object.keys(config?.executor?.roles ?? {}).sort();
   if (roleNames.join(',') !== 'reviewer,worker') {

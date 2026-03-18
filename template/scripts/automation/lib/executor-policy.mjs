@@ -17,6 +17,8 @@ Low-context handoff threshold: <= {context_threshold_tokens} remaining tokens or
 Worker expectations:
 - Implement the next concrete slice and update the plan when scope or status changes.
 - If the plan is ready for validation, set Status to validation.
+- Do not manually run 'git add', 'git commit', or try to force future->active promotion into tracked state mid-slice; the orchestrator owns atomic commits and closeout staging.
+- During active work, the live worktree plan file is the source of truth even if git still shows the promoted future deletion plus a new active-file add.
 - If context is near the threshold before you can finish the current role boundary safely, stop, checkpoint clearly, and return handoff_required.
 
 Reviewer expectations:

@@ -90,7 +90,7 @@ Treat `docs/ops/automation/LITE_QUICKSTART.md` as the simplest explanation of ho
 - The handoff note and latest checkpoint are the canonical packet for the next fresh agent.
 - If the current run reaches its per-plan session cap before another worker/reviewer pass can start, the plan moves to `Status: budget-exhausted` instead of `blocked`.
 - Resume a `budget-exhausted` plan by rerunning `automation:resume` with a higher `--max-sessions-per-plan`.
-- `run`, `resume`, and `grind` now take a repo-local runtime lock in `docs/ops/automation/runtime/orchestrator.lock.json`; if another orchestrator process is already active, the second start fails fast with a clear message instead of racing the active plan files.
+- `run`, `resume`, and `grind` now take a repo-local runtime lock under `docs/ops/automation/runtime/` (`orchestrator.lock.json` at runtime); if another orchestrator process is already active, the second start fails fast with a clear message instead of racing the active plan files.
 
 ## Operator Output
 
