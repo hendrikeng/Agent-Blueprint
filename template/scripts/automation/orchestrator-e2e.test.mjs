@@ -371,6 +371,81 @@ test('orchestrator accepts a reviewer result wrapped in an agent-message event w
   assert.match(events, /session_result_stream_fallback/);
 });
 
+test('orchestrator accepts a reviewer result wrapped in a command_execution event when ORCH_RESULT_PATH is not written', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'command-execution-reviewer-result': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'Worker delivered command_execution reviewer result fixture.',
+            writeFiles: [{ path: 'src/command-execution-reviewer-result.js', content: 'export const wrapped = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ],
+        reviewer: [
+          {
+            status: 'completed',
+            summary: 'Reviewer approved via command_execution result event.',
+            emitCommandExecutionResultEvent: true,
+            skipResultWrite: true
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:command-execution-reviewer-result': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-command-execution-reviewer-result.md'),
+    directFuturePlan({ planId: 'command-execution-reviewer-result', riskTier: 'medium' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed command execution reviewer result plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'medium', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const completedPlan = await fs.readFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'completed', '2026-03-17-command-execution-reviewer-result.md'),
+    'utf8'
+  );
+  assertPlanMetadataStatus(completedPlan, 'completed');
+
+  const runState = JSON.parse(await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-state.json'), 'utf8'));
+  const reviewerResult = JSON.parse(await fs.readFile(
+    path.join(
+      rootDir,
+      'docs',
+      'ops',
+      'automation',
+      'runtime',
+      runState.runId,
+      'command-execution-reviewer-result',
+      'results',
+      '02-reviewer.json'
+    ),
+    'utf8'
+  ));
+  assert.equal(reviewerResult.summary, 'Reviewer approved via command_execution result event.');
+
+  const events = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
+  assert.match(events, /session_result_stream_fallback/);
+});
+
 test('orchestrator suppresses structured result envelopes from live activity output', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {

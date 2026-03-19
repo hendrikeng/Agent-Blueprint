@@ -855,6 +855,48 @@ function extractStructuredResultCandidate(value) {
   return null;
 }
 
+function extractStructuredResultFromNestedValue(value, seen = new Set()) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    return extractStructuredResultFromOutput(value);
+  }
+  if (typeof value !== 'object') {
+    return null;
+  }
+  if (seen.has(value)) {
+    return null;
+  }
+  seen.add(value);
+
+  const direct = extractStructuredResultCandidate(value);
+  if (direct) {
+    return direct;
+  }
+
+  const namedTextFields = ['text', 'content', 'message', 'aggregated_output', 'output', 'stdout', 'stderr'];
+  for (const key of namedTextFields) {
+    if (typeof value[key] !== 'string') {
+      continue;
+    }
+    const nested = extractStructuredResultFromOutput(value[key]);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  const nestedKeys = ['item', 'event', 'data', 'payload'];
+  for (const key of nestedKeys) {
+    const nested = extractStructuredResultFromNestedValue(value[key], seen);
+    if (nested) {
+      return nested;
+    }
+  }
+
+  return null;
+}
+
 function extractStructuredResultFromJsonLine(line) {
   const recovered = recoverStructuredResultFromTruncatedText(line);
   if (recovered) {
@@ -864,31 +906,7 @@ function extractStructuredResultFromJsonLine(line) {
   if (!parsed) {
     return null;
   }
-  const direct = extractStructuredResultCandidate(parsed);
-  if (direct) {
-    return direct;
-  }
-  const nestedItemCandidates = [parsed.item, parsed.event?.item, parsed.data?.item, parsed.payload?.item];
-  for (const item of nestedItemCandidates) {
-    if (!item || typeof item !== 'object') {
-      continue;
-    }
-    if (String(item.type ?? '').trim().toLowerCase() !== 'agent_message') {
-      continue;
-    }
-    const texts = [item.text, item.content, item.message];
-    for (const text of texts) {
-      const recoveredText = recoverStructuredResultFromTruncatedText(text);
-      if (recoveredText) {
-        return recoveredText;
-      }
-      const nested = extractStructuredResultFromJsonLine(text);
-      if (nested) {
-        return nested;
-      }
-    }
-  }
-  return null;
+  return extractStructuredResultFromNestedValue(parsed);
 }
 
 function extractStructuredResultFromOutput(text) {

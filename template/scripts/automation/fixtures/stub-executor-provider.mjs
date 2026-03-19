@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import {
   emitStructuredResultEnvelope,
+  emitCommandExecutionStructuredResultEvent,
   applyPlanStep,
   applyTouches,
   nextScenarioStep,
@@ -68,6 +69,9 @@ async function main() {
   });
   if (step.emitResultEnvelope === true) {
     emitStructuredResultEnvelope(payload);
+  }
+  if (step.emitCommandExecutionResultEvent === true) {
+    emitCommandExecutionStructuredResultEvent(payload);
   }
   if (step.skipResultWrite !== true) {
     await writeStructuredResult(path.join(rootDir, resultPath), payload);
