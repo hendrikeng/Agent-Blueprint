@@ -250,6 +250,13 @@ function trackedPlanPaths(state, planId) {
     : [];
 }
 
+function normalizeRepoRelativePathList(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry) => normalizeRepoRelativePath(entry))
+    .filter(Boolean)
+    .filter((entry, index, list) => list.indexOf(entry) === index);
+}
+
 function trackPlanTouchedPaths(state, planId, paths) {
   if (!state || !planId) {
     return [];
@@ -896,6 +903,9 @@ function extractLiveActivityFromJsonLine(line, redactionPatterns = [], maxChars 
   if (!rendered || !rendered.startsWith('{')) {
     return null;
   }
+  if (lineContainsStructuredResultEnvelope(rendered)) {
+    return null;
+  }
 
   let parsed;
   try {
@@ -931,7 +941,7 @@ function extractLiveActivityFromJsonLine(line, redactionPatterns = [], maxChars 
         continue;
       }
       const preferred = extractStringFromUnknown(item.text ?? item.content ?? item.message);
-      if (preferred) {
+      if (preferred && !lineContainsStructuredResultEnvelope(preferred)) {
         return sanitizeLiveActivityLine(preferred, redactionPatterns, maxChars);
       }
     }
@@ -1164,6 +1174,17 @@ function extractStructuredResultFromOutput(text) {
   return candidate;
 }
 
+function lineContainsStructuredResultEnvelope(line) {
+  const rendered = String(line ?? '').trim();
+  if (!rendered) {
+    return false;
+  }
+  return Boolean(
+    recoverStructuredResultFromTruncatedText(rendered) ||
+    extractStructuredResultFromJsonLine(rendered)
+  );
+}
+
 function pushLiveActivityEntry(trail, message, timestamp, maxEntries = 12) {
   const normalizedMessage = String(message ?? '').trim();
   if (!normalizedMessage) {
@@ -1363,9 +1384,14 @@ function createAtomicCommit(rootDir, plan, config, state = null) {
 
   const allowedRoots = atomicCommitRootsForPlan(plan, config);
   const trackedPaths = trackedPlanPaths(state, plan.planId);
+  const initialDirtyPaths = normalizeRepoRelativePathList(state?.initialDirtyPaths);
+  const isAllowedPlanPath = (entry) => (
+    allowedRoots.some((root) => pathMatchesRootPrefix(entry, root)) ||
+    trackedPaths.some((trackedPath) => pathMatchesRootPrefix(entry, trackedPath))
+  );
   const outsideScope = changedPaths.filter((entry) => (
-    !allowedRoots.some((root) => pathMatchesRootPrefix(entry, root)) &&
-    !trackedPaths.some((trackedPath) => pathMatchesRootPrefix(entry, trackedPath))
+    !initialDirtyPaths.includes(entry) &&
+    !isAllowedPlanPath(entry)
   ));
   if (outsideScope.length > 0) {
     return {
@@ -1375,7 +1401,14 @@ function createAtomicCommit(rootDir, plan, config, state = null) {
     };
   }
 
-  const addResult = runShellCapture(`git add -- ${shellJoinArgs(changedPaths)}`, rootDir);
+  const pathsToStage = changedPaths.filter((entry) => (
+    isAllowedPlanPath(entry) || !initialDirtyPaths.includes(entry)
+  ));
+  if (pathsToStage.length === 0) {
+    return { ok: true, committed: false, reason: 'no stageable changes' };
+  }
+
+  const addResult = runShellCapture(`git add -- ${shellJoinArgs(pathsToStage)}`, rootDir);
   if (addResult.status !== 0) {
     return {
       ok: false,
@@ -1385,10 +1418,10 @@ function createAtomicCommit(rootDir, plan, config, state = null) {
   }
 
   const stagedResult = runShellCapture('git diff --cached --name-only -z', rootDir);
-  const stagedPaths = stagedResult.status === 0
+  const stagedPathList = stagedResult.status === 0
     ? String(stagedResult.stdout ?? '').split('\0').map((entry) => normalizeRepoRelativePath(entry)).filter(Boolean)
     : [];
-  if (stagedPaths.length === 0) {
+  if (stagedPathList.length === 0) {
     return { ok: true, committed: false, reason: 'no staged changes' };
   }
 
@@ -2190,6 +2223,7 @@ function createRunState(runId, maxRisk) {
     budgetExhaustedPlanIds: [],
     blockedPlanIds: [],
     failedPlanIds: [],
+    initialDirtyPaths: [],
     planSessions: {},
     planTouchedPaths: {},
     stats: {
@@ -2207,8 +2241,11 @@ function createRunState(runId, maxRisk) {
 async function loadRunState(rootDir, maxRisk, command) {
   const runStatePath = path.join(rootDir, RUN_STATE_PATH);
   const existing = await readJson(runStatePath, null);
+  const currentDirtyPaths = normalizeRepoRelativePathList(dirtyRepoPaths(rootDir, { includeTransient: false }));
   if (!existing || command === 'run' || command === 'grind') {
-    return createRunState(nextRunId(), maxRisk);
+    const state = createRunState(nextRunId(), maxRisk);
+    state.initialDirtyPaths = currentDirtyPaths;
+    return state;
   }
   return {
     ...existing,
@@ -2217,6 +2254,10 @@ async function loadRunState(rootDir, maxRisk, command) {
     budgetExhaustedPlanIds: Array.isArray(existing.budgetExhaustedPlanIds) ? existing.budgetExhaustedPlanIds : [],
     blockedPlanIds: Array.isArray(existing.blockedPlanIds) ? existing.blockedPlanIds : [],
     failedPlanIds: Array.isArray(existing.failedPlanIds) ? existing.failedPlanIds : [],
+    initialDirtyPaths: normalizeRepoRelativePathList([
+      ...(Array.isArray(existing.initialDirtyPaths) ? existing.initialDirtyPaths : []),
+      ...currentDirtyPaths
+    ]),
     planSessions: existing.planSessions && typeof existing.planSessions === 'object' ? existing.planSessions : {},
     planTouchedPaths: existing.planTouchedPaths && typeof existing.planTouchedPaths === 'object' ? existing.planTouchedPaths : {},
     stats: {

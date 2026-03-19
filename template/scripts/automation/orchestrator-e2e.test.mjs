@@ -371,6 +371,57 @@ test('orchestrator accepts a reviewer result wrapped in an agent-message event w
   assert.match(events, /session_result_stream_fallback/);
 });
 
+test('orchestrator suppresses structured result envelopes from live activity output', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'quiet-agent-message-reviewer-result': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'Worker delivered quiet reviewer result fixture.',
+            writeFiles: [{ path: 'src/quiet-agent-message-reviewer-result.js', content: 'export const quiet = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ],
+        reviewer: [
+          {
+            status: 'completed',
+            summary: 'Reviewer approved without leaking a result envelope into live activity.',
+            emitAgentMessageResultEvent: true,
+            skipResultWrite: true
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:quiet-agent-message-reviewer-result': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-quiet-agent-message-reviewer-result.md'),
+    directFuturePlan({ planId: 'quiet-agent-message-reviewer-result', riskTier: 'medium' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed quiet agent message reviewer result plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'medium', '--output', 'pretty'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.doesNotMatch(String(result.stdout), /"type":"orch_result"/);
+  assert.match(String(result.stdout), /session artifacts/);
+});
+
 test('orchestrator recovers top-level reviewer fields from a truncated agent-message result envelope', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {
@@ -1183,6 +1234,88 @@ test('orchestrator atomic commits include same-slice touched files outside decla
   assert.equal(latestCommit.status, 0);
   assert.match(String(latestCommit.stdout), /complete atomic-touched-files/);
   assert.match(String(latestCommit.stdout), /tests\/atomic-touched-files\.test\.js/);
+});
+
+test('resume atomic commits ignore unrelated dirty baseline paths while still committing the resumed slice', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'resume-atomic-baseline': {
+        worker: [
+          {
+            status: 'pending',
+            summary: 'Worker needs one more pass before the resumed slice can complete.',
+            writeFiles: [{ path: 'src/resume-atomic-baseline.js', content: 'export const phase = "first";\n' }]
+          },
+          {
+            status: 'completed',
+            summary: 'Worker completed the resumed slice.',
+            writeFiles: [{ path: 'src/resume-atomic-baseline.js', content: 'export const phase = "final";\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ],
+        reviewer: [
+          {
+            status: 'completed',
+            summary: 'Reviewer approved the resumed slice.'
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:resume-atomic-baseline': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-resume-atomic-baseline.md'),
+    directFuturePlan({ planId: 'resume-atomic-baseline', riskTier: 'low' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed resume atomic baseline plan');
+
+  const scriptPath = path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs');
+  const firstRun = runNode(
+    scriptPath,
+    ['grind', '--max-risk', 'low', '--max-sessions-per-plan', '1', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(firstRun.status, 0, String(firstRun.stderr));
+
+  await fs.mkdir(path.join(rootDir, 'notes'), { recursive: true });
+  await fs.writeFile(path.join(rootDir, 'notes', 'unrelated.md'), 'left dirty on purpose\n', 'utf8');
+
+  const resumedRun = runNode(
+    scriptPath,
+    ['resume', '--max-risk', 'low', '--max-sessions-per-plan', '2', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(resumedRun.status, 0, String(resumedRun.stderr));
+
+  const completedPlan = await fs.readFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'completed', '2026-03-17-resume-atomic-baseline.md'),
+    'utf8'
+  );
+  assertPlanMetadataStatus(completedPlan, 'completed');
+
+  const gitStatus = spawnSync('git', ['status', '--short'], { cwd: rootDir, stdio: 'pipe', encoding: 'utf8' });
+  assert.equal(gitStatus.status, 0);
+  assert.match(String(gitStatus.stdout), /\?\? notes(?:\/|$)/);
+
+  const latestCommit = spawnSync('git', ['show', '--stat', '--oneline', '--max-count', '1'], {
+    cwd: rootDir,
+    stdio: 'pipe',
+    encoding: 'utf8'
+  });
+  assert.equal(latestCommit.status, 0);
+  assert.match(String(latestCommit.stdout), /complete resume-atomic-baseline/);
+  assert.doesNotMatch(String(latestCommit.stdout), /notes\/unrelated\.md/);
 });
 
 test('orchestrator commits per-plan active evidence without leaking it into the next slice', async () => {
