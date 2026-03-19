@@ -1162,6 +1162,62 @@ test('orchestrator reports an explicit executor protocol error when a worker exi
   assert.match(events, /session_protocol_error/);
 });
 
+test('orchestrator reports an explicit executor timeout when a worker stalls before writing a result payload', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'timed-out-worker-result': {
+        worker: [
+          {
+            skipResultWrite: true,
+            delayMs: 1500,
+            summary: 'This summary should never be used.'
+          }
+        ]
+      }
+    },
+    validation: {}
+  });
+
+  const configPath = path.join(rootDir, 'docs', 'ops', 'automation', 'orchestrator.config.json');
+  const config = await loadJson(configPath);
+  config.executor.timeoutSeconds = 1;
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-timed-out-worker-result.md'),
+    directFuturePlan({ planId: 'timed-out-worker-result', riskTier: 'low' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed timed out worker result plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'low', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const blockedPlan = await fs.readFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'active', '2026-03-17-timed-out-worker-result.md'),
+    'utf8'
+  );
+  assertPlanMetadataStatus(blockedPlan, 'blocked');
+  assert.match(blockedPlan, /timed out before producing ORCH_RESULT_PATH/);
+
+  const checkpoint = JSON.parse(await fs.readFile(
+    path.join(rootDir, 'docs', 'ops', 'automation', 'runtime', 'state', 'timed-out-worker-result', 'latest.json'),
+    'utf8'
+  ));
+  assert.equal(checkpoint.summary, 'Executor timed out.');
+  assert.match(String(checkpoint.reason), /timed out before producing ORCH_RESULT_PATH/);
+  assert.equal(checkpoint.currentSubtask, 'executor-timeout');
+
+  const events = await fs.readFile(path.join(rootDir, 'docs', 'ops', 'automation', 'run-events.jsonl'), 'utf8');
+  assert.match(events, /session_timeout/);
+  assert.doesNotMatch(events, /session_protocol_error/);
+});
+
 test('orchestrator blocks a session when worker exits non-zero even with a valid result payload', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {

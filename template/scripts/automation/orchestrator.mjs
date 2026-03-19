@@ -2275,7 +2275,10 @@ async function loadStructuredResultFallback(execution, resultPath) {
   };
 }
 
-function protocolFailureReason(actorLabel, artifactEnvName, artifactRel, logRel, artifactLoad, exitCode) {
+function protocolFailureReason(actorLabel, artifactEnvName, artifactRel, logRel, artifactLoad, exitCode, execution = null) {
+  if (String(execution?.error?.code ?? '').trim().toUpperCase() === 'ETIMEDOUT') {
+    return `${actorLabel} timed out before producing ${artifactEnvName} (${artifactRel}). See ${logRel}.`;
+  }
   const statusLabel = exitCode === 0 ? 'exited successfully' : `exited ${exitCode ?? 1}`;
   const artifactRef = `${artifactEnvName} (${artifactRel})`;
   if (artifactLoad?.code === 'missing') {
@@ -2289,6 +2292,7 @@ function protocolFailureReason(actorLabel, artifactEnvName, artifactRel, logRel,
 }
 
 function protocolFailureResult(summary, reason, logRel, execution) {
+  const timedOut = String(execution?.error?.code ?? '').trim().toUpperCase() === 'ETIMEDOUT';
   return {
     status: 'blocked',
     summary,
@@ -2296,8 +2300,10 @@ function protocolFailureResult(summary, reason, logRel, execution) {
     contextRemaining: null,
     contextWindow: null,
     contextRemainingPercent: null,
-    currentSubtask: 'executor-protocol-error',
-    nextAction: `Inspect ${logRel} and rerun the session after the executor result contract is healthy.`,
+    currentSubtask: timedOut ? 'executor-timeout' : 'executor-protocol-error',
+    nextAction: timedOut
+      ? `Inspect ${logRel} and rerun the session after addressing the executor stall or increasing the timeout.`
+      : `Inspect ${logRel} and rerun the session after the executor result contract is healthy.`,
     stateDelta: {
       completedWork: [],
       acceptedFacts: [],
@@ -2488,13 +2494,16 @@ async function executeRole(rootDir, config, state, plan, role, logging) {
       resultRel,
       logRel,
       artifactLoad,
-      execution.status ?? 1
+      execution.status ?? 1,
+      execution
     );
-    normalized = protocolFailureResult('Executor protocol error.', reason, logRel, execution);
-    await appendRunEvent(rootDir, state, 'session_protocol_error', plan.planId, {
+    const timedOut = String(execution?.error?.code ?? '').trim().toUpperCase() === 'ETIMEDOUT';
+    normalized = protocolFailureResult(timedOut ? 'Executor timed out.' : 'Executor protocol error.', reason, logRel, execution);
+    await appendRunEvent(rootDir, state, timedOut ? 'session_timeout' : 'session_protocol_error', plan.planId, {
       role,
       session: sessionNumber,
       exitCode: execution.status ?? 1,
+      signal: execution.signal ?? null,
       kind: artifactLoad.code,
       result: resultRel,
       log: logRel,
