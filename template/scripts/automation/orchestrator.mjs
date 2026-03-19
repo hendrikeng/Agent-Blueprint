@@ -399,6 +399,10 @@ function stripAnsiControl(value) {
   return String(value ?? '').replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
 }
 
+function escapeRegex(value) {
+  return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function visibleTextLength(value) {
   return stripAnsiControl(value).length;
 }
@@ -566,6 +570,97 @@ function colorizeStructuredHeadline(logging, headline, level = 'run') {
   return value;
 }
 
+function collectSemanticColorMatches(text) {
+  const rendered = String(text ?? '');
+  const matches = [];
+  const pushMatch = (start, end, color) => {
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) {
+      return;
+    }
+    matches.push({ start, end, color });
+  };
+
+  for (const match of rendered.matchAll(/`[^`\r\n]+`/g)) {
+    pushMatch(match.index ?? -1, (match.index ?? -1) + match[0].length, '94');
+  }
+
+  const scopedPatterns = [
+    {
+      regex: /(^|[\s([{"'])((?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?::\d+(?::\d+)?)?)/g,
+      color: '94'
+    },
+    {
+      regex: /(^|[\s([{"'])(\/(?:[A-Za-z0-9._~%-]+(?:\/[A-Za-z0-9._~%-\[\]]+)*)?)/g,
+      color: '96'
+    },
+    {
+      regex: /(^|[\s([{"'])(([a-z][a-z0-9_-]*:[a-z0-9_-]+))/g,
+      color: '96'
+    }
+  ];
+
+  for (const pattern of scopedPatterns) {
+    for (const match of rendered.matchAll(pattern.regex)) {
+      const prefix = match[1] ?? '';
+      const token = match[2] ?? '';
+      if (!token) {
+        continue;
+      }
+      const start = (match.index ?? 0) + prefix.length;
+      pushMatch(start, start + token.length, pattern.color);
+    }
+  }
+
+  matches.sort((left, right) => {
+    if (left.start !== right.start) {
+      return left.start - right.start;
+    }
+    return (right.end - right.start) - (left.end - left.start);
+  });
+
+  const filtered = [];
+  let lastEnd = -1;
+  for (const match of matches) {
+    if (match.start < lastEnd) {
+      continue;
+    }
+    filtered.push(match);
+    lastEnd = match.end;
+  }
+  return filtered;
+}
+
+function colorizeSemanticText(logging, text, baseColor = null) {
+  const rendered = String(text ?? '');
+  if (!rendered) {
+    return rendered;
+  }
+  if (!canUseColor(logging)) {
+    return rendered;
+  }
+
+  const matches = collectSemanticColorMatches(rendered);
+  if (matches.length === 0) {
+    return baseColor ? colorize(logging, baseColor, rendered) : rendered;
+  }
+
+  let cursor = 0;
+  let output = '';
+  for (const match of matches) {
+    if (match.start > cursor) {
+      const before = rendered.slice(cursor, match.start);
+      output += baseColor ? colorize(logging, baseColor, before) : before;
+    }
+    output += colorize(logging, match.color, rendered.slice(match.start, match.end));
+    cursor = match.end;
+  }
+  if (cursor < rendered.length) {
+    const tail = rendered.slice(cursor);
+    output += baseColor ? colorize(logging, baseColor, tail) : tail;
+  }
+  return output;
+}
+
 function colorizeStructuredValue(logging, key, value, level = 'run') {
   const keyLower = String(key ?? '').trim().toLowerCase();
   const valueText = String(value ?? '').trim();
@@ -583,8 +678,15 @@ function colorizeStructuredValue(logging, key, value, level = 'run') {
   if (keyLower === 'model') return colorize(logging, '96', valueText);
   if (keyLower === 'reasoning' || keyLower === 'priority') return colorize(logging, '35', valueText);
   if (keyLower === 'checkpoint' || keyLower === 'handoff' || keyLower === 'log') return colorize(logging, '90', valueText);
-  if (keyLower === 'message' || keyLower === 'reason' || keyLower === 'summary' || keyLower === 'nextaction') {
-    return colorize(logging, '37', valueText);
+  if (
+    keyLower === 'message' ||
+    keyLower === 'reason' ||
+    keyLower === 'summary' ||
+    keyLower === 'nextaction' ||
+    keyLower === 'live' ||
+    keyLower === 'detail'
+  ) {
+    return colorizeSemanticText(logging, valueText, '37');
   }
 
   if (['risk', 'status', 'commit'].includes(keyLower)) {
@@ -599,8 +701,8 @@ function colorizeStructuredValue(logging, key, value, level = 'run') {
     }
   }
 
-  if (level === 'warn') return colorize(logging, '33', valueText);
-  if (level === 'error') return colorize(logging, '31', valueText);
+  if (level === 'warn') return colorizeSemanticText(logging, valueText, '33');
+  if (level === 'error') return colorizeSemanticText(logging, valueText, '31');
   return colorize(logging, '37', valueText);
 }
 
@@ -836,7 +938,80 @@ function condenseVerboseLiveActivity(value) {
   return rendered;
 }
 
-function sanitizeLiveActivityLine(line, redactionPatterns = [], maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS) {
+function normalizeLiveActivityReferences(line, rootDir = '') {
+  let rendered = String(line ?? '');
+  if (!rendered) {
+    return rendered;
+  }
+
+  const rootCandidates = [...new Set(
+    [String(rootDir ?? '').trim(), (() => {
+      try {
+        return fsSync.realpathSync(String(rootDir ?? '').trim());
+      } catch {
+        return '';
+      }
+    })()]
+      .map((entry) => entry.replace(/\\/g, '/').replace(/\/+$/, ''))
+      .filter(Boolean)
+  )];
+
+  const formatPathReference = (rawTarget) => {
+    let target = String(rawTarget ?? '').trim();
+    if (!target) {
+      return null;
+    }
+    target = target.replace(/\\/g, '/');
+    let fragment = '';
+    const hashIndex = target.indexOf('#');
+    if (hashIndex >= 0) {
+      fragment = target.slice(hashIndex);
+      target = target.slice(0, hashIndex);
+    }
+    for (const candidate of rootCandidates) {
+      if (target === candidate) {
+        target = '.';
+        break;
+      }
+      if (target.startsWith(`${candidate}/`)) {
+        target = target.slice(candidate.length + 1);
+        break;
+      }
+    }
+    const normalizedTarget = normalizeRepoRelativePath(target);
+    if (!normalizedTarget || normalizedTarget === '.') {
+      return null;
+    }
+    const lineMatch = fragment.match(/^#L(\d+)(?:C(\d+))?$/i);
+    if (!lineMatch) {
+      return normalizedTarget;
+    }
+    return `${normalizedTarget}:${lineMatch[1]}${lineMatch[2] ? `:${lineMatch[2]}` : ''}`;
+  };
+
+  rendered = rendered.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, _label, target) => {
+    const formatted = formatPathReference(target);
+    return formatted ?? match;
+  });
+
+  for (const candidate of rootCandidates.sort((left, right) => right.length - left.length)) {
+    rendered = rendered.replace(new RegExp(`${escapeRegex(candidate)}/`, 'g'), '');
+  }
+
+  rendered = rendered.replace(
+    /((?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+)#L(\d+)(?:C(\d+))?/g,
+    (_match, filePath, line, column) => `${filePath}:${line}${column ? `:${column}` : ''}`
+  );
+
+  return rendered;
+}
+
+function sanitizeLiveActivityLine(
+  line,
+  redactionPatterns = [],
+  maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS,
+  rootDir = ''
+) {
   let rendered = stripAnsiControl(line).replace(/\s+/g, ' ').trim();
   if (!rendered) {
     return null;
@@ -844,6 +1019,7 @@ function sanitizeLiveActivityLine(line, redactionPatterns = [], maxChars = DEFAU
   for (const pattern of redactionPatterns) {
     rendered = rendered.replace(pattern, '[REDACTED]');
   }
+  rendered = normalizeLiveActivityReferences(rendered, rootDir);
   if (!/[A-Za-z]/.test(rendered)) {
     return null;
   }
@@ -855,9 +1031,6 @@ function sanitizeLiveActivityLine(line, redactionPatterns = [], maxChars = DEFAU
     return null;
   }
   rendered = condenseVerboseLiveActivity(rendered);
-  if (Number.isFinite(maxChars) && maxChars > 0 && rendered.length > maxChars) {
-    rendered = `${rendered.slice(0, Math.max(1, maxChars - 1)).trimEnd()}…`;
-  }
   return rendered || null;
 }
 
@@ -1773,7 +1946,8 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     const activityMessage = sanitizeLiveActivityLine(
       message,
       liveActivityRedactionPatterns,
-      DEFAULT_LIVE_ACTIVITY_MAX_CHARS
+      DEFAULT_LIVE_ACTIVITY_MAX_CHARS,
+      cwd
     );
     if (!activityMessage) {
       return;
@@ -1802,7 +1976,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       const stamp = colorize(logging, '90', nowIso().slice(11, 19));
       const spinner = nextPrettySpinner(logging);
       const workingLabel = colorize(logging, '36', `WORKING (${formatDurationClock(elapsedSeconds)})`);
-      const workingMessage = colorize(logging, '37', activityMessage);
+      const workingMessage = colorizeSemanticText(logging, activityMessage, '37');
       clearLiveStatusLine();
       printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
       lastVisibleStatusAtMs = nowMs;

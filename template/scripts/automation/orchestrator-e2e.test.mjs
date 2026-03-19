@@ -1446,6 +1446,66 @@ test('orchestrator pretty output keeps readable lifecycle lines', async () => {
   assert.match(String(result.stdout), /GRIND SUMMARY/);
 });
 
+test('orchestrator pretty output rewrites absolute file links to repo-relative refs without truncating live messages', async () => {
+  const rootDir = await createTemplateRepo();
+  const absoluteFileRef = `${path.join(
+    rootDir,
+    'apps',
+    'agent-web',
+    'app',
+    'public-intake',
+    'public-intake-utils.ts'
+  )}#L105`;
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'pretty-live-formatting-plan': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'Pretty live formatting plan delivered.',
+            liveActivity: `Plan for this slice: 1. Check [public-intake-utils.ts](${absoluteFileRef}) and keep \`/artists\` plus \`/inbox\` aligned with \`verify:fast\`. 2. Confirm the route wiring still holds after checking slug ownership semantics and preview behavior across the public intake flow without dropping any part of this longer provider message.`,
+            writeFiles: [{ path: 'src/pretty-live-formatting-plan.js', content: 'export const pretty = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:pretty-live-formatting-plan': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed for pretty live formatting plan.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-pretty-live-formatting-plan.md'),
+    directFuturePlan({ planId: 'pretty-live-formatting-plan', riskTier: 'low' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed pretty live formatting plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'low', '--output', 'pretty'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.match(
+    String(result.stdout),
+    /apps\/agent-web\/app\/public-intake\/public-intake-utils\.ts:105/
+  );
+  assert.doesNotMatch(String(result.stdout), new RegExp(absoluteFileRef.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(String(result.stdout), /\[public-intake-utils\.ts\]\(/);
+  assert.match(String(result.stdout), /\/artists/);
+  assert.match(String(result.stdout), /\/inbox/);
+  assert.match(String(result.stdout), /verify:fast/);
+  assert.match(String(result.stdout), /slug ownership semantics and preview behavior/);
+});
+
 test('orchestrator ticker output keeps compact lifecycle lines', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {
