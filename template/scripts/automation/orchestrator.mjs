@@ -41,6 +41,19 @@ import {
   writeTextFileAtomic
 } from './lib/orchestrator-shared.mjs';
 import { resolveExecutorPromptTemplate } from './lib/executor-policy.mjs';
+import {
+  clearLiveStatusLine,
+  colorize,
+  colorizeSemanticText,
+  escapeRegex,
+  nextPrettyLiveDots,
+  nextPrettySpinner,
+  prettyLevelTag,
+  prettyTimedLevelTag,
+  printPrettyLogLine,
+  renderLiveStatusLine,
+  stripAnsiControl,
+} from './lib/pretty-output.mjs';
 
 const ROLE_WORKER = 'worker';
 const ROLE_REVIEWER = 'reviewer';
@@ -59,8 +72,6 @@ const DEFAULT_CONTEXT_THRESHOLD_TOKENS = 12000;
 const DEFAULT_CONTEXT_THRESHOLD_PERCENT = 0.15;
 const DEFAULT_LIVE_ACTIVITY_MAX_CHARS = 0;
 const DEFAULT_LIVE_ACTIVITY_SAMPLE_SECONDS = 2;
-const PRETTY_SPINNER_FRAMES = ['|', '/', '-', '\\'];
-const PRETTY_LIVE_DOT_FRAMES = ['...', '.. ', '.  ', ' ..'];
 const FUTURE_DIR = path.join('docs', 'future');
 const ACTIVE_DIR = path.join('docs', 'exec-plans', 'active');
 const ACTIVE_EVIDENCE_DIR = path.join(ACTIVE_DIR, 'evidence');
@@ -100,9 +111,6 @@ const LIVE_ACTIVITY_JSON_TYPE_DENY = [
   'token',
   'metrics'
 ];
-let prettySpinnerIndex = 0;
-let prettyLiveDotIndex = 0;
-let liveStatusLineLength = 0;
 
 function parseArgs(argv) {
   const [command = 'run', ...rest] = argv;
@@ -340,445 +348,9 @@ function resolveLogging(config, options) {
   };
 }
 
-function canUseColor(logging) {
-  if (logging.mode !== 'pretty') {
-    return false;
-  }
-  if (!process.stdout.isTTY) {
-    return false;
-  }
-  if (String(process.env.NO_COLOR ?? '').trim() !== '') {
-    return false;
-  }
-  return String(process.env.TERM ?? '').trim().toLowerCase() !== 'dumb';
-}
-
-function colorize(logging, code, text) {
-  if (!canUseColor(logging)) {
-    return text;
-  }
-  return `\x1b[${code}m${text}\x1b[0m`;
-}
-
-function nextPrettySpinner(logging) {
-  if (!process.stdout.isTTY) {
-    return '.';
-  }
-  const frame = PRETTY_SPINNER_FRAMES[prettySpinnerIndex % PRETTY_SPINNER_FRAMES.length];
-  prettySpinnerIndex += 1;
-  return colorize(logging, '36', frame);
-}
-
-function nextPrettyLiveDots(logging) {
-  if (!process.stdout.isTTY) {
-    return '...';
-  }
-  const frame = PRETTY_LIVE_DOT_FRAMES[prettyLiveDotIndex % PRETTY_LIVE_DOT_FRAMES.length];
-  prettyLiveDotIndex += 1;
-  return colorize(logging, '36', frame);
-}
-
-function prettyLevelTag(logging, level = 'run') {
-  if (level === 'ok') {
-    return colorize(logging, '32', 'OK  ');
-  }
-  if (level === 'warn') {
-    return colorize(logging, '33', 'WARN');
-  }
-  if (level === 'err' || level === 'error') {
-    return colorize(logging, '31', 'ERR ');
-  }
-  return colorize(logging, '36', 'RUN ');
-}
-
 function supportsLiveStatusLine(logging) {
   return logging.mode === 'pretty' && process.stdout.isTTY;
 }
-
-function stripAnsiControl(value) {
-  return String(value ?? '').replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '');
-}
-
-function escapeRegex(value) {
-  return String(value ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-function visibleTextLength(value) {
-  return stripAnsiControl(value).length;
-}
-
-function wrapTextForConsole(text, maxWidth) {
-  const rendered = String(text ?? '').trim();
-  if (!rendered) {
-    return [''];
-  }
-  if (!Number.isFinite(maxWidth) || maxWidth <= 0) {
-    return [rendered];
-  }
-
-  const words = rendered.split(/\s+/).filter(Boolean);
-  const lines = [];
-  let current = '';
-
-  const splitLongToken = (token) => {
-    let remaining = token;
-    while (remaining.length > maxWidth) {
-      lines.push(remaining.slice(0, maxWidth));
-      remaining = remaining.slice(maxWidth);
-    }
-    return remaining;
-  };
-
-  for (const word of words) {
-    if (!current) {
-      current = word.length <= maxWidth ? word : splitLongToken(word);
-      continue;
-    }
-    if (current.length + 1 + word.length <= maxWidth) {
-      current = `${current} ${word}`;
-      continue;
-    }
-    lines.push(current);
-    current = word.length <= maxWidth ? word : splitLongToken(word);
-  }
-
-  if (current) {
-    lines.push(current);
-  }
-
-  return lines.length > 0 ? lines : [rendered];
-}
-
-function printIndentedPrettyMessage(prefix, message) {
-  const renderedPrefix = String(prefix ?? '');
-  const renderedMessage = String(message ?? '').trim();
-  if (!renderedMessage) {
-    console.log(renderedPrefix.trimEnd());
-    return;
-  }
-
-  const visiblePrefixLength = visibleTextLength(renderedPrefix);
-  const consoleWidth =
-    process.stdout.isTTY && Number.isFinite(process.stdout.columns) ? Number(process.stdout.columns) : 0;
-  const maxWidth = consoleWidth > visiblePrefixLength + 12 ? consoleWidth - visiblePrefixLength : 0;
-  const visibleMessage = stripAnsiControl(renderedMessage);
-  if (!Number.isFinite(maxWidth) || maxWidth <= 0 || visibleMessage.length <= maxWidth) {
-    console.log(`${renderedPrefix}${renderedMessage}`);
-    return;
-  }
-  const lines = wrapTextForConsole(visibleMessage, maxWidth);
-
-  console.log(`${renderedPrefix}${lines[0] ?? ''}`);
-  if (lines.length <= 1) {
-    return;
-  }
-
-  const continuationPrefix = ' '.repeat(Math.max(0, visiblePrefixLength));
-  for (const line of lines.slice(1)) {
-    console.log(`${continuationPrefix}${line}`);
-  }
-}
-
-function parseStructuredLogMessage(message) {
-  const normalized = String(message ?? '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return { headline: '', details: [] };
-  }
-  if (normalized.includes(' | ')) {
-    return { headline: normalized, details: [] };
-  }
-  const firstDetailIndex = normalized.search(/\b[A-Za-z][A-Za-z0-9_-]*=[^\s]+/);
-  if (firstDetailIndex < 0) {
-    return { headline: normalized, details: [] };
-  }
-  const headline = normalized.slice(0, firstDetailIndex).trim();
-  const detailText = normalized.slice(firstDetailIndex).trim();
-  const details = [];
-  const keyTokenPattern = /^([A-Za-z][A-Za-z0-9_-]*)=(.*)$/;
-  let currentKey = null;
-  let currentValue = '';
-  for (const token of detailText.split(/\s+/)) {
-    const keyMatch = token.match(keyTokenPattern);
-    if (keyMatch) {
-      if (currentKey && currentValue.trim()) {
-        details.push({ key: currentKey, value: currentValue.trim() });
-      }
-      currentKey = keyMatch[1];
-      currentValue = keyMatch[2] ?? '';
-      continue;
-    }
-    if (!currentKey) {
-      continue;
-    }
-    currentValue = currentValue ? `${currentValue} ${token}` : token;
-  }
-  if (currentKey && currentValue.trim()) {
-    details.push({ key: currentKey, value: currentValue.trim() });
-  }
-  if (details.length === 0) {
-    return { headline: normalized, details: [] };
-  }
-  return { headline: headline || normalized, details };
-}
-
-function prettyColorLevel(level) {
-  if (level === 'err' || level === 'error') {
-    return 'error';
-  }
-  if (level === 'warn') {
-    return 'warn';
-  }
-  if (level === 'ok') {
-    return 'ok';
-  }
-  return 'run';
-}
-
-function colorizeStructuredHeadline(logging, headline, level = 'run') {
-  const value = String(headline ?? '').trim();
-  const lower = value.toLowerCase();
-  if (!value) {
-    return value;
-  }
-  if (lower.startsWith('heartbeat') || lower.startsWith('file activity')) {
-    return colorize(logging, '32', value);
-  }
-  if (lower.startsWith('queue ') || lower.startsWith('plan start') || lower.startsWith('session start')) {
-    return colorize(logging, '36', value);
-  }
-  if (
-    lower.startsWith('session end') ||
-    lower.startsWith('session artifacts') ||
-    lower.startsWith('plan continuation') ||
-    lower.startsWith('role transition') ||
-    lower.startsWith('working')
-  ) {
-    return colorize(logging, '37', value);
-  }
-  if (lower.startsWith('run resumed') || lower.startsWith('run start') || lower.startsWith('grind ') || lower.startsWith('run ')) {
-    return colorize(logging, '36', value);
-  }
-  if (level === 'warn') {
-    return colorize(logging, '33', value);
-  }
-  if (level === 'error') {
-    return colorize(logging, '31', value);
-  }
-  if (level === 'ok') {
-    return colorize(logging, '32', value);
-  }
-  return value;
-}
-
-function collectSemanticColorMatches(text) {
-  const rendered = String(text ?? '');
-  const matches = [];
-  const pushMatch = (start, end, color) => {
-    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) {
-      return;
-    }
-    matches.push({ start, end, color });
-  };
-
-  for (const match of rendered.matchAll(/`[^`\r\n]+`/g)) {
-    pushMatch(match.index ?? -1, (match.index ?? -1) + match[0].length, '94');
-  }
-
-  const scopedPatterns = [
-    {
-      regex: /(^|[\s([{"'])((?:[A-Za-z0-9._-]+\/)+[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+(?::\d+(?::\d+)?)?)/g,
-      color: '94'
-    },
-    {
-      regex: /(^|[\s([{"'])(\/(?:[A-Za-z0-9._~%-]+(?:\/[A-Za-z0-9._~%-\[\]]+)*)?)/g,
-      color: '96'
-    },
-    {
-      regex: /(^|[\s([{"'])(([a-z][a-z0-9_-]*:[a-z0-9_-]+))/g,
-      color: '96'
-    }
-  ];
-
-  for (const pattern of scopedPatterns) {
-    for (const match of rendered.matchAll(pattern.regex)) {
-      const prefix = match[1] ?? '';
-      const token = match[2] ?? '';
-      if (!token) {
-        continue;
-      }
-      const start = (match.index ?? 0) + prefix.length;
-      pushMatch(start, start + token.length, pattern.color);
-    }
-  }
-
-  matches.sort((left, right) => {
-    if (left.start !== right.start) {
-      return left.start - right.start;
-    }
-    return (right.end - right.start) - (left.end - left.start);
-  });
-
-  const filtered = [];
-  let lastEnd = -1;
-  for (const match of matches) {
-    if (match.start < lastEnd) {
-      continue;
-    }
-    filtered.push(match);
-    lastEnd = match.end;
-  }
-  return filtered;
-}
-
-function colorizeSemanticText(logging, text, baseColor = null) {
-  const rendered = String(text ?? '');
-  if (!rendered) {
-    return rendered;
-  }
-  if (!canUseColor(logging)) {
-    return rendered;
-  }
-
-  const matches = collectSemanticColorMatches(rendered);
-  if (matches.length === 0) {
-    return baseColor ? colorize(logging, baseColor, rendered) : rendered;
-  }
-
-  let cursor = 0;
-  let output = '';
-  for (const match of matches) {
-    if (match.start > cursor) {
-      const before = rendered.slice(cursor, match.start);
-      output += baseColor ? colorize(logging, baseColor, before) : before;
-    }
-    output += colorize(logging, match.color, rendered.slice(match.start, match.end));
-    cursor = match.end;
-  }
-  if (cursor < rendered.length) {
-    const tail = rendered.slice(cursor);
-    output += baseColor ? colorize(logging, baseColor, tail) : tail;
-  }
-  return output;
-}
-
-function colorizeStructuredValue(logging, key, value, level = 'run') {
-  const keyLower = String(key ?? '').trim().toLowerCase();
-  const valueText = String(value ?? '').trim();
-  const valueLower = valueText.toLowerCase();
-  if (!valueText) {
-    return valueText;
-  }
-
-  if (keyLower === 'runid') return colorize(logging, '96', valueText);
-  if (keyLower === 'plan') return colorize(logging, '36', valueText);
-  if (keyLower === 'role') return colorize(logging, '35', valueText);
-  if (keyLower === 'nextrole' || keyLower === 'roles') return colorize(logging, '36', valueText);
-  if (keyLower === 'phase' || keyLower === 'activity') return colorize(logging, '32', valueText);
-  if (keyLower === 'elapsed' || keyLower === 'idle') return colorize(logging, '32', valueText);
-  if (keyLower === 'model') return colorize(logging, '96', valueText);
-  if (keyLower === 'reasoning' || keyLower === 'priority') return colorize(logging, '35', valueText);
-  if (keyLower === 'checkpoint' || keyLower === 'handoff' || keyLower === 'log') return colorize(logging, '90', valueText);
-  if (
-    keyLower === 'message' ||
-    keyLower === 'reason' ||
-    keyLower === 'summary' ||
-    keyLower === 'nextaction' ||
-    keyLower === 'live' ||
-    keyLower === 'detail'
-  ) {
-    return colorizeSemanticText(logging, valueText, '37');
-  }
-
-  if (['risk', 'status', 'commit'].includes(keyLower)) {
-    if (valueLower === 'low' || valueLower === 'completed' || valueLower === 'passed' || valueLower === 'atomic') {
-      return colorize(logging, '32', valueText);
-    }
-    if (valueLower === 'medium' || valueLower === 'pending' || valueLower === 'blocked' || valueLower === 'off') {
-      return colorize(logging, '33', valueText);
-    }
-    if (valueLower === 'high' || valueLower === 'failed' || valueLower === 'error') {
-      return colorize(logging, '31', valueText);
-    }
-  }
-
-  if (level === 'warn') return colorizeSemanticText(logging, valueText, '33');
-  if (level === 'error') return colorizeSemanticText(logging, valueText, '31');
-  return colorize(logging, '37', valueText);
-}
-
-function printPrettyRunMessage(logging, prefix, message, level = 'run') {
-  const parsed = parseStructuredLogMessage(message);
-  if (parsed.details.length === 0) {
-    const headlineText = String(parsed.headline ?? '').trim();
-    if (!headlineText) {
-      printIndentedPrettyMessage(prefix, message);
-      return;
-    }
-    printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, headlineText, level));
-    return;
-  }
-
-  const headlineText = String(parsed.headline ?? '').trim();
-  printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, headlineText, level));
-  const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
-  const keyWidth = 16;
-  for (const entry of parsed.details) {
-    const keyLabel = colorize(logging, '90', `${entry.key.padEnd(keyWidth, ' ')}`);
-    const separator = colorize(logging, '90', ' = ');
-    const valueLabel = colorizeStructuredValue(logging, entry.key, entry.value, level);
-    printIndentedPrettyMessage(`${continuationPrefix}${keyLabel}${separator}`, valueLabel);
-  }
-}
-
-function clearLiveStatusLine() {
-  if (!process.stdout.isTTY) {
-    return;
-  }
-  if (typeof process.stdout.clearLine === 'function' && typeof process.stdout.cursorTo === 'function') {
-    process.stdout.clearLine(0);
-    process.stdout.cursorTo(0);
-    liveStatusLineLength = 0;
-    return;
-  }
-  if (liveStatusLineLength <= 0) {
-    return;
-  }
-  process.stdout.write(`\r${' '.repeat(liveStatusLineLength)}\r`);
-  liveStatusLineLength = 0;
-}
-
-function renderLiveStatusLine(logging, message) {
-  if (!supportsLiveStatusLine(logging)) {
-    return;
-  }
-  const normalized = String(message ?? '').replace(/\s+/g, ' ').trim();
-  if (!normalized) {
-    return;
-  }
-
-  const width = Number.isFinite(process.stdout.columns) ? Number(process.stdout.columns) : 0;
-  const visible = stripAnsiControl(normalized);
-  let rendered = normalized;
-  let visibleLength = visible.length;
-  if (width > 3 && visibleLength >= width) {
-    const clipped = visible.slice(0, Math.max(1, width - 2)).trimEnd();
-    rendered = `${clipped}…`;
-    visibleLength = stripAnsiControl(rendered).length;
-  }
-
-  if (typeof process.stdout.clearLine === 'function' && typeof process.stdout.cursorTo === 'function') {
-    process.stdout.clearLine(0);
-    process.stdout.cursorTo(0);
-    process.stdout.write(rendered);
-    liveStatusLineLength = visibleLength;
-    return;
-  }
-
-  const padded = rendered.padEnd(Math.max(liveStatusLineLength, visibleLength), ' ');
-  process.stdout.write(`\r${padded}`);
-  liveStatusLineLength = Math.max(visibleLength, stripAnsiControl(padded).length);
-}
-
 function logLine(logging, message, level = 'run') {
   clearLiveStatusLine();
   if (logging.mode === 'minimal') {
@@ -792,30 +364,7 @@ function logLine(logging, message, level = 'run') {
   if (logging.mode === 'pretty') {
     const stamp = colorize(logging, '90', nowIso().slice(11, 19));
     const prefix = `${stamp} ${nextPrettySpinner(logging)} ${prettyLevelTag(logging, level)} `;
-    const prettyLevel = prettyColorLevel(level);
-    const renderedMessage = String(message ?? '').trim();
-    if (!renderedMessage) {
-      console.log(prefix.trimEnd());
-      return;
-    }
-    const segments = renderedMessage
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (segments.length <= 1) {
-      if (parseStructuredLogMessage(renderedMessage).details.length > 0) {
-        printPrettyRunMessage(logging, prefix, renderedMessage, prettyLevel);
-      } else {
-        printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, renderedMessage, prettyLevel));
-      }
-      return;
-    }
-    printIndentedPrettyMessage(prefix, colorizeStructuredHeadline(logging, segments[0], prettyLevel));
-    const continuationPrefix = ' '.repeat(Math.max(0, visibleTextLength(prefix)));
-    const detailPrefix = `${continuationPrefix}${colorize(logging, '90', '│ ')}`;
-    for (const line of segments.slice(1)) {
-      printIndentedPrettyMessage(detailPrefix, colorizeStructuredValue(logging, 'detail', line, prettyLevel));
-    }
+    printPrettyLogLine(logging, prefix, message, level);
     return;
   }
   console.log(`[orchestrator] ${message}`);
@@ -1034,16 +583,16 @@ function sanitizeLiveActivityLine(
   return rendered || null;
 }
 
-function extractLiveActivityText(value) {
+function extractLiveActivityText(value, redactionPatterns = [], maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS, rootDir = '') {
   if (value == null) {
     return null;
   }
   if (typeof value === 'string') {
-    return sanitizeLiveActivityLine(value);
+    return sanitizeLiveActivityLine(value, redactionPatterns, maxChars, rootDir);
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      const candidate = extractLiveActivityText(entry);
+      const candidate = extractLiveActivityText(entry, redactionPatterns, maxChars, rootDir);
       if (candidate) {
         return candidate;
       }
@@ -1055,14 +604,14 @@ function extractLiveActivityText(value) {
   }
 
   for (const key of ['message', 'summary', 'text', 'content', 'activity', 'reasoning', 'description', 'item', 'items', 'payload', 'output']) {
-    const candidate = extractLiveActivityText(value[key]);
+    const candidate = extractLiveActivityText(value[key], redactionPatterns, maxChars, rootDir);
     if (candidate) {
       return candidate;
     }
   }
 
   for (const key of ['delta', 'details', 'result', 'event', 'data', 'response']) {
-    const candidate = extractLiveActivityText(value[key]);
+    const candidate = extractLiveActivityText(value[key], redactionPatterns, maxChars, rootDir);
     if (candidate) {
       return candidate;
     }
@@ -1071,7 +620,12 @@ function extractLiveActivityText(value) {
   return null;
 }
 
-function extractLiveActivityFromJsonLine(line, redactionPatterns = [], maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS) {
+function extractLiveActivityFromJsonLine(
+  line,
+  redactionPatterns = [],
+  maxChars = DEFAULT_LIVE_ACTIVITY_MAX_CHARS,
+  rootDir = ''
+) {
   const rendered = String(line ?? '').trim();
   if (!rendered || !rendered.startsWith('{')) {
     return null;
@@ -1115,7 +669,7 @@ function extractLiveActivityFromJsonLine(line, redactionPatterns = [], maxChars 
       }
       const preferred = extractStringFromUnknown(item.text ?? item.content ?? item.message);
       if (preferred && !lineContainsStructuredResultEnvelope(preferred)) {
-        return sanitizeLiveActivityLine(preferred, redactionPatterns, maxChars);
+        return sanitizeLiveActivityLine(preferred, redactionPatterns, maxChars, rootDir);
       }
     }
     return null;
@@ -1139,17 +693,17 @@ function extractLiveActivityFromJsonLine(line, redactionPatterns = [], maxChars 
       if (!Object.prototype.hasOwnProperty.call(container, key)) {
         continue;
       }
-      const extracted = extractStringFromUnknown(container[key]);
+      const extracted = extractLiveActivityText(container[key], redactionPatterns, maxChars, rootDir);
       if (extracted) {
-        return sanitizeLiveActivityLine(extracted, redactionPatterns, maxChars);
+        return extracted;
       }
     }
   }
 
   if (eventTypeHasLiveActivityHint(eventType)) {
-    const fallback = extractStringFromUnknown(parsed);
+    const fallback = extractLiveActivityText(parsed, redactionPatterns, maxChars, rootDir);
     if (fallback) {
-      return sanitizeLiveActivityLine(fallback, redactionPatterns, maxChars);
+      return fallback;
     }
   }
 
@@ -1896,17 +1450,58 @@ function printRunSummary(logging, label, state, processed, durationSeconds, over
   );
 }
 
+function formatContextPercent(value) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatContextSnapshot(source) {
+  const contextRemaining = Number.isFinite(source?.contextRemaining) ? source.contextRemaining : null;
+  const contextWindow = Number.isFinite(source?.contextWindow) ? source.contextWindow : null;
+  const explicitPercent = Number.isFinite(source?.contextRemainingPercent) ? source.contextRemainingPercent : null;
+  const derivedPercent = Number.isFinite(contextRemaining) && Number.isFinite(contextWindow) && contextWindow > 0
+    ? contextRemaining / contextWindow
+    : null;
+  const percent = explicitPercent ?? derivedPercent;
+  const percentLabel = formatContextPercent(percent);
+  if (contextRemaining != null && percentLabel && contextWindow != null) {
+    return `${contextRemaining} (${percentLabel} of ${contextWindow})`;
+  }
+  if (contextRemaining != null && percentLabel) {
+    return `${contextRemaining} (${percentLabel})`;
+  }
+  if (contextRemaining != null) {
+    return String(contextRemaining);
+  }
+  if (percentLabel && contextWindow != null) {
+    return `${percentLabel} of ${contextWindow}`;
+  }
+  if (percentLabel) {
+    return percentLabel;
+  }
+  if (contextWindow != null) {
+    return `window ${contextWindow}`;
+  }
+  return 'unknown';
+}
+
 function formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSeconds, touchSummary = null) {
   const stamp = colorize(logging, '90', nowIso().slice(11, 19));
   const dots = nextPrettyLiveDots(logging);
-  const tag = prettyLevelTag(logging, idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run');
+  const tag = prettyTimedLevelTag(
+    logging,
+    idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'running',
+    formatDurationClock(elapsedSeconds)
+  );
   const phase = compactDisplayToken(context.phase, 'session', 10);
   const planId = compactDisplayToken(context.planId, 'run', 26);
   const role = compactDisplayToken(context.role, 'n/a', 10);
   const activity = compactDisplayToken(context.activity, phase, 16);
   return (
     `${stamp} ${dots} ${tag} phase=${phase} plan=${planId} role=${role} activity=${activity} ` +
-    `elapsed=${formatDurationClock(elapsedSeconds)} idle=${formatDurationClock(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`
+    `idle=${formatDurationClock(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`
   );
 }
 
@@ -1942,6 +1537,16 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
+  function printPrettySessionEvent(level, nowMs, message) {
+    const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
+    const stamp = colorize(logging, '90', nowIso().slice(11, 19));
+    const spinner = nextPrettySpinner(logging);
+    const prefix = `${stamp} ${spinner} ${prettyTimedLevelTag(logging, level, formatDurationClock(elapsedSeconds))} `;
+    clearLiveStatusLine();
+    printPrettyLogLine(logging, prefix, message, level);
+    lastVisibleStatusAtMs = nowMs;
+  }
+
   function maybeEmitLiveActivity(message, source, nowMs = Date.now()) {
     const activityMessage = sanitizeLiveActivityLine(
       message,
@@ -1972,14 +1577,8 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       return;
     }
     if (logging.mode === 'pretty') {
-      const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
-      const stamp = colorize(logging, '90', nowIso().slice(11, 19));
-      const spinner = nextPrettySpinner(logging);
-      const workingLabel = colorize(logging, '36', `WORKING (${formatDurationClock(elapsedSeconds)})`);
       const workingMessage = colorizeSemanticText(logging, activityMessage, '37');
-      clearLiveStatusLine();
-      printIndentedPrettyMessage(`${stamp} ${spinner} ${workingLabel} `, workingMessage);
-      lastVisibleStatusAtMs = nowMs;
+      printPrettySessionEvent('working', nowMs, workingMessage);
     }
   }
 
@@ -2001,7 +1600,8 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       const jsonActivity = extractLiveActivityFromJsonLine(
         trimmed,
         liveActivityRedactionPatterns,
-        DEFAULT_LIVE_ACTIVITY_MAX_CHARS
+        DEFAULT_LIVE_ACTIVITY_MAX_CHARS,
+        cwd
       );
       if (jsonActivity) {
         sawJsonEnvelopeOutput = true;
@@ -2061,12 +1661,13 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       lastTouchFingerprint = latest.fingerprint;
       if (latest.count > 0) {
         lastTouchChangeAtMs = nowMs;
-        logLine(
-          logging,
-          `file activity phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} ${formatTouchSummaryDetails(latest)}`,
-          'run'
-        );
-        lastVisibleStatusAtMs = nowMs;
+        const message = `file activity phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} ${formatTouchSummaryDetails(latest)}`;
+        if (logging.mode === 'pretty') {
+          printPrettySessionEvent('run', nowMs, message);
+        } else {
+          logLine(logging, message, 'run');
+          lastVisibleStatusAtMs = nowMs;
+        }
       }
     }
     return latest;
@@ -2081,20 +1682,23 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       renderLiveStatusLine(logging, formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSeconds, touchSummary));
       lastVisibleStatusAtMs = nowMs;
     } else if (nowMs - lastVisibleStatusAtMs >= heartbeatMs) {
-      logLine(
-        logging,
-        `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`,
-        idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run'
-      );
-      lastVisibleStatusAtMs = nowMs;
+      const level = idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run';
+      const message = `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`;
+      if (logging.mode === 'pretty') {
+        printPrettySessionEvent(level, nowMs, message);
+      } else {
+        logLine(logging, message, level);
+        lastVisibleStatusAtMs = nowMs;
+      }
     }
     if (idleSeconds * 1000 >= stallWarnMs && !warnEmitted) {
       warnEmitted = true;
-      logLine(
-        logging,
-        `stall warning phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`,
-        'warn'
-      );
+      const message = `stall warning phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`;
+      if (logging.mode === 'pretty') {
+        printPrettySessionEvent('warn', nowMs, message);
+      } else {
+        logLine(logging, message, 'warn');
+      }
     }
   };
 
@@ -2529,9 +2133,10 @@ async function writeCheckpoint(rootDir, runId, plan, role, sessionNumber, result
     `- Status: ${result.status}`,
     `- Summary: ${result.summary || 'none'}`,
     `- Reason: ${result.reason || 'none'}`,
+    `- Context: ${formatContextSnapshot(result)}`,
     `- Context Remaining: ${Number.isFinite(result.contextRemaining) ? String(result.contextRemaining) : 'unknown'}`,
     `- Context Window: ${Number.isFinite(result.contextWindow) ? String(result.contextWindow) : 'unknown'}`,
-    `- Context Remaining Percent: ${Number.isFinite(result.contextRemainingPercent) ? `${Math.round(result.contextRemainingPercent * 100)}%` : 'unknown'}`,
+    `- Context Remaining Percent: ${formatContextPercent(result.contextRemainingPercent) ?? 'unknown'}`,
     `- Session Log: ${result.sessionLogPath || 'none'}`,
     `- Live Activity: ${result?.liveActivity?.message || 'none'}`,
     `- Touched Files: ${formatTouchSummaryForArtifact(touchSummary)}`,
@@ -3384,7 +2989,7 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
     plan = await refreshPlan(rootDir, plan);
     logLine(
       logging,
-      `session end plan=${plan.planId} role=${role} session=${session.sessionNumber} status=${session.result.status} contextRemaining=${Number.isFinite(session.result.contextRemaining) ? session.result.contextRemaining : 'unknown'} nextAction=${session.result.nextAction || 'none'}`,
+      `session end plan=${plan.planId} role=${role} session=${session.sessionNumber} status=${session.result.status} context=${formatContextSnapshot(session.result)} nextAction=${session.result.nextAction || 'none'}`,
       session.result.status === 'blocked' ? 'err' : session.result.status === 'handoff_required' || session.result.status === 'pending' ? 'warn' : 'ok'
     );
     logLine(

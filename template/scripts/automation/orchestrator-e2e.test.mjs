@@ -608,12 +608,120 @@ test('orchestrator pretty output keeps readable lifecycle tags in non-tty mode',
   assert.match(String(result.stdout), /plan\s+=\s+pretty-plan/);
   assert.match(String(result.stdout), /WORKING \(\d{2}:\d{2}\)/);
   assert.match(String(result.stdout), /worker working on pretty-plan/);
+  assert.match(String(result.stdout), /RUNNING\s+\(\d{2}:\d{2}\) file activity/);
   assert.match(String(result.stdout), /file activity/);
+  assert.match(String(result.stdout), /context\s+=\s+64000 \(50% of 128000\)/);
   assert.match(String(result.stdout), /session artifacts/);
   assert.match(String(result.stdout), /phase\s+=\s+session/);
   assert.match(String(result.stdout), /GRIND SUMMARY/);
   assert.match(String(result.stdout), /\d{2}:\d{2}:\d{2} \. OK\s+finished/);
   assert.match(String(result.stdout), /runId\s+=\s+run-/);
+});
+
+test('orchestrator pretty output aligns session warn blocks with timed prefixes', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'pretty-stall-plan': {
+        worker: [
+          {
+            delayMs: 6500,
+            status: 'completed',
+            summary: 'Worker finished after a visible stall interval.',
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:pretty-stall-plan': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-pretty-stall-plan.md'),
+    directFuturePlan({ planId: 'pretty-stall-plan', riskTier: 'low' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed pretty stall plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'low', '--output', 'pretty', '--heartbeat-seconds', '3', '--stall-warn-seconds', '3'],
+    rootDir
+  );
+
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.match(String(result.stdout), /WARN\s+\(\d{2}:\d{2}\) stall warning/);
+  assert.match(String(result.stdout), /phase\s+=\s+session/);
+  assert.match(String(result.stdout), /idle\s+=\s+\d+s/);
+});
+
+test('orchestrator session end shows percent context when remaining tokens are omitted', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'context-percent-plan': {
+        worker: [
+          {
+            rawResultText: JSON.stringify({
+              status: 'completed',
+              summary: 'Worker returned only percentage context telemetry.',
+              contextWindow: 128000,
+              contextRemainingPercent: 0.375,
+              currentSubtask: 'Review remaining contract changes',
+              nextAction: 'Continue orchestration.',
+              stateDelta: {
+                completedWork: [],
+                acceptedFacts: [],
+                decisions: [],
+                openQuestions: [],
+                pendingActions: [],
+                recentResults: [],
+                artifacts: [],
+                risks: [],
+                reasoning: [],
+                evidence: []
+              }
+            }),
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:context-percent-plan': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-context-percent-plan.md'),
+    directFuturePlan({ planId: 'context-percent-plan', riskTier: 'low' }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed context percent plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'low', '--output', 'pretty'],
+    rootDir
+  );
+
+  assert.equal(result.status, 0, String(result.stderr));
+  assert.match(String(result.stdout), /context\s+=\s+38% of 128000/);
+  assert.doesNotMatch(String(result.stdout), /context\s+=\s+unknown/);
 });
 
 test('orchestrator forces a handoff when a worker returns too close to the context threshold', async () => {
