@@ -73,8 +73,6 @@ export function prettyTimedLevelTag(logging, level = 'run', elapsedLabel = '00:0
   let label = 'RUN';
   if (level === 'working') {
     label = 'WORKING';
-  } else if (level === 'running' || level === 'run') {
-    label = 'RUNNING';
   } else if (level === 'ok') {
     label = 'OK';
   } else if (level === 'warn') {

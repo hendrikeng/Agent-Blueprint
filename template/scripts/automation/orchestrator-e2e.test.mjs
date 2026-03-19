@@ -608,7 +608,7 @@ test('orchestrator pretty output keeps readable lifecycle tags in non-tty mode',
   assert.match(String(result.stdout), /plan\s+=\s+pretty-plan/);
   assert.match(String(result.stdout), /WORKING \(\d{2}:\d{2}\)/);
   assert.match(String(result.stdout), /worker working on pretty-plan/);
-  assert.match(String(result.stdout), /RUNNING\s+\(\d{2}:\d{2}\) file activity/);
+  assert.match(String(result.stdout), /RUN\s+\(\d{2}:\d{2}\) file activity/);
   assert.match(String(result.stdout), /file activity/);
   assert.match(String(result.stdout), /context\s+=\s+64000 \(50% of 128000\)/);
   assert.match(String(result.stdout), /session artifacts/);
