@@ -46,10 +46,13 @@ import {
   colorize,
   colorizeSemanticText,
   escapeRegex,
+  formatPrettyPrefix,
+  nextPrettyLiveDots,
   nextPrettySpinner,
   prettyLevelTag,
   prettyTimedLevelTag,
   printPrettyLogLine,
+  renderLiveStatusLine,
   stripAnsiControl,
 } from './lib/pretty-output.mjs';
 
@@ -344,6 +347,10 @@ function resolveLogging(config, options) {
     stallWarnSeconds: stallWarnSeconds(config, options, heartbeat),
     failureTailLines: failureTailLines(config, options)
   };
+}
+
+function supportsLiveStatusLine(logging) {
+  return logging.mode === 'pretty' && process.stdout.isTTY;
 }
 
 function logLine(logging, message, level = 'run') {
@@ -1482,6 +1489,33 @@ function formatContextSnapshot(source) {
   return 'unknown';
 }
 
+function formatTouchSummaryLiveStatus(summary) {
+  if (!summary || summary.count <= 0) {
+    return 'touch = none';
+  }
+  const categories = summary.categories
+    .slice(0, 2)
+    .map((entry) => `${entry.category}:${entry.count}`)
+    .join(',');
+  return `touch = ${summary.count} (${categories || 'n/a'})`;
+}
+
+function formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSeconds, touchSummary = null) {
+  const stamp = colorize(logging, '90', nowIso().slice(11, 19));
+  const dots = nextPrettyLiveDots(logging);
+  const level = idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run';
+  const prefix = formatPrettyPrefix(
+    stamp,
+    dots,
+    prettyTimedLevelTag(logging, level, formatDurationClock(elapsedSeconds))
+  );
+  const phase = compactDisplayToken(context.phase, 'session', 10);
+  const planId = compactDisplayToken(context.planId, 'run', 26);
+  const role = compactDisplayToken(context.role, 'n/a', 10);
+  const activity = compactDisplayToken(context.activity, phase, 16);
+  return `${prefix}phase = ${phase}  plan = ${planId}  role = ${role}  activity = ${activity}  idle = ${formatDurationClock(idleSeconds)}  ${formatTouchSummaryLiveStatus(touchSummary)}`;
+}
+
 async function runShellMonitored(command, cwd, env = process.env, timeoutMs = undefined, logging, context = {}) {
   const startedAtMs = Date.now();
   let lastOutputAtMs = startedAtMs;
@@ -1518,7 +1552,11 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
     const stamp = colorize(logging, '90', nowIso().slice(11, 19));
     const spinner = nextPrettySpinner(logging);
-    const prefix = `${stamp} ${spinner} ${prettyTimedLevelTag(logging, level, formatDurationClock(elapsedSeconds))} `;
+    const prefix = formatPrettyPrefix(
+      stamp,
+      spinner,
+      prettyTimedLevelTag(logging, level, formatDurationClock(elapsedSeconds))
+    );
     clearLiveStatusLine();
     printPrettyLogLine(logging, prefix, message, level);
     lastVisibleStatusAtMs = nowMs;
@@ -1655,7 +1693,10 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     maybeRefreshTouchSummary(nowMs);
     const elapsedSeconds = Math.floor((nowMs - startedAtMs) / 1000);
     const idleSeconds = Math.floor((nowMs - Math.max(lastOutputAtMs, lastTouchChangeAtMs)) / 1000);
-    if (nowMs - lastVisibleStatusAtMs >= heartbeatMs) {
+    if (nowMs - lastVisibleStatusAtMs >= heartbeatMs && supportsLiveStatusLine(logging)) {
+      renderLiveStatusLine(logging, formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSeconds, touchSummary));
+      lastVisibleStatusAtMs = nowMs;
+    } else if (nowMs - lastVisibleStatusAtMs >= heartbeatMs) {
       const level = idleSeconds >= logging.stallWarnSeconds ? 'warn' : 'run';
       const message = `heartbeat phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} activity=${safeDisplayToken(context.activity, safeDisplayToken(context.phase, 'session'))} elapsed=${formatDuration(elapsedSeconds)} idle=${formatDuration(idleSeconds)} ${formatTouchSummaryInline(touchSummary)}`;
       if (logging.mode === 'pretty') {

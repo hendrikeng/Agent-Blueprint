@@ -1,5 +1,6 @@
 const PRETTY_SPINNER_FRAMES = ['|', '/', '-', '\\'];
 const PRETTY_LIVE_DOT_FRAMES = ['...', '.. ', '.  ', ' ..'];
+const PRETTY_MESSAGE_TAG_WIDTH = 'WORKING (00:00)'.length;
 
 let prettySpinnerIndex = 0;
 let prettyLiveDotIndex = 0;
@@ -83,6 +84,13 @@ export function prettyTimedLevelTag(logging, level = 'run', elapsedLabel = '00:0
   const paddedLabel = label.padEnd(7, ' ');
   const paletteLevel = level === 'working' ? 'run' : level;
   return colorize(logging, prettyLevelColor(paletteLevel), `${paddedLabel} (${String(elapsedLabel || '00:00')})`);
+}
+
+export function formatPrettyPrefix(stamp, spinner, tag) {
+  const renderedTag = String(tag ?? '');
+  const tagWidth = visibleTextLength(renderedTag);
+  const gap = Math.max(1, PRETTY_MESSAGE_TAG_WIDTH - tagWidth + 1);
+  return `${String(stamp ?? '')} ${String(spinner ?? '')} ${renderedTag}${' '.repeat(gap)}`;
 }
 
 export function stripAnsiControl(value) {
