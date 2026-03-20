@@ -43,8 +43,8 @@ Recommended baseline:
 ## Security Approval Gate
 
 - Metadata field: `Security-Approval` (`not-required` | `pending` | `approved`).
-- Required when effective risk is `high`.
-- Required value to complete: `Security-Approval: approved`.
+- `high` risk plans may still use `not-required` when no separate security sign-off is needed.
+- `pending` means execution is blocked until the field is updated to `approved`.
 
 ## Executor Contract
 

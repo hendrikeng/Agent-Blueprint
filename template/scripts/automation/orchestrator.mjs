@@ -1894,6 +1894,10 @@ function securityApprovalRequired(plan, config) {
   return required.has(plan.riskTier);
 }
 
+function blocksOnSecurityApproval(plan, config) {
+  return securityApprovalRequired(plan, config) && plan.securityApproval === 'pending';
+}
+
 function nextRunId() {
   const timestamp = nowIso().replace(/[-:.TZ]/g, '').slice(0, 14);
   return `run-${timestamp}`;
@@ -2910,7 +2914,7 @@ async function executePlan(rootDir, config, state, initialPlan, logging, session
       mustLandSatisfied &&
       checkpointRequestsWorkerContinuation(latestCheckpoint);
 
-    if (securityApprovalRequired(plan, config) && plan.securityApproval !== 'approved') {
+    if (blocksOnSecurityApproval(plan, config)) {
       plan = await markPlanBlocked(
         rootDir,
         plan,
@@ -3203,14 +3207,13 @@ function emptyQueueSummary(plans, completedPlanIds, maxRisk, config, state, sess
   const activeWaitingOnSecurityApproval = activeCandidates.filter((plan) => (
     riskAllowed(plan, maxRisk) &&
     dependenciesComplete(plan, completedPlanIds) &&
-    securityApprovalRequired(plan, config) &&
-    plan.securityApproval !== 'approved'
+    blocksOnSecurityApproval(plan, config)
   )).length;
   const activeBudgetExhausted = activeCandidates.filter((plan) => effectivePlanStatus(plan) === STATUS_BUDGET_EXHAUSTED);
   const activeBudgetWaitingOnHigherLimit = orderPlans(activeBudgetExhausted.filter((plan) => (
     riskAllowed(plan, maxRisk) &&
     dependenciesComplete(plan, completedPlanIds) &&
-    !(securityApprovalRequired(plan, config) && plan.securityApproval !== 'approved') &&
+    !blocksOnSecurityApproval(plan, config) &&
     !canResumeBudgetExhaustedPlan(plan, state, sessionLimit)
   )));
   const parts = [`no eligible plans for maxRisk=${maxRisk}`];

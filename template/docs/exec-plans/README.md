@@ -49,7 +49,7 @@ Every active or completed plan must also include:
 - `Delivery-Class: docs`, `ops`, and `reconciliation` allow artifact-first completion when the acceptance criteria are truthful.
 - `Implementation-Targets` are the authoritative code or artifact roots for shipped work. `Spec-Targets` capture broader impact and documentation references.
 - `Validation-Lanes` are explicit queue routing inputs, not hints. Use `always` for repo-safe checks and add `host-required` when the plan needs environment-bound verification.
-- `Security-Approval` stays `not-required` for most plans. High-risk work must not complete until it is `approved`.
+- `Security-Approval` stays `not-required` for most plans, including high-risk work that does not need a separate approval gate. Use `pending` only when an explicit security approval is required, and switch it to `approved` before execution resumes.
 
 ## Status Conventions
 

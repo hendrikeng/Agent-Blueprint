@@ -927,6 +927,64 @@ test('orchestrator blocks high-risk work without explicit security approval', as
   assert.match(blockedPlan, /Security-Approval must be approved/);
 });
 
+test('orchestrator allows high-risk work when security approval is not required', async () => {
+  const rootDir = await createTemplateRepo();
+  await configureFixtureRepo(rootDir, {
+    providerActions: {
+      'analytics-cutover': {
+        worker: [
+          {
+            status: 'completed',
+            summary: 'Worker delivered analytics cutover.',
+            writeFiles: [{ path: 'src/analytics-cutover.js', content: 'export const analyticsCutover = true;\n' }],
+            plan: {
+              checkMustLand: true
+            }
+          }
+        ],
+        reviewer: [
+          {
+            status: 'completed',
+            summary: 'Reviewer approved analytics cutover.'
+          }
+        ]
+      }
+    },
+    validation: {
+      'always:analytics-cutover': [
+        {
+          status: 'passed',
+          summary: 'Always validation passed.'
+        }
+      ]
+    }
+  });
+  await fs.writeFile(
+    path.join(rootDir, 'docs', 'future', '2026-03-17-analytics-cutover.md'),
+    directFuturePlan({
+      planId: 'analytics-cutover',
+      riskTier: 'high',
+      securityApproval: 'not-required'
+    }),
+    'utf8'
+  );
+  commitFixtureChanges(rootDir, 'docs: seed analytics cutover plan');
+
+  const result = runNode(
+    path.join(rootDir, 'scripts', 'automation', 'orchestrator.mjs'),
+    ['grind', '--max-risk', 'high', '--output', 'minimal'],
+    rootDir
+  );
+  assert.equal(result.status, 0, String(result.stderr));
+
+  const completedPlan = await fs.readFile(
+    path.join(rootDir, 'docs', 'exec-plans', 'completed', '2026-03-17-analytics-cutover.md'),
+    'utf8'
+  );
+  assertPlanMetadataStatus(completedPlan, 'completed');
+  assert.doesNotMatch(completedPlan, /Security-Approval must be approved/);
+});
+
 test('orchestrator pauses on session budget exhaustion and resume continues only after a higher limit', async () => {
   const rootDir = await createTemplateRepo();
   await configureFixtureRepo(rootDir, {
