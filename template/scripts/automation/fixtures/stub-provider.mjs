@@ -49,6 +49,10 @@ function sleep(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+function emitProgressActivity(message) {
+  process.stdout.write(`${JSON.stringify({ type: 'progress', activity: message })}\n`);
+}
+
 function loadAction(scenario, state, planId, role) {
   const actionList = scenario?.providerActions?.[planId]?.[role] ?? [];
   const key = `${planId}:${role}`;
@@ -103,14 +107,28 @@ async function main() {
   const state = await readJson(statePath, {});
   const action = loadAction(scenario, state, planId, role);
 
-  process.stdout.write(`${JSON.stringify({
-    type: 'progress',
-    activity: action.liveActivity ?? `${role} working on ${planId}`
-  })}\n`);
+  emitProgressActivity(action.liveActivity ?? `${role} working on ${planId}`);
 
   const delayMs = Number(action?.delayMs);
+  const progressEveryMs = Number(action?.progressEveryMs);
   if (Number.isFinite(delayMs) && delayMs > 0) {
-    await sleep(delayMs);
+    if (Number.isFinite(progressEveryMs) && progressEveryMs > 0) {
+      const startedAt = Date.now();
+      let emitted = 0;
+      while (Date.now() - startedAt < delayMs) {
+        const remainingMs = delayMs - (Date.now() - startedAt);
+        await sleep(Math.min(progressEveryMs, Math.max(0, remainingMs)));
+        if (Date.now() - startedAt >= delayMs) {
+          break;
+        }
+        emitted += 1;
+        emitProgressActivity(
+          `${action.liveActivity ?? `${role} working on ${planId}`} (progress ${emitted})`
+        );
+      }
+    } else {
+      await sleep(delayMs);
+    }
   }
 
   for (const file of action.writeFiles ?? []) {

@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
   ACTIVE_STATUSES,
   COMPLETED_STATUSES,
@@ -1534,7 +1535,7 @@ function formatCommandHeartbeatLine(logging, context, elapsedSeconds, idleSecond
   return `${prefix}phase = ${phase}  plan = ${planId}  role = ${role}  activity = ${activity}  idle = ${formatDurationClock(idleSeconds)}  ${formatTouchSummaryLiveStatus(touchSummary)}`;
 }
 
-async function runShellMonitored(command, cwd, env = process.env, timeoutMs = undefined, logging, context = {}) {
+export async function runShellMonitored(command, cwd, env = process.env, timeoutMs = undefined, logging, context = {}) {
   const startedAtMs = Date.now();
   let lastOutputAtMs = startedAtMs;
   let lastVisibleStatusAtMs = startedAtMs;
@@ -1656,7 +1657,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     const text = chunk.toString();
     const nowMs = Date.now();
     stdout += text;
-    lastOutputAtMs = nowMs;
+    recordActivity(nowMs);
     processLiveChunks('stdout', text, nowMs);
     if (logging.mode === 'verbose') {
       clearLiveStatusLine();
@@ -1668,7 +1669,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     const text = chunk.toString();
     const nowMs = Date.now();
     stderr += text;
-    lastOutputAtMs = nowMs;
+    recordActivity(nowMs);
     processLiveChunks('stderr', text, nowMs);
     if (logging.mode === 'verbose') {
       clearLiveStatusLine();
@@ -1680,6 +1681,43 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
   const stallWarnMs = Math.max(heartbeatMs, logging.stallWarnSeconds * 1000);
   const heartbeatEnabled = logging.mode === 'pretty' || logging.mode === 'ticker';
   let heartbeatTimer = null;
+  let timeoutTimer = null;
+  let forceKillTimer = null;
+
+  function clearForceKillTimer() {
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+      forceKillTimer = null;
+    }
+  }
+
+  function armTimeoutTimer() {
+    if (!(Number.isFinite(timeoutMs) && timeoutMs > 0) || timedOut) {
+      return;
+    }
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
+    clearForceKillTimer();
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      forceKillTimer = setTimeout(() => {
+        child.kill('SIGKILL');
+      }, 5000);
+      forceKillTimer.unref?.();
+    }, timeoutMs);
+    timeoutTimer.unref?.();
+  }
+
+  function recordActivity(nowMs = Date.now()) {
+    if (timedOut) {
+      return;
+    }
+    lastOutputAtMs = nowMs;
+    armTimeoutTimer();
+  }
 
   function maybeRefreshTouchSummary(nowMs = Date.now()) {
     if (!touchBaseline) {
@@ -1694,6 +1732,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       lastTouchFingerprint = latest.fingerprint;
       if (latest.count > 0) {
         lastTouchChangeAtMs = nowMs;
+        recordActivity(nowMs);
         const message = `file activity phase=${safeDisplayToken(context.phase, 'session')} plan=${safeDisplayToken(context.planId, 'run')} role=${safeDisplayToken(context.role, 'n/a')} ${formatTouchSummaryDetails(latest)}`;
         if (logging.mode === 'pretty') {
           printPrettySessionEvent('run', nowMs, message);
@@ -1740,20 +1779,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
     heartbeatTimer = setInterval(emitHeartbeat, heartbeatMs);
     heartbeatTimer.unref?.();
   }
-
-  let timeoutTimer = null;
-  let forceKillTimer = null;
-  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
-    timeoutTimer = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-      forceKillTimer = setTimeout(() => {
-        child.kill('SIGKILL');
-      }, 5000);
-      forceKillTimer.unref?.();
-    }, timeoutMs);
-    timeoutTimer.unref?.();
-  }
+  armTimeoutTimer();
 
   function cleanupTimers() {
     if (heartbeatTimer) {
@@ -1764,10 +1790,7 @@ async function runShellMonitored(command, cwd, env = process.env, timeoutMs = un
       clearTimeout(timeoutTimer);
       timeoutTimer = null;
     }
-    if (forceKillTimer) {
-      clearTimeout(forceKillTimer);
-      forceKillTimer = null;
-    }
+    clearForceKillTimer();
     clearLiveStatusLine();
   }
 
@@ -3459,8 +3482,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error('[orchestrator] failed.');
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exit(1);
-});
+const invokedAsScript = process.argv[1]
+  ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+  : false;
+
+if (invokedAsScript) {
+  main().catch((error) => {
+    console.error('[orchestrator] failed.');
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
+}
