@@ -66,6 +66,7 @@ Use `docs/README.md` for navigation, usage, and authoring guidance.
 - `docs/agent-hardening/TOOL_POLICY.md`
 - `docs/agent-hardening/MEMORY_CONTEXT.md`
 - `docs/architecture/README.md`
+- `docs/architecture/TOPOLOGY.md`
 - `docs/architecture/LAYERS.md`
 - `docs/architecture/DEPENDENCY-RULES.md`
 - `docs/design-docs/README.md`

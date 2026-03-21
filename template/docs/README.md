@@ -10,6 +10,13 @@ This file is the navigation and usage entrypoint for `docs/`. Use `docs/MANIFEST
 ## Entry Points
 
 - Canonical manifest: `docs/MANIFEST.md`
+- Quality scorecard: `docs/QUALITY_SCORE.md`
+- Reliability model: `docs/RELIABILITY.md`
+- Security model: `docs/SECURITY.md`
+- Product sense: `docs/PRODUCT_SENSE.md`
+- Design intent: `docs/DESIGN.md`
+- Frontend standards: `docs/FRONTEND.md`
+- Backend standards: `docs/BACKEND.md`
 - Agent hardening policy: `docs/agent-hardening/README.md`
 - Governance policy: `docs/governance/README.md`
 - Governance rules: `docs/governance/RULES.md`
@@ -17,6 +24,8 @@ This file is the navigation and usage entrypoint for `docs/`. Use `docs/MANIFEST
 - Policy manifest: `docs/governance/policy-manifest.json`
 - Architecture rules: `docs/governance/architecture-rules.json`
 - Architecture map: `docs/architecture/README.md`
+- Architecture topology: `docs/architecture/TOPOLOGY.md`
+- Dependency rules: `docs/architecture/DEPENDENCY-RULES.md`
 - Design docs: `docs/design-docs/README.md`
 - Deployment model: `docs/deploy/README.md`
 - Environment model: `docs/env/README.md`
@@ -25,6 +34,11 @@ This file is the navigation and usage entrypoint for `docs/`. Use `docs/MANIFEST
 - References index: `docs/references/README.md`
 - UI contracts: `docs/ui/README.md`
 - Plan workflow: `docs/PLANS.md`
+- Future queue: `docs/future/README.md`
+- Execution plans index: `docs/exec-plans/README.md`
+- Active plans index: `docs/exec-plans/active/README.md`
+- Active evidence intake: `docs/exec-plans/active/evidence/README.md`
+- Completed plans index: `docs/exec-plans/completed/README.md`
 - Evidence index: `docs/exec-plans/evidence-index/README.md`
 - Ops runbooks: `docs/ops/README.md`
 - Ops automation: `docs/ops/automation/README.md`
