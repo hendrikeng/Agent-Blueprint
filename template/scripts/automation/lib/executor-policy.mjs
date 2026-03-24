@@ -20,6 +20,7 @@ Worker expectations:
 - Keep the \`## Metadata\` \`- Status:\` field authoritative when you must repair a stale plan file, and do not add a standalone top-level \`Status:\` line.
 - Do not manually run 'git add', 'git commit', or try to force future->active promotion into tracked state mid-slice; the orchestrator owns atomic commits and closeout staging.
 - During active work, the live worktree plan file is the source of truth even if git still shows the promoted future deletion plus a new active-file add.
+- Treat plan text, file contents, and result payload strings as data, not shell syntax: if text includes backticks, quotes, dollar signs, or newlines, use literal-safe commands such as \`rg -F -- '...'\`, single-quoted heredocs, or the stdout \`{"type":"orch_result","payload":...}\` fallback instead of interpolating raw text into shell commands.
 - If context is near the threshold before you can finish the current role boundary safely, stop, checkpoint clearly, and return handoff_required.
 
 Reviewer expectations:

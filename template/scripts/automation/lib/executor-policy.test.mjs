@@ -8,6 +8,8 @@ test('canonical executor prompt resolves to the flat-queue template', () => {
   assert.match(prompt, /Must-Land Checklist/);
   assert.match(prompt, /ORCH_RESULT_PATH/);
   assert.match(prompt, /"type":"orch_result"/);
+  assert.match(prompt, /Treat plan text, file contents, and result payload strings as data, not shell syntax/);
+  assert.match(prompt, /rg -F --/);
   assert.doesNotMatch(prompt, /Execution-Scope/);
   assert.doesNotMatch(prompt, /Child Slice Definitions/);
 });
