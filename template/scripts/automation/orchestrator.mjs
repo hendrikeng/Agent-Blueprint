@@ -66,6 +66,7 @@ const DEFAULT_MAX_RISK = 'low';
 const DEFAULT_MAX_PLANS = 0;
 const DEFAULT_MAX_SESSIONS_PER_PLAN = 12;
 const DEFAULT_TIMEOUT_SECONDS = 1800;
+const TIMEOUT_EXIT_CODE = 124;
 const DEFAULT_OUTPUT = 'pretty';
 const DEFAULT_HEARTBEAT_SECONDS = 12;
 const DEFAULT_STALL_WARN_SECONDS = 120;
@@ -1802,8 +1803,12 @@ export async function runShellMonitored(command, cwd, env = process.env, timeout
       settled = true;
       maybeRefreshTouchSummary(Date.now());
       cleanupTimers();
+      const normalizedStatus =
+        timedOut && (!Number.isInteger(status) || status === 0)
+          ? TIMEOUT_EXIT_CODE
+          : status;
       resolve({
-        status,
+        status: normalizedStatus,
         signal,
         error: timedOut ? { code: 'ETIMEDOUT' } : processError,
         stdout,

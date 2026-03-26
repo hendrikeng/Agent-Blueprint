@@ -42,3 +42,18 @@ test('runShellMonitored still times out when the executor stops making progress'
   assert.deepEqual(execution.error, { code: 'ETIMEDOUT' });
   assert.notEqual(execution.status, 0);
 });
+
+test('runShellMonitored normalizes timeout exit status when the child exits 0 after SIGTERM', async () => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'orch-timeout-clean-exit-'));
+  const command = `node --input-type=module -e "process.on('SIGTERM', () => process.exit(0)); console.log(JSON.stringify({ type: 'progress', activity: 'starting' })); await new Promise((resolve) => setTimeout(resolve, 1500));"`;
+
+  const execution = await runShellMonitored(command, cwd, process.env, 1000, logging, {
+    phase: 'session',
+    planId: 'timeout-clean-exit',
+    role: 'reviewer',
+    activity: 'reviewing'
+  });
+
+  assert.deepEqual(execution.error, { code: 'ETIMEDOUT' });
+  assert.equal(execution.status, 124);
+});
