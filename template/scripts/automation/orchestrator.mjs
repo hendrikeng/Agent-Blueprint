@@ -3402,7 +3402,7 @@ async function main() {
     throw new Error('Atomic commits are enabled, but this repository is not inside a git work tree. Run with --commit false or initialize git first.');
   }
   if ((command === 'run' || command === 'grind') && dirtyRepoPaths(rootDir, { includeTransient: false }).length > 0) {
-    throw new Error('Refusing to start ' + command + ' with a dirty worktree. Commit, stash, or discard unrelated changes first, or use resume if you intend to continue the existing run.');
+    throw new Error('Refusing to start ' + command + ' with a dirty worktree. Commit or discard unrelated changes first, or use resume if you intend to continue the existing run.');
   }
   let lock = await acquireOrchestratorLock(rootDir, command);
   let releasedLock = false;

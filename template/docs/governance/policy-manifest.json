@@ -129,6 +129,6 @@
       "rm -rf",
       "git clean -fd"
     ],
-    "notes": "Do not edit .env files or switch branches/worktrees unless explicitly requested in-thread."
+    "notes": "Do not edit .env files or switch branches/worktrees unless explicitly requested in-thread. Treat atomic commits as slice isolation inside one checkout, not as multi-developer coordination on one shared branch. Prefer short-lived slice branches plus normal PR merges; use a temporary initiative branch only for larger coordinated rollouts."
   }
 }

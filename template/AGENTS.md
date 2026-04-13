@@ -130,6 +130,8 @@ Docs are part of done.
 - Never run destructive git/file commands without explicit written instruction.
 - Do not use `git stash` unless explicitly requested in-thread.
 - Do not switch branches or modify git worktrees unless explicitly requested in-thread.
+- Treat atomic commits as slice isolation inside one checkout, not as a coordination mechanism for multiple developers on one shared branch.
+- For team work, prefer short-lived slice branches and normal PR merges; use a temporary initiative branch only for larger coordinated rollouts that cannot land safely in partial form.
 
 ## Test and Validation Expectations
 
