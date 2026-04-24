@@ -36,6 +36,23 @@ function summarizeList(items, prefix) {
     .join('\n');
 }
 
+function summarizeExecutionQuality(executionQuality) {
+  if (!executionQuality) {
+    return '';
+  }
+
+  const sections = [
+    ['goal: ', executionQuality.goalDrivenExecution],
+    ['scope: ', executionQuality.simplicityAndScope],
+    ['assumption: ', executionQuality.assumptionDiscipline],
+  ];
+
+  return sections
+    .map(([prefix, items]) => summarizeList(items, prefix))
+    .filter(Boolean)
+    .join('\n');
+}
+
 function buildContent(policy, config) {
   const worker = config?.executor?.roles?.worker ?? {};
   const reviewer = config?.executor?.roles?.reviewer ?? {};
@@ -84,6 +101,9 @@ ${summarizeList(policy?.mandatorySafetyRules?.map((rule) => `[${rule.id}] ${rule
 - full: ${(policy?.validationPolicy?.fullGate ?? []).join(' ; ')}
 - validation lanes: always=${alwaysValidation} ; host-required=${hostValidation}
 
+## Execution Quality
+${summarizeExecutionQuality(policy?.executionQuality)}
+
 ## Memory Posture
 ${summarizeList(policy?.memoryPosture?.whatToDo, 'do: ')}
 ${summarizeList(policy?.memoryPosture?.improveBeforeRearchitecture, 'improve first: ')}
@@ -93,6 +113,7 @@ ${summarizeList(policy?.memoryPosture?.escalateWhen, 'escalate when: ')}
 
 ## Execution Checklist
 - Read the current plan and latest checkpoint before editing.
+- Translate the request into verifiable goals; for multi-step work, pair each step with its check.
 - Honor Implementation-Targets, Validation-Lanes, and Security-Approval exactly as written.
 - Write a structured result to ORCH_RESULT_PATH after each worker or reviewer session, or emit a single-line {"type":"orch_result","payload":...} stdout envelope if the sandbox prevents direct writes.
 - Move plans to validation only when every must-land item is checked.

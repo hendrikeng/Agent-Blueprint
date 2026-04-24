@@ -20,6 +20,13 @@ Source of Truth: This document.
 - Canonical docs must remain environment-agnostic: no personal machine paths, hostnames, credentials, or private runbooks.
 - `docs/governance/policy-manifest.json` is the machine-readable policy source for runtime context compilation.
 
+## Execution Quality
+
+- Translate implementation requests into verifiable goals before editing.
+- For multi-step work, pair each planned step with the check that proves it.
+- Prefer the smallest implementation that satisfies the must-land checklist, and keep every changed line traceable to the user request, active plan, or required validation.
+- State material assumptions when intent has multiple plausible interpretations; ask or stop rather than silently choosing a risky path.
+
 ## Verification Profiles
 
 - Fast iteration profile: `npm run verify:fast`

@@ -131,3 +131,4 @@ Start with:
 
 Changes affecting architecture boundaries, critical invariants,
 security/compliance domains, or user-visible behavior must update docs in the same change.
+Implementation work should translate requests into verifiable goals, pair multi-step changes with checks, and keep changed lines traceable to the request, active plan, or required validation.

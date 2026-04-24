@@ -78,6 +78,20 @@
     ],
     "notes": "Fast iteration commands are minimum-safe defaults. Full gate commands remain required before merge."
   },
+  "executionQuality": {
+    "goalDrivenExecution": [
+      "Translate implementation requests into verifiable goals before editing.",
+      "For multi-step work, pair each planned step with the check that proves it.",
+      "Loop on the smallest relevant check until the goal is verified, then run the required slice gate before closeout."
+    ],
+    "simplicityAndScope": [
+      "Prefer the smallest implementation that satisfies the must-land checklist.",
+      "Every changed line should trace to the user request, active plan, or required validation."
+    ],
+    "assumptionDiscipline": [
+      "State material assumptions when intent has multiple plausible interpretations; ask or stop rather than silently choosing a risky path."
+    ]
+  },
   "memoryPosture": {
     "whatToDo": [
       "Treat the repo as the main operating system for agent work.",

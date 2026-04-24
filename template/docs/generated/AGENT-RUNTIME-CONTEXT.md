@@ -32,6 +32,14 @@ Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/autom
 - full: node ./scripts/automation/compile-runtime-context.mjs ; node ./scripts/docs/check-governance.mjs ; node ./scripts/check-article-conformance.mjs ; node ./scripts/architecture/check-dependencies.mjs ; node ./scripts/agent-hardening/check-agent-hardening.mjs ; node ./scripts/agent-hardening/check-evals.mjs ; node ./scripts/automation/check-harness-alignment.mjs ; node ./scripts/automation/check-plan-metadata.mjs
 - validation lanes: always=repo:verify-fast ; host-required=repo:verify-full
 
+## Execution Quality
+- goal: Translate implementation requests into verifiable goals before editing.
+- goal: For multi-step work, pair each planned step with the check that proves it.
+- goal: Loop on the smallest relevant check until the goal is verified, then run the required slice gate before closeout.
+- scope: Prefer the smallest implementation that satisfies the must-land checklist.
+- scope: Every changed line should trace to the user request, active plan, or required validation.
+- assumption: State material assumptions when intent has multiple plausible interpretations; ask or stop rather than silently choosing a risky path.
+
 ## Memory Posture
 - do: Treat the repo as the main operating system for agent work.
 - do: Keep plans, evidence, docs, code, and validation output as the source of truth.
@@ -56,6 +64,7 @@ Primary Sources: AGENTS.md, docs/governance/policy-manifest.json, docs/ops/autom
 
 ## Execution Checklist
 - Read the current plan and latest checkpoint before editing.
+- Translate the request into verifiable goals; for multi-step work, pair each step with its check.
 - Honor Implementation-Targets, Validation-Lanes, and Security-Approval exactly as written.
 - Write a structured result to ORCH_RESULT_PATH after each worker or reviewer session, or emit a single-line {"type":"orch_result","payload":...} stdout envelope if the sandbox prevents direct writes.
 - Move plans to validation only when every must-land item is checked.
