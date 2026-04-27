@@ -17,5 +17,5 @@ Source of Truth: This document.
 ## Spec Metadata Standard
 
 - Include owner, last-updated date, and source-of-truth in canonical specs.
-- Keep current-state snapshots dated and aligned with `README.md`.
-- Include automation delivery updates from completed execution plans in spec targets.
+- Keep current-state snapshots dated and aligned with the README's top-level scope without duplicating the README as a delivery log.
+- Include meaningful product-state updates from completed execution plans in specs; keep slice-level delivery history in completed plans and evidence indexes.

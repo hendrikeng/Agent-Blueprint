@@ -2,7 +2,7 @@
 
 Status: canonical
 Owner: Platform Engineering
-Last Updated: 2026-03-17
+Last Updated: 2026-04-27
 Source of Truth: This directory.
 
 Reusable harness for bootstrapping agent-first repositories.
@@ -137,3 +137,5 @@ This repo itself exposes only:
 
 - This root `README.md` explains the harness source repo.
 - `template/README.md` is the README that downstream adopted repositories inherit.
+- Downstream root READMEs are concise entrypoints: keep stable product scope, workflow, architecture links, and major platform capabilities there.
+- Detailed current behavior, delivery history, and slice-level product changes belong in `docs/product-specs/CURRENT-STATE.md`, relevant domain docs, completed plans, and evidence indexes.

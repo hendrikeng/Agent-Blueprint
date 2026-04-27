@@ -27,6 +27,16 @@ If instructions conflict, this file is the behavioral priority entrypoint.
 - Do not add external retrieval, provider-thread persistence, or off-repo working memory just because work is long or context is limited.
 - Consider bigger memory changes only when repeated failures show the current repo-local checkpoint model is insufficient.
 
+## Default Read Order
+
+For implementation work, inspect live repo surfaces before planning from docs:
+- Nearest live route, component, service, API handler, or domain module.
+- Shared UI primitives, helpers, repository abstractions, adapters, and validation used by that surface.
+- Related queries, migrations, schemas, tests, constants, and generated types.
+- Repo-local docs only when code does not explain intent, workflow, or acceptance criteria.
+
+Prefer established local patterns over new abstractions. If no strong example exists, stop and ask before inventing a new repository-wide pattern.
+
 ## Intent Precedence
 
 - Explicit user intent is binding.
@@ -105,9 +115,9 @@ Start here, then follow linked source-of-truth docs:
 ## Documentation Contract
 
 Any change affecting architecture boundaries, critical invariants,
-security/compliance domains, or user-visible behavior must update:
-- `README.md`
-- relevant docs under `docs/`
+security/compliance domains, or user-visible behavior must update relevant canonical docs under `docs/`.
+Update root `README.md` only when the change affects top-level product scope, stack, workflow, architecture, commands, or the major capability map.
+Detailed behavior snapshots, delivery history, and slice-level product changes belong in `docs/product-specs/CURRENT-STATE.md`, relevant domain docs, completed plans, and evidence indexes.
 
 Docs are part of done.
 

@@ -82,7 +82,7 @@ Start with:
 - {{SCOPE1}}
 - {{SCOPE2}}
 - {{SCOPE3}}
-- Detailed current behavior is tracked in `docs/product-specs/CURRENT-STATE.md`.
+- Keep this section to stable platform scope and major capability areas; detailed current behavior is tracked in `docs/product-specs/CURRENT-STATE.md`.
 
 ## Architecture At A Glance
 
@@ -96,7 +96,7 @@ Start with:
 ## Documentation Layering
 
 - `AGENTS.md`: concise operating map and non-negotiables.
-- `README.md`: product-level snapshot and entrypoints.
+- `README.md`: concise product entrypoint, workflow summary, and major capability map.
 - `ARCHITECTURE.md` + `docs/architecture/*`: architecture source of truth.
 - `docs/FRONTEND.md` and `docs/BACKEND.md`: implementation-side standards.
 
@@ -131,4 +131,5 @@ Start with:
 
 Changes affecting architecture boundaries, critical invariants,
 security/compliance domains, or user-visible behavior must update docs in the same change.
+Update this README only when the change affects top-level product scope, stack, workflow, architecture, commands, or the major capability map; put detailed behavior and delivery-history updates in `docs/product-specs/CURRENT-STATE.md`, relevant domain docs, completed plans, and evidence indexes.
 Implementation work should translate requests into verifiable goals, pair multi-step changes with checks, and keep changed lines traceable to the request, active plan, or required validation.

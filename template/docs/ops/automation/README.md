@@ -40,6 +40,7 @@ Treat `docs/ops/automation/LITE_QUICKSTART.md` as the simplest explanation of ho
 
 - `docs/exec-plans/evidence-index/`: canonical compact evidence references by plan ID.
 - `docs/product-specs/CURRENT-STATE.md`: product-facing delivery timeline via `Automated Delivery Log`.
+- `README.md`: concise orientation and major capability map, not a slice-by-slice delivery log.
 - `## Must-Land Checklist` inside each plan is the executable completion contract.
 - `Delivery-Class`, `Dependencies`, `Implementation-Targets`, `Risk-Tier`, and `Validation-Lanes` make execution boundaries explicit.
 

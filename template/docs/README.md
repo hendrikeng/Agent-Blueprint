@@ -74,8 +74,11 @@ This file is the navigation and usage entrypoint for `docs/`. Use `docs/MANIFEST
 
 ## Authoring Rules
 
+- Do not duplicate the full navigation index into `README.md` or `AGENTS.md`; keep this file as the exhaustive docs navigation surface.
 - Keep docs concise, canonical, and linked from `AGENTS.md`/`README.md`/`docs/MANIFEST.md`.
 - Update docs in the same change as behavior or boundary changes.
+- Do not use the root `README.md` as a rolling delivery log; keep it to stable orientation, workflow, stack, architecture links, and major capability areas.
+- Put detailed current behavior in `docs/product-specs/CURRENT-STATE.md` and delivery evidence in completed plans plus evidence indexes.
 - Prefer canonical docs over ad-hoc notes.
 - Use one executable slice per future/active plan file and express larger efforts with multiple plan files linked by `Dependencies`.
 - Keep `## Already-True Baseline`, `## Must-Land Checklist`, and `## Deferred Follow-Ons` explicit so broader vision does not silently become executable scope.
